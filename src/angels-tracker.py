@@ -13,7 +13,7 @@ from datetime import datetime, timezone
 
 BASE_URL = "https://statsapi.mlb.com"
 ANGELS_TEAM_ID = 108
-REFRESH_SECONDS = 120  # 2 minutes
+REFRESH_SECONDS = 10  # 10 seconds
 
 # Abstract game states
 PREVIEW_STATES   = {"Preview", "Pre-Game", "Warmup", "Scheduled"}
