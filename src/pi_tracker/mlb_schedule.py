@@ -86,7 +86,16 @@ def live_transition_from_schedule_game(game: dict[str, Any]) -> dict[str, Any]:
     teams = game.get("teams") or {}
     away = teams.get("away", {}).get("team", {})
     home = teams.get("home", {}).get("team", {})
-    return {
+    aid, hid = away.get("id"), home.get("id")
+    opp_id: int | None = None
+    try:
+        if aid == ANGELS_TEAM_ID and hid is not None:
+            opp_id = int(hid)
+        elif hid == ANGELS_TEAM_ID and aid is not None:
+            opp_id = int(aid)
+    except (TypeError, ValueError):
+        opp_id = None
+    out: dict[str, Any] = {
         "scene": "live",
         "live_game_pk": game.get("gamePk"),
         "away_team_id": int(away.get("id") or 0),
@@ -96,6 +105,9 @@ def live_transition_from_schedule_game(game: dict[str, Any]) -> dict[str, Any]:
         "away_name": str(away.get("clubName") or away.get("name") or ""),
         "home_name": str(home.get("clubName") or home.get("name") or ""),
     }
+    if opp_id is not None:
+        out["next_opponent_team_id"] = opp_id
+    return out
 
 
 def _parse_game_datetime(game: dict[str, Any]) -> datetime | None:
@@ -122,6 +134,23 @@ def _opponent_line(game: dict[str, Any], angels_id: int = ANGELS_TEAM_ID) -> tup
     if hid == angels_id:
         return f"vs {away_name}", away.get("abbreviation", "")
     return "Angels", ""
+
+
+def opponent_team_id_for_next_game(game: dict[str, Any] | None, angels_id: int = ANGELS_TEAM_ID) -> int | None:
+    """MLB team id for the Angels' opponent in this schedule row (for idle small logo)."""
+    if not game:
+        return None
+    teams = game.get("teams") or {}
+    aid = teams.get("away", {}).get("team", {}).get("id")
+    hid = teams.get("home", {}).get("team", {}).get("id")
+    try:
+        if aid == angels_id and hid is not None:
+            return int(hid)
+        if hid == angels_id and aid is not None:
+            return int(aid)
+    except (TypeError, ValueError):
+        return None
+    return None
 
 
 def pick_next_angels_game(
@@ -167,6 +196,7 @@ def format_next_game_for_ui(game: dict[str, Any] | None, angels_id: int = ANGELS
             "next_game_matchup": "",
             "next_game_venue": "",
             "next_game_pk": None,
+            "next_opponent_team_id": None,
             "idle_subtitle": "No upcoming games in the next few weeks.",
         }
 
@@ -180,6 +210,7 @@ def format_next_game_for_ui(game: dict[str, Any] | None, angels_id: int = ANGELS
             "next_game_matchup": "",
             "next_game_venue": "",
             "next_game_pk": game.get("gamePk"),
+            "next_opponent_team_id": None,
             "idle_subtitle": "Schedule parse error.",
         }
 
@@ -196,6 +227,7 @@ def format_next_game_for_ui(game: dict[str, Any] | None, angels_id: int = ANGELS
 
     matchup, _opp_abbr = _opponent_line(game, angels_id)
     venue = (game.get("venue") or {}).get("name") or ""
+    opp_tid = opponent_team_id_for_next_game(game, angels_id)
 
     return {
         "schedule_status": "ok",
@@ -205,6 +237,7 @@ def format_next_game_for_ui(game: dict[str, Any] | None, angels_id: int = ANGELS
         "next_game_matchup": matchup,
         "next_game_venue": venue,
         "next_game_pk": game.get("gamePk"),
+        "next_opponent_team_id": opp_tid,
         "idle_subtitle": f"{date_disp}  ·  {time_disp}",
     }
 
