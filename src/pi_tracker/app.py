@@ -6,9 +6,12 @@ Dev: keys 1–4 switch scenes. On Pi, set SDL_VIDEODRIVER / SDL_FBDEV per notes.
 
 from __future__ import annotations
 
+import os
 import sys
 import threading
 from pathlib import Path
+
+os.environ.setdefault("PYGAME_HIDE_SUPPORT_PROMPT", "1")
 
 import pygame
 

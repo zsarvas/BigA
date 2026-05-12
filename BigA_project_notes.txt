@@ -432,6 +432,17 @@ Pi Lite. Otherwise system font match is used.
 ffmpeg for landscape clips on this panel:
   ffmpeg -i input.mp4 -vf scale=480:320 -c:v h264 output.mp4
 
+  Pi / pygame fonts: if startup hangs or you see fc-list timeout warnings, pygame
+  was probing fontconfig via match_font. This repo skips that on Raspberry Pi and
+  uses /usr/share/fonts/... paths first. Install a sans TTF if needed:
+    sudo apt install fonts-dejavu-core
+  Or set BIGA_FONT_PATH=/path/to/YourFont.ttf
+
+  Neon / AVX pygame warning: harmless unless you built pygame from source; ignore
+  or rebuild pygame with NEON if you care about blit micro-optimizations.
+
+  Wayland "queue destroyed while proxies still attached" on Ctrl+C: harmless.
+
   Mac dev — pygame install fails with 'SDL.h' file not found:
     Cause: Homebrew `python3` is often 3.14+; PyPI may not ship a pygame wheel for
     that tag yet, so pip compiles from source and needs SDL headers.
