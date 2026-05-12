@@ -1,0 +1,445 @@
+================================================================================
+  BIG A — ANGELS PI TRACKER
+  Project Notes & Code Snippets
+================================================================================
+
+--------------------------------------------------------------------------------
+1. MLB STATS API — BASICS
+--------------------------------------------------------------------------------
+
+Free, open, no API key or registration needed. Just HTTP GET requests.
+
+Base URL: https://statsapi.mlb.com
+
+Common endpoints:
+  /api/v1/teams?sportId=1               — all 30 teams + IDs
+  /api/v1/schedule                      — game schedule / scores
+  /api/v1/standings                     — division standings
+  /api/v1/game/{gamePk}/feed/live       — full live game feed (use v1.1)
+  /api/v1.1/game/{gamePk}/feed/live     — preferred live feed endpoint
+  /api/v1/people/{playerId}             — player bio
+  /api/v1/meta?type=gameStatus          — valid values for params
+
+Key IDs:
+  League:  103 = American League, 104 = National League
+  Angels:  108
+  Giants:  137
+  Dodgers: 119
+  Yankees: 147
+
+Example curl:
+  curl "https://statsapi.mlb.com/api/v1/schedule?sportId=1&teamId=108&date=2025-05-12"
+
+Community docs (best reference, MLB has no official public docs):
+  https://github.com/toddrob99/MLB-StatsAPI/wiki/Endpoints
+
+
+--------------------------------------------------------------------------------
+2. TEAM IDs — GET ALL 30
+--------------------------------------------------------------------------------
+
+curl -s "https://statsapi.mlb.com/api/v1/teams?sportId=1" | python3 -c "
+import json,sys
+teams = json.load(sys.stdin)['teams']
+for t in sorted(teams, key=lambda x: x['name']):
+    print(f\"{t['id']:>4}  {t['name']}\")"
+
+
+--------------------------------------------------------------------------------
+3. ANGELS GAME TRACKER SCRIPT (angels_tracker.py)
+--------------------------------------------------------------------------------
+
+See angels_tracker.py in this repo. Key points:
+
+  ANGELS_TEAM_ID = 108
+  REFRESH_SECONDS = 120
+
+  Game states handled:
+    - Preview / Pre-Game  → shows matchup, venue, time. polls every 2 min
+    - In Progress         → full linescore, batter/pitcher, bases, last play
+    - Final               → linescore + decisions (W/L/SV), then exits
+
+  Python usage:
+    python angels_tracker.py              # today's game
+    python angels_tracker.py 2025-04-15  # specific date
+
+  Requires: pip install requests
+
+
+--------------------------------------------------------------------------------
+4. POLLING ARCHITECTURE — BEST PRACTICE FOR YEAR-ROUND TRACKER
+--------------------------------------------------------------------------------
+
+Two-tier loop (daily check + live polling):
+
+  Every day ~11am:
+    → GET /schedule for today
+    → No game?  → sleep until tomorrow 11am
+    → Game?     → note start time
+                → sleep until (start_time - 15 min)
+                → poll /feed/live every 60s until Final
+                → sleep until tomorrow 11am
+
+Endpoint strategy:
+  /schedule           lightweight, use as gate. check every 5 min pre-game
+  /feed/live          heavy (full game state). only hit once In Progress
+
+Off-season: daily /schedule call returns zero games, loop sleeps harmlessly.
+
+Run as a systemd service (Linux) or launchd plist (Mac) so it starts on boot
+and manages its own sleep timing internally.
+
+
+--------------------------------------------------------------------------------
+5. HARDWARE
+--------------------------------------------------------------------------------
+
+  Dev machine:    Raspberry Pi 4, Pi OS Lite 64-bit, HDMI out
+  Production:     Raspberry Pi Zero 2W
+  Display:        3.51" 320x480 resistive touch, SPI GPIO direct connect, 60Hz
+  LEDs:           GPIO-connected, trigger on Angels win
+
+  Display driver: fbcp (framebuffer copy, mirrors /dev/fb0 to SPI display)
+  Rendering:      pygame → /dev/fb0 (HDMI on Pi4) or /dev/fb1 (SPI on Zero 2W)
+  Video playback: omxplayer (requires Bullseye, removed in Bookworm)
+  OS:             Raspberry Pi OS Lite — Bullseye (to keep omxplayer working)
+
+  Portrait vs landscape:
+    Screen is 320x480 (portrait). Either:
+      A) rotate at fbcp/driver level → pygame sees 480x320 landscape
+      B) design UI natively in portrait 320x480
+
+  Screen orientation config (check your fbcp service for a flag like):
+    -r 90    or    rotate=90
+
+
+--------------------------------------------------------------------------------
+6. OS & SSH SETUP
+--------------------------------------------------------------------------------
+
+Flash via Raspberry Pi Imager:
+  - Select: Raspberry Pi OS Lite (Bullseye, to match omxplayer setup)
+  - Click gear icon ⚙️ before writing
+  - Set: hostname, username/password, WiFi SSID+password, enable SSH
+
+Then from your Mac:
+  ssh pi@bigA.local
+
+Set up SSH keys (no password prompts):
+  ssh-keygen -t ed25519
+  ssh-copy-id pi@bigA.local
+
+If you already flashed without SSH/WiFi, edit the SD card on Mac:
+  touch /Volumes/bootfs/ssh
+
+  Create /Volumes/bootfs/wpa_supplicant.conf:
+    country=US
+    ctrl_interface=DIR=/var/run/wpa_supplicant GROUP=netdev
+    update_config=1
+    network={
+        ssid="YourNetworkName"
+        psk="YourPassword"
+        key_mgmt=WPA-PSK
+    }
+
+mDNS note: .local hostnames work out of the box on Mac.
+  Windows may need Bonjour installed, or use the Pi's IP address instead.
+
+
+--------------------------------------------------------------------------------
+7. DEV WORKFLOW
+--------------------------------------------------------------------------------
+
+  Mac → write code → test in pygame window at 320x480
+           ↓
+        git push to GitHub
+           ↓
+  Pi Zero 2W → git pull → runs for real
+
+On Pi, clone your repo:
+  git clone https://github.com/you/BigA.git
+  cd BigA
+  git pull   # for updates
+
+Sync files without git:
+  rsync -av --exclude '.git' ./BigA/ pi@bigA.local:~/BigA/
+
+Simulate correct screen size on Mac during dev:
+  screen = pygame.display.set_mode((320, 480))   # portrait
+  # don't use FULLSCREEN flag during dev
+
+
+--------------------------------------------------------------------------------
+8. PYGAME DISPLAY
+--------------------------------------------------------------------------------
+
+Point pygame at framebuffer (Pi Lite, no desktop):
+  export SDL_VIDEODRIVER=fbcon
+  export SDL_FBDEV=/dev/fb0    # HDMI on Pi4
+  export SDL_FBDEV=/dev/fb1    # SPI display on Zero 2W
+
+Scene/state machine states:
+  IDLE  → next game date/time + Angels logo + highlights video
+  LIVE  → scoreboard overlay
+  WIN   → win video + LED trigger
+  LOSS  → quiet final score screen
+
+Shared state between poller thread and pygame thread:
+  import threading
+
+  game_state = {}
+  lock = threading.Lock()
+
+  # poller thread writes:
+  with lock:
+      game_state.update(new_data)
+
+  # pygame scene reads:
+  with lock:
+      state = game_state.copy()
+
+Performance tips for Zero 2W:
+  - Load images once at startup, not every frame
+  - pygame.transform.scale() logos at load time
+  - clock.tick(10) is plenty for a scoreboard, saves CPU
+  - Bundle a TTF font file in repo (Pi Lite has minimal system fonts)
+
+Basic scene draw pattern:
+  def draw_live_scene(screen, state):
+      screen.fill(BLACK)
+      screen.blit(away_logo, (20, 20))
+      screen.blit(home_logo, (200, 20))
+      score_text = font.render(
+          f"{state['away_runs']}  -  {state['home_runs']}", True, WHITE
+      )
+      screen.blit(score_text, (140, 30))
+      pygame.display.flip()
+
+
+--------------------------------------------------------------------------------
+9. BASEBALL DIAMOND — RUNNERS ON BASE
+--------------------------------------------------------------------------------
+
+def draw_diamond(screen, runners, center_x, center_y, size=40):
+    # runners = {'first': True, 'second': False, 'third': True}
+
+    EMPTY    = (255, 255, 255)   # white
+    OCCUPIED = (255, 200, 0)     # yellow
+    GREEN    = (34, 139, 34)
+    DIRT     = (139, 90, 43)
+
+    bases = {
+        'second': (center_x,         center_y - size),
+        'third':  (center_x - size,  center_y),
+        'first':  (center_x + size,  center_y),
+        'home':   (center_x,         center_y + size),
+    }
+
+    # optional field background
+    pygame.draw.circle(screen, GREEN, (center_x, center_y), size * 2)
+
+    for base, (x, y) in bases.items():
+        occupied = runners.get(base, False)
+        color = OCCUPIED if occupied else EMPTY
+        points = [
+            (x,           y - size//2),
+            (x + size//2, y),
+            (x,           y + size//2),
+            (x - size//2, y),
+        ]
+        pygame.draw.polygon(screen, color, points)
+        pygame.draw.polygon(screen, (0, 0, 0), points, 2)  # outline
+
+# MLB live feed provides runner data under linescore.offense
+# keys 'first', 'second', 'third' present when occupied, absent when not
+runners = {
+    'first':  'first'  in linescore.get('offense', {}),
+    'second': 'second' in linescore.get('offense', {}),
+    'third':  'third'  in linescore.get('offense', {}),
+}
+draw_diamond(screen, runners, center_x=160, center_y=300, size=35)
+
+
+--------------------------------------------------------------------------------
+10. TEAM LOGOS
+--------------------------------------------------------------------------------
+
+MLB CDN pattern (SVG):
+  https://www.mlbstatic.com/team-logos/{teamId}.svg
+
+MLB CDN pattern (PNG, better):
+  https://www.mlbstatic.com/team-logos/team-cap-on-light/{teamId}.png
+
+Download all 30 PNG logos:
+  python3 -c "
+  import urllib.request, os, json, requests
+  teams = requests.get('https://statsapi.mlb.com/api/v1/teams?sportId=1').json()['teams']
+  os.makedirs('logos', exist_ok=True)
+  for t in teams:
+      tid = t['id']
+      url = f'https://www.mlbstatic.com/team-logos/team-cap-on-light/{tid}.png'
+      try:
+          urllib.request.urlretrieve(url, f'logos/{tid}.png')
+          print(f'  ✓ {t[\"name\"]}')
+      except:
+          print(f'  ✗ {t[\"name\"]}')
+  "
+
+Load in pygame (do once at startup):
+  logos = {}
+  for team_id in team_ids:
+      img = pygame.image.load(f'logos/{team_id}.png')
+      logos[team_id] = pygame.transform.scale(img, (100, 100))
+
+Note: teamId from the API maps directly to the logo filename.
+
+If converting SVGs, ImageMagick chokes on MLB's complex paths.
+Use cairosvg instead:
+  pip install cairosvg
+
+  import cairosvg, os
+  for f in os.listdir('logos'):
+      if f.endswith('.svg'):
+          cairosvg.svg2png(
+              url=f'logos/{f}',
+              write_to=f'logos/{f.replace(".svg", ".png")}',
+              output_width=100,
+              output_height=100
+          )
+
+
+--------------------------------------------------------------------------------
+11. LED GPIO — WIN CELEBRATION
+--------------------------------------------------------------------------------
+
+from gpiozero import LED
+from time import sleep
+
+def angels_win_celebration(led_pins=[17, 27, 22]):
+    leds = [LED(pin) for pin in led_pins]
+    for _ in range(10):       # strobe
+        for led in leds: led.on()
+        sleep(0.2)
+        for led in leds: led.off()
+        sleep(0.2)
+
+Call this when game state transitions to Final and Angels are the winner.
+Can use red/white LEDs alternating for Angels colors.
+
+
+--------------------------------------------------------------------------------
+12. VIDEO PLAYBACK
+--------------------------------------------------------------------------------
+
+omxplayer (Bullseye only, removed in Bookworm):
+  omxplayer --display 7 highlights.mp4   # display 7 = SPI framebuffer
+
+Encode videos with ffmpeg, scaled to screen resolution:
+  ffmpeg -i input.mp4 -vf scale=320:480 -c:v h264 output.mp4
+
+Win screen idea: pre-render a short confetti/halo clip, play once on win,
+return to idle. Same pattern as Simpsons TV episode playback.
+
+Highlights: play at random or predetermined intervals during IDLE scene
+between "next game" display.
+
+
+--------------------------------------------------------------------------------
+13. PORTRAIT UI LAYOUT SUGGESTION (320x480)
+--------------------------------------------------------------------------------
+
+┌─────────────────────┐  320px wide
+│   [LAA logo 100px]  │
+│      ANGELS         │
+│                     │
+│       4  -  3       │  ← big score font
+│                     │
+│   [OPP logo 100px]  │
+│      GIANTS         │
+├─────────────────────┤
+│  ▼ 6th  ●●○  2 out  │
+├─────────────────────┤
+│    [base diamond]   │  ← drawn with pygame polygons
+│    Count: 2-1       │
+├─────────────────────┤
+│  P: Logan Webb      │
+│  B: Mike Trout      │
+└─────────────────────┘  480px tall
+
+
+--------------------------------------------------------------------------------
+14. OMXPLAYER vs MPV NOTE
+--------------------------------------------------------------------------------
+
+omxplayer:  works on Bullseye, removed from Bookworm, hardware accelerated
+mpv:        works on Bookworm, recommended replacement, similar CLI
+
+Recommendation: stay on Bullseye to match your proven Simpsons TV setup.
+No reason to introduce new variables across devices.
+
+Check your current OS version:
+  cat /etc/os-release
+
+
+--------------------------------------------------------------------------------
+15. PYGAME PACKAGE LAYOUT (pi_tracker) — LANDSCAPE 480×320
+--------------------------------------------------------------------------------
+
+Physical panel is 320×480 portrait; pygame targets the same pixel count rotated
+to landscape: 480×320 (see src/pi_tracker/config.py).
+
+Run from repo root (after pip install -r requirements.txt):
+
+  python3 run_pi_ui.py              # idle scene + MLB next-game poll (immediate + every 20 min)
+  python3 run_pi_ui.py --no-schedule # no network (offline / CI)
+  python3 run_pi_ui.py --demo       # starts on LIVE with sample Giants @ Angels
+  python3 run_pi_ui.py --fullscreen # Pi / kiosk style
+
+Or:  cd src && PYTHONPATH=. python3 -m pi_tracker --demo
+
+Layout under src/pi_tracker/:
+
+  config.py          SCREEN_WIDTH/HEIGHT, colors, FPS, paths
+  state.py           SharedGameState (threading.Lock + snapshot for render thread)
+  assets.py          fonts + scaled logos from repo logos/{teamId}.png
+  app.py             pygame loop, scene dispatch, dev keybindings
+  mlb_schedule.py    next Angels game from /api/v1/schedule (startDate..endDate)
+  schedule_poller.py background thread: fetch on startup, then every 20 minutes
+  drawing/diamond.py runner-on-base diamond
+  scenes/            idle, live, final_win, final_loss
+
+Idle screen reads schedule_* and next_game_* fields from SharedGameState (poller
+writes, pygame reads snapshots).
+
+Optional: drop DejaVuSans.ttf into src/pi_tracker/assets/ for consistent fonts on
+Pi Lite. Otherwise system font match is used.
+
+ffmpeg for landscape clips on this panel:
+  ffmpeg -i input.mp4 -vf scale=480:320 -c:v h264 output.mp4
+
+  Mac dev — pygame install fails with 'SDL.h' file not found:
+    Cause: Homebrew `python3` is often 3.14+; PyPI may not ship a pygame wheel for
+    that tag yet, so pip compiles from source and needs SDL headers.
+
+    Fix (recommended): use Python 3.12 in a venv so pip gets a binary wheel:
+
+      brew install python@3.12
+      /opt/homebrew/opt/python@3.12/bin/python3.12 -m venv .venv
+      source .venv/bin/activate
+      pip install -r requirements.txt
+      python run_pi_ui.py --demo
+
+    (On Intel Macs the brew prefix may be /usr/local instead of /opt/homebrew.)
+
+    Fix (alternative): install SDL2 and build pygame from source on your current
+    Python (slower, more fragile):
+
+      brew install pkg-config sdl2 sdl2_image sdl2_mixer sdl2_ttf
+      pip install pygame
+
+    See: https://www.pygame.org/wiki/MacCompile
+
+
+================================================================================
+  END OF NOTES
+================================================================================
