@@ -7,6 +7,28 @@ from typing import Any
 from .mlb_http import ANGELS_TEAM_ID, FINAL_DETAILED, fetch_live_feed_v11
 
 
+def _team_profile(side: dict[str, Any] | None) -> dict[str, Any]:
+    """
+    Schedule JSON nests under ``teams.away.team``; v1.1 live ``gameData.teams.away``
+    often flattens id/abbreviation onto the side object with no ``team`` key.
+    """
+    if not side or not isinstance(side, dict):
+        return {}
+    inner = side.get("team")
+    if isinstance(inner, dict) and inner.get("id") is not None:
+        return inner
+    return side
+
+
+def _safe_int(v: Any) -> int | None:
+    try:
+        if v is None:
+            return None
+        return int(v)
+    except (TypeError, ValueError):
+        return None
+
+
 def game_is_final(feed: dict[str, Any]) -> bool:
     st = (feed.get("gameData") or {}).get("status") or {}
     if st.get("abstractGameState") == "Final":
@@ -20,8 +42,10 @@ def angels_won(feed: dict[str, Any], angels_id: int = ANGELS_TEAM_ID) -> bool | 
         return None
     gd = feed.get("gameData") or {}
     teams = gd.get("teams") or {}
-    aid = (teams.get("away", {}).get("team") or {}).get("id")
-    hid = (teams.get("home", {}).get("team") or {}).get("id")
+    away_prof = _team_profile(teams.get("away"))
+    home_prof = _team_profile(teams.get("home"))
+    aid = _safe_int(away_prof.get("id"))
+    hid = _safe_int(home_prof.get("id"))
     ls = (feed.get("liveData") or {}).get("linescore") or {}
     tr = ls.get("teams") or {}
     ar = int((tr.get("away") or {}).get("runs", 0) or 0)
@@ -44,14 +68,28 @@ def live_feed_to_state_patch(feed: dict[str, Any]) -> dict[str, Any]:
     plays = live_data.get("plays") or {}
     teams_gd = game_data.get("teams") or {}
 
-    away_team = (teams_gd.get("away") or {}).get("team") or {}
-    home_team = (teams_gd.get("home") or {}).get("team") or {}
+    away_side = teams_gd.get("away") or {}
+    home_side = teams_gd.get("home") or {}
+    away_team = _team_profile(away_side)
+    home_team = _team_profile(home_side)
     away_id = int(away_team.get("id") or 0)
     home_id = int(home_team.get("id") or 0)
-    away_abbr = str(away_team.get("abbreviation") or "AWY")
-    home_abbr = str(home_team.get("abbreviation") or "HME")
-    away_name = str(away_team.get("name") or away_team.get("clubName") or "")
-    home_name = str(home_team.get("name") or home_team.get("clubName") or "")
+    away_abbr = str(away_team.get("abbreviation") or away_side.get("abbreviation") or "AWY")
+    home_abbr = str(home_team.get("abbreviation") or home_side.get("abbreviation") or "HME")
+    away_name = str(
+        away_team.get("name")
+        or away_team.get("teamName")
+        or away_team.get("clubName")
+        or away_side.get("teamName")
+        or ""
+    )
+    home_name = str(
+        home_team.get("name")
+        or home_team.get("teamName")
+        or home_team.get("clubName")
+        or home_side.get("teamName")
+        or ""
+    )
 
     tr = linescore.get("teams") or {}
     ar = int((tr.get("away") or {}).get("runs", 0) or 0)

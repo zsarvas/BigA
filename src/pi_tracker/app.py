@@ -54,6 +54,7 @@ def _demo_state() -> SharedGameState:
         next_game_venue="Angel Stadium",
         next_game_pk=999999,
         live_game_pk=999999,
+        next_opponent_team_id=133,
         idle_subtitle="Wednesday, May 14, 2026  ·  7:07 PM PDT",
     )
     return st
@@ -76,8 +77,10 @@ def main() -> None:
     team_ids = {
         int(state.snapshot().get("away_team_id", 0)),
         int(state.snapshot().get("home_team_id", 0)),
+        int(state.snapshot().get("next_opponent_team_id") or 0),
         108,
     }
+    team_ids.discard(0)
     assets = AssetManager()
     assets.load(team_ids)
 
@@ -109,11 +112,17 @@ def main() -> None:
         nonlocal screen
         screen = suspend_pygame_run_mpv_resume(path, display_flags)
         s = state.snapshot()
-        tids = {108, int(s.get("away_team_id") or 0), int(s.get("home_team_id") or 0)}
+        tids = {
+            108,
+            int(s.get("away_team_id") or 0),
+            int(s.get("home_team_id") or 0),
+            int(s.get("next_opponent_team_id") or 0),
+        }
+        tids.discard(0)
         assets.load(tids)
         pygame.display.set_caption("BigA Pi Tracker")
 
-    last_team_key: tuple[object, object] | None = None
+    last_team_key: tuple[int, int, int] | None = None
     running = True
     while running:
         for event in pygame.event.get():
@@ -137,10 +146,15 @@ def main() -> None:
                     state.update(scene="loss")
 
         snap = state.snapshot()
-        tkey = (snap.get("away_team_id"), snap.get("home_team_id"))
-        if tkey != last_team_key:
-            last_team_key = tkey
-            team_ids = {108, int(tkey[0] or 0), int(tkey[1] or 0)}
+        reload_key = (
+            int(snap.get("away_team_id") or 0),
+            int(snap.get("home_team_id") or 0),
+            int(snap.get("next_opponent_team_id") or 0),
+        )
+        if reload_key != last_team_key:
+            last_team_key = reload_key
+            team_ids = {108, reload_key[0], reload_key[1], reload_key[2]}
+            team_ids.discard(0)
             assets.load(team_ids)
 
         scene_key = str(snap.get("scene", "idle"))

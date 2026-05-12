@@ -87,6 +87,7 @@ class AssetManager:
         self.font_small = _repo_font(13)
         self.font_idle_clock = _repo_font(28)
 
+        self.logos.clear()
         for tid in team_ids:
             path = config.LOGOS_DIR / f"{tid}.png"
             if path.is_file():

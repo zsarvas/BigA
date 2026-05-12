@@ -29,6 +29,7 @@ def idle_schedule_loop(state: SharedGameState, stop: threading.Event) -> None:
                 schedule_status="error",
                 schedule_error=str(e)[:120],
                 idle_subtitle="Could not load schedule.",
+                next_opponent_team_id=None,
             )
         if stop.wait(POLL_INTERVAL_SEC):
             break

@@ -8,6 +8,11 @@ import pygame
 from .. import config
 from ..assets import AssetManager
 
+ANGELS_TEAM_ID = 108
+# Small logo beside "vs / @ …" on idle (hero logo is always Angels).
+IDLE_OPPONENT_LOGO_SIZE = (34, 34)
+MATCHUP_LOGO_GAP = 8
+
 
 def _blit_wrapped_center(
     screen: pygame.Surface,
@@ -30,24 +35,54 @@ def _blit_wrapped_center(
     return y
 
 
+def _blit_matchup_row(
+    screen: pygame.Surface,
+    assets: AssetManager,
+    matchup: str,
+    opponent_team_id: int,
+    y_center: int,
+) -> int:
+    """Single-line matchup with optional small opponent logo; return bottom y."""
+    tex = assets.font_small.render(matchup, True, config.GRAY)
+    sm: pygame.Surface | None = None
+    if opponent_team_id and opponent_team_id != ANGELS_TEAM_ID:
+        base = assets.logos.get(opponent_team_id)
+        if base is not None:
+            sm = pygame.transform.smoothscale(base, IDLE_OPPONENT_LOGO_SIZE)
+    if sm is not None:
+        total_w = sm.get_width() + MATCHUP_LOGO_GAP + tex.get_width()
+        max_h = max(sm.get_height(), tex.get_height())
+        x0 = (config.SCREEN_WIDTH - total_w) // 2
+        y_row = y_center - max_h // 2
+        screen.blit(sm, (x0, y_row + (max_h - sm.get_height()) // 2))
+        screen.blit(
+            tex,
+            (x0 + sm.get_width() + MATCHUP_LOGO_GAP, y_row + (max_h - tex.get_height()) // 2),
+        )
+        return y_row + max_h + 4
+    r = tex.get_rect(center=(config.SCREEN_WIDTH // 2, y_center))
+    screen.blit(tex, r)
+    return r.bottom + 4
+
+
 class IdleScene:
     def draw(self, screen: pygame.Surface, assets: AssetManager, state: dict[str, Any]) -> None:
         screen.fill(config.BLACK)
 
-        home_id = int(state.get("home_team_id", 108))
-        logo = assets.logos.get(home_id)
-        logo_y = 52
+        # Idle is Angels-first: hero logo is always LAA (never the away-game "home" club).
+        logo = assets.logos.get(ANGELS_TEAM_ID)
+        logo_y = 48
         if logo:
             r = logo.get_rect(center=(config.SCREEN_WIDTH // 2, logo_y))
             screen.blit(logo, r)
             logo_y = r.bottom + 6
         else:
-            logo_y = 28
+            logo_y = 24
 
         title = assets.font_title.render("ANGELS", True, config.ANGELS_GOLD)
-        screen.blit(title, title.get_rect(center=(config.SCREEN_WIDTH // 2, logo_y + 18)))
+        screen.blit(title, title.get_rect(center=(config.SCREEN_WIDTH // 2, logo_y + 16)))
 
-        y = logo_y + 52
+        y = logo_y + 50
         label = assets.font_small.render("NEXT GAME", True, config.ANGELS_GOLD)
         screen.blit(label, label.get_rect(center=(config.SCREEN_WIDTH // 2, y)))
         y += 22
@@ -79,6 +114,7 @@ class IdleScene:
             time_txt = str(state.get("next_game_time_display", "")).strip()
             matchup = str(state.get("next_game_matchup", "")).strip()
             venue = str(state.get("next_game_venue", "")).strip()
+            opp_id = int(state.get("next_opponent_team_id") or 0)
 
             if date_txt:
                 y = _blit_wrapped_center(screen, assets.font_ui, date_txt, y, config.WHITE, 40)
@@ -87,7 +123,7 @@ class IdleScene:
                 screen.blit(t_surf, t_surf.get_rect(center=(config.SCREEN_WIDTH // 2, y + 18)))
                 y += 40
             if matchup:
-                y = _blit_wrapped_center(screen, assets.font_small, matchup, y, config.GRAY, 48)
+                y = _blit_matchup_row(screen, assets, matchup, opp_id, y + 10)
             if venue:
                 y = _blit_wrapped_center(screen, assets.font_small, venue, y, config.GRAY, 48)
 
