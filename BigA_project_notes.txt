@@ -402,11 +402,16 @@ Or:  cd src && PYTHONPATH=. python3 -m pi_tracker --demo
 Layout under src/pi_tracker/:
 
   config.py          SCREEN_WIDTH/HEIGHT, colors, FPS, paths
+  mlb_http.py        shared api_get, live feed URL, status constants
+  mlb_schedule.py    next-game window + today's schedule helpers
+  mlb_live_feed.py   v1.1 live feed → state patch; final / angels win
   state.py           SharedGameState (threading.Lock + snapshot for render thread)
   assets.py          fonts + scaled logos from repo logos/{teamId}.png
   app.py             pygame loop, scene dispatch, dev keybindings
   mlb_schedule.py    next Angels game from /api/v1/schedule (startDate..endDate)
   schedule_poller.py background thread: fetch on startup, then every 20 minutes
+  game_day_poller.py  idle: today's schedule every 5s → auto scene live when game
+                      is active; live: MLB live feed every 2s → scene win/loss when final
   idle_mpv.py        random-interval fullscreen mpv clips while scene is idle
   embedded_shim.py   Pi: stub fc-list before pygame import to avoid fontconfig hangs
   drawing/diamond.py runner-on-base diamond

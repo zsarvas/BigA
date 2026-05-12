@@ -5,10 +5,7 @@ from __future__ import annotations
 from datetime import date, datetime, timedelta, timezone
 from typing import Any
 
-import requests
-
-BASE_URL = "https://statsapi.mlb.com"
-ANGELS_TEAM_ID = 108
+from .mlb_http import ANGELS_TEAM_ID, LIVE_DETAILED, api_get as _get
 
 # Skip when picking the next game to advertise on idle
 _SKIP_DETAILED = {
@@ -20,11 +17,17 @@ _SKIP_DETAILED = {
 }
 
 
-def _get(path: str, params: dict[str, Any] | None = None) -> dict[str, Any]:
-    url = BASE_URL + path
-    resp = requests.get(url, params=params or {}, timeout=15)
-    resp.raise_for_status()
-    return resp.json()
+def fetch_angels_schedule_for_date(day: date, team_id: int = ANGELS_TEAM_ID) -> dict[str, Any]:
+    return _get(
+        "/api/v1/schedule",
+        {
+            "sportId": 1,
+            "teamId": team_id,
+            "date": day.isoformat(),
+            "hydrate": "team,venue",
+        },
+    )
+
 
 
 def fetch_angels_schedule_window(
@@ -50,6 +53,49 @@ def _iter_games(schedule_json: dict[str, Any]):
     for d in schedule_json.get("dates", []):
         for g in d.get("games", []):
             yield g
+
+
+def _schedule_game_is_scoreboard_active(game: dict[str, Any]) -> bool:
+    st = game.get("status") or {}
+    if st.get("abstractGameState") == "Live":
+        return True
+    detailed = st.get("detailedState") or ""
+    if detailed in LIVE_DETAILED:
+        return True
+    if detailed in ("Warmup", "Pre-Game"):
+        return True
+    return False
+
+
+def find_todays_scoreboard_angels_game(
+    schedule_json: dict[str, Any],
+    angels_id: int = ANGELS_TEAM_ID,
+) -> dict[str, Any] | None:
+    """Today's Angels game that should show the live scoreboard (not idle)."""
+    for g in _iter_games(schedule_json):
+        aid = g.get("teams", {}).get("away", {}).get("team", {}).get("id")
+        hid = g.get("teams", {}).get("home", {}).get("team", {}).get("id")
+        if aid != angels_id and hid != angels_id:
+            continue
+        if _schedule_game_is_scoreboard_active(g):
+            return g
+    return None
+
+
+def live_transition_from_schedule_game(game: dict[str, Any]) -> dict[str, Any]:
+    teams = game.get("teams") or {}
+    away = teams.get("away", {}).get("team", {})
+    home = teams.get("home", {}).get("team", {})
+    return {
+        "scene": "live",
+        "live_game_pk": game.get("gamePk"),
+        "away_team_id": int(away.get("id") or 0),
+        "home_team_id": int(home.get("id") or 0),
+        "away_abbr": str(away.get("abbreviation") or ""),
+        "home_abbr": str(home.get("abbreviation") or ""),
+        "away_name": str(away.get("clubName") or away.get("name") or ""),
+        "home_name": str(home.get("clubName") or home.get("name") or ""),
+    }
 
 
 def _parse_game_datetime(game: dict[str, Any]) -> datetime | None:
@@ -142,15 +188,11 @@ def format_next_game_for_ui(game: dict[str, Any] | None, angels_id: int = ANGELS
     local = dt.astimezone()
 
     date_disp = local.strftime("%A, %b %d, %Y")
-    abstract = (game.get("status") or {}).get("abstractGameState", "")
-    if abstract == "Live":
-        time_disp = "In progress"
-    else:
-        clock = local.strftime("%I:%M %p")
-        if clock.startswith("0"):
-            clock = clock[1:]
-        tz = local.tzname() or ""
-        time_disp = f"{clock} {tz}" if tz else clock
+    clock = local.strftime("%I:%M %p")
+    if clock.startswith("0"):
+        clock = clock[1:]
+    tz = local.tzname() or ""
+    time_disp = f"{clock} {tz}" if tz else clock
 
     matchup, _opp_abbr = _opponent_line(game, angels_id)
     venue = (game.get("venue") or {}).get("name") or ""

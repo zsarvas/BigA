@@ -53,6 +53,7 @@ def _demo_state() -> SharedGameState:
         next_game_matchup="vs Athletics",
         next_game_venue="Angel Stadium",
         next_game_pk=999999,
+        live_game_pk=999999,
         idle_subtitle="Wednesday, May 14, 2026  ·  7:07 PM PDT",
     )
     return st
@@ -88,11 +89,15 @@ def main() -> None:
     }
 
     stop_schedule = threading.Event()
+    stop_game_day = threading.Event()
     schedule_thread: threading.Thread | None = None
+    game_day_thread: threading.Thread | None = None
     if not demo and not no_schedule:
+        from .game_day_poller import start_game_day_poller
         from .schedule_poller import start_idle_schedule_poller
 
         schedule_thread = start_idle_schedule_poller(state, stop_schedule)
+        game_day_thread = start_game_day_poller(state, stop_game_day)
 
     idle_video_paths: list[Path] = []
     if "--no-idle-videos" not in sys.argv:
@@ -103,9 +108,12 @@ def main() -> None:
     def play_idle_clip(path: Path) -> None:
         nonlocal screen
         screen = suspend_pygame_run_mpv_resume(path, display_flags)
-        assets.load(team_ids)
+        s = state.snapshot()
+        tids = {108, int(s.get("away_team_id") or 0), int(s.get("home_team_id") or 0)}
+        assets.load(tids)
         pygame.display.set_caption("BigA Pi Tracker")
 
+    last_team_key: tuple[object, object] | None = None
     running = True
     while running:
         for event in pygame.event.get():
@@ -117,13 +125,24 @@ def main() -> None:
                 elif event.key == pygame.K_1:
                     state.update(scene="idle")
                 elif event.key == pygame.K_2:
-                    state.update(scene="live")
+                    sn = state.snapshot()
+                    pk = sn.get("live_game_pk") or sn.get("next_game_pk")
+                    p2: dict = {"scene": "live"}
+                    if pk is not None:
+                        p2["live_game_pk"] = pk
+                    state.update(p2)
                 elif event.key == pygame.K_3:
                     state.update(scene="win")
                 elif event.key == pygame.K_4:
                     state.update(scene="loss")
 
         snap = state.snapshot()
+        tkey = (snap.get("away_team_id"), snap.get("home_team_id"))
+        if tkey != last_team_key:
+            last_team_key = tkey
+            team_ids = {108, int(tkey[0] or 0), int(tkey[1] or 0)}
+            assets.load(team_ids)
+
         scene_key = str(snap.get("scene", "idle"))
         scene = scenes.get(scene_key, scenes["idle"])
         scene.draw(screen, assets, snap)
@@ -134,8 +153,11 @@ def main() -> None:
         clock.tick(config.FPS)
 
     stop_schedule.set()
+    stop_game_day.set()
     if schedule_thread is not None:
         schedule_thread.join(timeout=3.0)
+    if game_day_thread is not None:
+        game_day_thread.join(timeout=3.0)
 
     pygame.quit()
 

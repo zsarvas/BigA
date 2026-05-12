@@ -37,6 +37,7 @@ class SharedGameState:
             "next_game_matchup": "",
             "next_game_venue": "",
             "next_game_pk": None,
+            "live_game_pk": None,
             "idle_subtitle": "Loading schedule…",
         }
 
