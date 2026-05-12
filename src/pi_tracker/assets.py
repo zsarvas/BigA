@@ -2,16 +2,56 @@
 
 from __future__ import annotations
 
+import os
+from pathlib import Path
+
 import pygame
 
 from . import config
 
+# On Pi OS Lite, pygame.font.match_font() runs fc-list and often hangs or times out.
+# Prefer explicit paths; set BIGA_FONT_PATH=/path/to/font.ttf to override.
+_SYSTEM_SANS = (
+    Path("/usr/share/fonts/truetype/dejavu/DejaVuSans.ttf"),
+    Path("/usr/share/fonts/truetype/liberation/LiberationSans-Regular.ttf"),
+    Path("/usr/share/fonts/TTF/DejaVuSans.ttf"),
+)
+
+
+def _is_raspberry_pi() -> bool:
+    model = Path("/proc/device-tree/model")
+    try:
+        if model.is_file():
+            txt = model.read_text(encoding="utf-8", errors="ignore").lower()
+            return "raspberry pi" in txt
+    except OSError:
+        pass
+    return False
+
+
+def _skip_match_font() -> bool:
+    if os.environ.get("BIGA_SKIP_SYSFONT", "").strip().lower() in ("1", "true", "yes"):
+        return True
+    return _is_raspberry_pi()
+
 
 def _repo_font(size: int) -> pygame.font.Font:
-    """Prefer a bundled TTF, then common system fonts, then default bitmap font."""
+    """Bundled TTF, BIGA_FONT_PATH, known Debian paths, then match_font (non-Pi) or bitmap."""
+    env_fp = os.environ.get("BIGA_FONT_PATH", "").strip()
+    if env_fp and Path(env_fp).is_file():
+        return pygame.font.Font(env_fp, size)
+
     bundled = config.ASSETS_DIR / "DejaVuSans.ttf"
     if bundled.is_file():
         return pygame.font.Font(str(bundled), size)
+
+    for p in _SYSTEM_SANS:
+        if p.is_file():
+            return pygame.font.Font(str(p), size)
+
+    if _skip_match_font():
+        return pygame.font.Font(None, size)
+
     for name in ("dejavusans", "DejaVu Sans", "arial", "helvetica"):
         path = pygame.font.match_font(name)
         if path:
