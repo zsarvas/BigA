@@ -61,6 +61,26 @@ def angels_won(feed: dict[str, Any], angels_id: int = ANGELS_TEAM_ID) -> bool | 
     return None
 
 
+def _pitcher_batter_team_ids(
+    linescore: dict[str, Any],
+    offense: dict[str, Any],
+    defense: dict[str, Any],
+    away_id: int,
+    home_id: int,
+) -> tuple[int, int]:
+    """(pitching_team_id, batting_team_id) — defense pitches, offense bats."""
+    o_team = offense.get("team") if isinstance(offense.get("team"), dict) else {}
+    d_team = defense.get("team") if isinstance(defense.get("team"), dict) else {}
+    bat = _safe_int(o_team.get("id")) or 0
+    pit = _safe_int(d_team.get("id")) or 0
+    half_l = str(linescore.get("inningHalf", "top")).lower()
+    if bat == 0:
+        bat = away_id if half_l == "top" else home_id
+    if pit == 0:
+        pit = home_id if half_l == "top" else away_id
+    return pit, bat
+
+
 def live_feed_to_state_patch(feed: dict[str, Any]) -> dict[str, Any]:
     live_data = feed.get("liveData") or {}
     game_data = feed.get("gameData") or {}
@@ -105,6 +125,7 @@ def live_feed_to_state_patch(feed: dict[str, Any]) -> dict[str, Any]:
     defense = linescore.get("defense") or {}
     batter_id = (offense.get("batter") or {}).get("id")
     pitcher_id = (defense.get("pitcher") or {}).get("id")
+    pit_tid, bat_tid = _pitcher_batter_team_ids(linescore, offense, defense, away_id, home_id)
     players = game_data.get("players") or {}
     batter = "—"
     pitcher = "—"
@@ -151,6 +172,8 @@ def live_feed_to_state_patch(feed: dict[str, Any]) -> dict[str, Any]:
         "runners": runners,
         "pitcher_name": pitcher,
         "batter_name": batter,
+        "pitcher_team_id": pit_tid,
+        "batter_team_id": bat_tid,
         "last_play": last_play,
     }
     if pk is not None:

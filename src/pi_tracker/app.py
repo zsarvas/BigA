@@ -45,6 +45,8 @@ def _demo_state() -> SharedGameState:
         runners={"first": True, "second": False, "third": True},
         pitcher_name="Logan Webb",
         batter_name="Mike Trout",
+        pitcher_team_id=137,
+        batter_team_id=108,
         last_play="Trout doubles to left field; runner scores from first.",
         schedule_status="ok",
         schedule_error="",
