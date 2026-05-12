@@ -1,0 +1,7 @@
+.venv/
+__pycache__/
+*.py[cod]
+.DS_Store
+
+# Large local media (clips for idle mpv); copy to Pi separately
+src/pi_tracker/assets/*.mp4
