@@ -3,6 +3,8 @@
 from __future__ import annotations
 
 import os
+import platform
+import sys
 from pathlib import Path
 
 import pygame
@@ -22,17 +24,26 @@ def _is_raspberry_pi() -> bool:
     model = Path("/proc/device-tree/model")
     try:
         if model.is_file():
-            txt = model.read_text(encoding="utf-8", errors="ignore").lower()
-            return "raspberry pi" in txt
+            raw = model.read_bytes().replace(b"\x00", b"").decode("utf-8", errors="ignore").lower()
+            return "raspberry" in raw
     except OSError:
         pass
     return False
 
 
+def _linux_arm() -> bool:
+    if not sys.platform.startswith("linux"):
+        return False
+    m = platform.machine().lower()
+    return m.startswith("arm") or m == "aarch64"
+
+
 def _skip_match_font() -> bool:
     if os.environ.get("BIGA_SKIP_SYSFONT", "").strip().lower() in ("1", "true", "yes"):
         return True
-    return _is_raspberry_pi()
+    if _is_raspberry_pi() or _linux_arm():
+        return True
+    return False
 
 
 def _repo_font(size: int) -> pygame.font.Font:

@@ -5,11 +5,14 @@ import os
 import sys
 from pathlib import Path
 
-# Before pygame is imported (via pi_tracker.app).
-os.environ.setdefault("PYGAME_HIDE_SUPPORT_PROMPT", "1")
-
 ROOT = Path(__file__).resolve().parent
 sys.path.insert(0, str(ROOT / "src"))
+
+# Before pygame: avoid fontconfig fc-list hangs on Pi OS Lite (see embedded_shim).
+from pi_tracker.embedded_shim import install_fc_list_stub_if_needed
+
+install_fc_list_stub_if_needed()
+os.environ["PYGAME_HIDE_SUPPORT_PROMPT"] = "1"
 
 from pi_tracker.app import main
 

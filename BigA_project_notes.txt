@@ -408,6 +408,7 @@ Layout under src/pi_tracker/:
   mlb_schedule.py    next Angels game from /api/v1/schedule (startDate..endDate)
   schedule_poller.py background thread: fetch on startup, then every 20 minutes
   idle_mpv.py        random-interval fullscreen mpv clips while scene is idle
+  embedded_shim.py   Pi: stub fc-list before pygame import to avoid fontconfig hangs
   drawing/diamond.py runner-on-base diamond
   scenes/            idle, live, final_win, final_loss
 
@@ -437,6 +438,14 @@ ffmpeg for landscape clips on this panel:
   uses /usr/share/fonts/... paths first. Install a sans TTF if needed:
     sudo apt install fonts-dejavu-core
   Or set BIGA_FONT_PATH=/path/to/YourFont.ttf
+
+  fc-list stub: ``run_pi_ui.py`` and ``app.py`` call ``embedded_shim.install_fc_list_stub_if_needed()``
+  before pygame imports on Raspberry Pi (detected via ``/proc/device-tree/model``).
+  That replaces only ``fc-list`` subprocesses with an instant empty result so
+  fontconfig does not block. To force the same on other machines:
+    BIGA_STUB_FC_LIST=1 python3 run_pi_ui.py
+  To disable the stub on a Pi (use real fc-list):
+    BIGA_ALLOW_FC_LIST=1 python3 run_pi_ui.py
 
   Neon / AVX pygame warning: harmless unless you built pygame from source; ignore
   or rebuild pygame with NEON if you care about blit micro-optimizations.
