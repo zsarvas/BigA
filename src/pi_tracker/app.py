@@ -1,7 +1,8 @@
 """
 Pygame main loop: 480×320 landscape, scene state machine.
 
-Dev: keys 1–4 switch scenes. On Pi, set SDL_VIDEODRIVER / SDL_FBDEV per notes.
+Dev: keys 1–4 switch scenes. On Linux (Pi), fbcon defaults apply before init; on macOS
+do not set SDL_VIDEODRIVER=fbcon (use plain ``python3 run_pi_ui.py`` or a desktop driver).
 """
 
 from __future__ import annotations
@@ -62,7 +63,18 @@ def _demo_state() -> SharedGameState:
     return st
 
 
+def _apply_linux_framebuffer_env_defaults() -> None:
+    """fbcon is Linux-only; macOS/Windows SDL builds raise 'fbcon not available'."""
+    if not sys.platform.startswith("linux"):
+        return
+    os.environ.setdefault("SDL_VIDEODRIVER", "fbcon")
+    os.environ.setdefault("SDL_FBDEV", "/dev/fb0")
+
+
 def main() -> None:
+    # Before pygame.init(): Pi framebuffer (setdefault — explicit shell env still wins).
+    _apply_linux_framebuffer_env_defaults()
+
     demo = "--demo" in sys.argv
     no_schedule = "--no-schedule" in sys.argv
     pygame.init()
