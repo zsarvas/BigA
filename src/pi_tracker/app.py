@@ -11,7 +11,10 @@ import sys
 import threading
 from pathlib import Path
 
-os.environ.setdefault("PYGAME_HIDE_SUPPORT_PROMPT", "1")
+from .embedded_shim import install_fc_list_stub_if_needed
+
+install_fc_list_stub_if_needed()
+os.environ["PYGAME_HIDE_SUPPORT_PROMPT"] = "1"
 
 import pygame
 
