@@ -8,11 +8,13 @@ from __future__ import annotations
 
 import sys
 import threading
+from pathlib import Path
 
 import pygame
 
 from . import config
 from .assets import AssetManager
+from .idle_mpv import IdleMpvScheduler, discover_idle_videos, suspend_pygame_run_mpv_resume
 from .state import SharedGameState
 from .scenes import FinalLossScene, FinalWinScene, IdleScene, LiveScene
 
@@ -58,7 +60,8 @@ def main() -> None:
     flags = 0
     if "--fullscreen" in sys.argv:
         flags |= pygame.FULLSCREEN
-    screen = pygame.display.set_mode((config.SCREEN_WIDTH, config.SCREEN_HEIGHT), flags)
+    display_flags = flags
+    screen = pygame.display.set_mode((config.SCREEN_WIDTH, config.SCREEN_HEIGHT), display_flags)
     clock = pygame.time.Clock()
 
     state = _demo_state() if demo else SharedGameState()
@@ -85,6 +88,18 @@ def main() -> None:
 
         schedule_thread = start_idle_schedule_poller(state, stop_schedule)
 
+    idle_video_paths: list[Path] = []
+    if "--no-idle-videos" not in sys.argv:
+        idle_video_paths = discover_idle_videos()
+    idle_debug = "--idle-video-debug" in sys.argv
+    idle_mpv = IdleMpvScheduler(idle_video_paths, debug_interval_sec=10.0 if idle_debug else None)
+
+    def play_idle_clip(path: Path) -> None:
+        nonlocal screen
+        screen = suspend_pygame_run_mpv_resume(path, display_flags)
+        assets.load(team_ids)
+        pygame.display.set_caption("BigA Pi Tracker")
+
     running = True
     while running:
         for event in pygame.event.get():
@@ -107,6 +122,9 @@ def main() -> None:
         scene = scenes.get(scene_key, scenes["idle"])
         scene.draw(screen, assets, snap)
         pygame.display.flip()
+
+        idle_mpv.tick(scene_key, play_idle_clip)
+
         clock.tick(config.FPS)
 
     stop_schedule.set()
