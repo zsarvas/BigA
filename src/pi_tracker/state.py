@@ -29,6 +29,8 @@ class SharedGameState:
             "runners": {"first": False, "second": False, "third": False},
             "pitcher_name": "",
             "batter_name": "",
+            "pitcher_team_id": 0,
+            "batter_team_id": 0,
             "last_play": "",
             "schedule_status": "loading",
             "schedule_error": "",

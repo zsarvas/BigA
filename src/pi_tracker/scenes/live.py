@@ -9,6 +9,10 @@ from .. import config
 from ..assets import AssetManager
 from ..drawing.diamond import draw_diamond
 
+# Tiny caps beside P:/B: (fielding team pitches; batting team at plate).
+PB_LOGO_SIZE = (16, 16)
+PB_LOGO_GAP = 4
+
 
 def _inning_label(n: int | str) -> str:
     try:
@@ -33,6 +37,38 @@ def _fmt_inning(state: dict[str, Any]) -> str:
 def _truncate(s: str, max_chars: int) -> str:
     s = s.strip()
     return s if len(s) <= max_chars else s[: max_chars - 1] + "…"
+
+
+def _tiny_team_logo(assets: AssetManager, team_id: int) -> pygame.Surface | None:
+    if team_id <= 0:
+        return None
+    base = assets.logos.get(team_id)
+    if base is None:
+        return None
+    return pygame.transform.smoothscale(base, PB_LOGO_SIZE)
+
+
+def _blit_pb_line(
+    screen: pygame.Surface,
+    assets: AssetManager,
+    label_prefix: str,
+    name: str,
+    team_id: int,
+    y: int,
+    x0: int = 12,
+) -> None:
+    label = f"{label_prefix}: {name}"
+    surf = assets.font_small.render(label, True, config.WHITE)
+    tiny = _tiny_team_logo(assets, team_id)
+    if tiny is None:
+        screen.blit(surf, (x0, y))
+        return
+    row_h = max(surf.get_height(), tiny.get_height())
+    y0 = y + (row_h - tiny.get_height()) // 2
+    screen.blit(tiny, (x0, y0))
+    sx = x0 + tiny.get_width() + PB_LOGO_GAP
+    sy = y + (row_h - surf.get_height()) // 2
+    screen.blit(surf, (sx, sy))
 
 
 class LiveScene:
@@ -86,10 +122,10 @@ class LiveScene:
 
         p = _truncate(str(state.get("pitcher_name", "—")), 34)
         b = _truncate(str(state.get("batter_name", "—")), 34)
-        pl = assets.font_small.render(f"P: {p}", True, config.WHITE)
-        bl = assets.font_small.render(f"B: {b}", True, config.WHITE)
-        screen.blit(pl, (12, config.SCREEN_HEIGHT - 44))
-        screen.blit(bl, (12, config.SCREEN_HEIGHT - 26))
+        pit_tid = int(state.get("pitcher_team_id") or 0)
+        bat_tid = int(state.get("batter_team_id") or 0)
+        _blit_pb_line(screen, assets, "P", p, pit_tid, config.SCREEN_HEIGHT - 44)
+        _blit_pb_line(screen, assets, "B", b, bat_tid, config.SCREEN_HEIGHT - 26)
 
         last = str(state.get("last_play", "")).strip()
         if last:
