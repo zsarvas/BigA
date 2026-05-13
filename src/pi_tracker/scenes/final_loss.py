@@ -14,18 +14,18 @@ class FinalLossScene:
     def draw(self, screen: pygame.Surface, assets: AssetManager, state: dict[str, Any]) -> None:
         screen.fill((18, 18, 22))
         draw_score_with_flanking_logos(
-            screen, assets, state, y_center=92, score_color=config.GRAY
+            screen, assets, state, y_center=config.layout_y(92), score_color=config.GRAY
         )
 
         w = assets.font_title.render("FINAL", True, config.WHITE)
-        screen.blit(w, w.get_rect(center=(config.SCREEN_WIDTH // 2, 152)))
+        screen.blit(w, w.get_rect(center=(config.SCREEN_WIDTH // 2, config.layout_y(152))))
 
         draw_linescore_table_centered(
             screen,
             assets,
             state,
             config.SCREEN_WIDTH // 2,
-            178,
+            config.layout_y(178),
             fg=config.WHITE,
             hdr=config.GRAY,
         )

@@ -14,13 +14,13 @@ class FinalWinScene:
     def draw(self, screen: pygame.Surface, assets: AssetManager, state: dict[str, Any]) -> None:
         screen.fill((12, 40, 12))
         draw_score_with_flanking_logos(
-            screen, assets, state, y_center=88, score_color=config.ANGELS_GOLD
+            screen, assets, state, y_center=config.layout_y(88), score_color=config.ANGELS_GOLD
         )
 
         w = assets.font_title.render("HALOS WIN", True, config.WHITE)
-        screen.blit(w, w.get_rect(center=(config.SCREEN_WIDTH // 2, 148)))
+        screen.blit(w, w.get_rect(center=(config.SCREEN_WIDTH // 2, config.layout_y(148))))
 
-        tbl_y = 176
+        tbl_y = config.layout_y(176)
         h = draw_linescore_table_centered(
             screen,
             assets,

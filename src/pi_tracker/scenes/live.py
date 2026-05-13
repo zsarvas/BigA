@@ -72,7 +72,7 @@ def _blit_pb_line(
 
 
 class LiveScene:
-    """480×320 landscape scoreboard (portrait layout from notes, rearranged)."""
+    """Live scoreboard; vertical positions scale with ``config.SCREEN_HEIGHT``."""
 
     def draw(self, screen: pygame.Surface, assets: AssetManager, state: dict[str, Any]) -> None:
         screen.fill(config.BLACK)
@@ -106,18 +106,21 @@ class LiveScene:
         hr = int(state.get("home_runs", 0))
         score_s = f"{ar}  —  {hr}"
         score = assets.font_score.render(score_s, True, config.WHITE)
-        screen.blit(score, score.get_rect(center=(config.SCREEN_WIDTH // 2, 52)))
+        screen.blit(score, score.get_rect(center=(config.SCREEN_WIDTH // 2, config.layout_y(52))))
 
         inning_line = assets.font_ui.render(_fmt_inning(state), True, config.WHITE)
-        screen.blit(inning_line, inning_line.get_rect(center=(config.SCREEN_WIDTH // 2, 108)))
+        screen.blit(
+            inning_line, inning_line.get_rect(center=(config.SCREEN_WIDTH // 2, config.layout_y(108)))
+        )
 
         balls = int(state.get("balls", 0))
         strikes = int(state.get("strikes", 0))
         count = assets.font_ui.render(f"Count: {balls}-{strikes}", True, config.GRAY)
-        screen.blit(count, count.get_rect(center=(config.SCREEN_WIDTH // 2, 132)))
+        screen.blit(count, count.get_rect(center=(config.SCREEN_WIDTH // 2, config.layout_y(132))))
 
         runners = state.get("runners") or {}
-        rx, ry, rsize = config.SCREEN_WIDTH // 2, 228, 22
+        rsize = max(20, min(34, int(round(22 * config.SCREEN_HEIGHT / config.LAYOUT_REF_HEIGHT))))
+        rx, ry = config.SCREEN_WIDTH // 2, config.layout_y(228)
         draw_diamond(screen, runners, rx, ry, size=rsize)
 
         p = _truncate(str(state.get("pitcher_name", "—")), 34)
@@ -130,7 +133,7 @@ class LiveScene:
         last = str(state.get("last_play", "")).strip()
         if last:
             wrapped = textwrap.fill(last, width=52)
-            y = 148
+            y = config.layout_y(148)
             for part in wrapped.split("\n")[:2]:
                 surf = assets.font_small.render(part, True, config.GRAY)
                 screen.blit(surf, (12, y))

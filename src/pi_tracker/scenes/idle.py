@@ -71,18 +71,18 @@ class IdleScene:
 
         # Idle is Angels-first: hero logo is always LAA (never the away-game "home" club).
         logo = assets.logos.get(ANGELS_TEAM_ID)
-        logo_y = 48
+        logo_y = config.layout_y(48)
         if logo:
             r = logo.get_rect(center=(config.SCREEN_WIDTH // 2, logo_y))
             screen.blit(logo, r)
             logo_y = r.bottom + 6
         else:
-            logo_y = 24
+            logo_y = config.layout_y(24)
 
         title = assets.font_title.render("ANGELS", True, config.ANGELS_GOLD)
         screen.blit(title, title.get_rect(center=(config.SCREEN_WIDTH // 2, logo_y + 16)))
 
-        y = logo_y + 50
+        y = logo_y + config.layout_y(50)
         label = assets.font_small.render("NEXT GAME", True, config.ANGELS_GOLD)
         screen.blit(label, label.get_rect(center=(config.SCREEN_WIDTH // 2, y)))
         y += 22
