@@ -1,5 +1,5 @@
 """
-Pygame main loop: 480×320 landscape, scene state machine.
+Pygame main loop: 480×640 portrait, scene state machine.
 
 Dev: ``--demo`` / ``--demo-live`` = live scoreboard sample. ``--demo-final`` = final win screen (no network pollers in demo mode).
 On Linux (Pi), fbcon defaults apply before init; on macOS do not set SDL_VIDEODRIVER=fbcon

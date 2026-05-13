@@ -1,8 +1,8 @@
 """
 Display constants.
 
-Hardware notes (see BigA_project_notes.txt): SPI panel is 320×480 portrait.
-This app targets the same pixel count in landscape: 480×320.
+Hardware: Waveshare 2.8" panel at 480×640 (portrait). Layout Y positions in scenes
+that used the older 480×320 target should use ``layout_y`` so they scale with height.
 """
 
 import os
@@ -15,7 +15,15 @@ LOGOS_DIR = REPO_ROOT / "logos"
 ASSETS_DIR = Path(__file__).resolve().parent / "assets"
 
 SCREEN_WIDTH = 480
-SCREEN_HEIGHT = 320
+SCREEN_HEIGHT = 640
+
+# Original pygame layout was tuned for this height (480×320 landscape).
+LAYOUT_REF_HEIGHT = 320
+
+
+def layout_y(y_for_ref: int) -> int:
+    """Map a Y coordinate from the 480×320 reference layout onto the current screen height."""
+    return int(round(y_for_ref * SCREEN_HEIGHT / LAYOUT_REF_HEIGHT))
 
 FPS = 10
 
