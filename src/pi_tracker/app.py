@@ -118,6 +118,11 @@ def main() -> None:
     demo_final = "--demo-final" in sys.argv
     no_schedule = "--no-schedule" in sys.argv
     pygame.init()
+    # Pi + SDL_VIDEODRIVER=fbcon: some pygame/SDL2 builds hit
+    # "PyEval_SaveThread ... GIL is released" inside set_mode. Cycling the display
+    # subsystem after the generic init clears a bad thread/GIL state before set_mode.
+    pygame.display.quit()
+    pygame.display.init()
     pygame.mouse.set_visible(False)
     pygame.display.set_caption("BigA Pi Tracker")
     flags = 0
