@@ -1,8 +1,9 @@
 """
 Pygame main loop: 480×320 landscape, scene state machine.
 
-Dev: keys 1–4 switch scenes. On Linux (Pi), fbcon defaults apply before init; on macOS
-do not set SDL_VIDEODRIVER=fbcon (use plain ``python3 run_pi_ui.py`` or a desktop driver).
+Dev: ``--demo`` / ``--demo-live`` = live scoreboard sample. ``--demo-final`` = final win screen (no network pollers in demo mode).
+On Linux (Pi), fbcon defaults apply before init; on macOS do not set SDL_VIDEODRIVER=fbcon
+(use plain ``python3 run_pi_ui.py`` or a desktop driver).
 """
 
 from __future__ import annotations
@@ -22,6 +23,7 @@ import pygame
 from . import config
 from .assets import AssetManager
 from .idle_mpv import IdleMpvScheduler, discover_idle_videos, suspend_pygame_run_mpv_resume
+from .mlb_schedule import try_restore_final_scene_for_today
 from .state import SharedGameState
 from .scenes import FinalLossScene, FinalWinScene, IdleScene, LiveScene
 
@@ -38,6 +40,12 @@ def _demo_state() -> SharedGameState:
         home_name="Angels",
         away_runs=4,
         home_runs=3,
+        linescore_away_innings=["0", "2", "0", "1", "1", "0", "-", "-", "-"],
+        linescore_home_innings=["1", "0", "0", "0", "0", "2", "-", "-", "-"],
+        away_hits=9,
+        home_hits=7,
+        away_errors=0,
+        home_errors=1,
         inning=6,
         inning_half="bottom",
         outs=2,
@@ -63,6 +71,37 @@ def _demo_state() -> SharedGameState:
     return st
 
 
+def _demo_final_state() -> SharedGameState:
+    """Final win screen sample (same teams/score as live demo)."""
+    st = SharedGameState()
+    st.update(
+        scene="win",
+        away_team_id=137,
+        home_team_id=108,
+        away_abbr="SF",
+        home_abbr="LAA",
+        away_runs=4,
+        home_runs=3,
+        linescore_away_innings=["0", "2", "0", "1", "1", "0", "-", "-", "-"],
+        linescore_home_innings=["1", "0", "0", "0", "0", "2", "-", "-", "-"],
+        away_hits=9,
+        home_hits=7,
+        away_errors=0,
+        home_errors=1,
+        live_game_pk=999999,
+        next_opponent_team_id=133,
+        schedule_status="ok",
+        schedule_error="",
+        next_game_date_display="Wednesday, May 14, 2026",
+        next_game_time_display="7:07 PM PDT",
+        next_game_matchup="vs Athletics",
+        next_game_venue="Angel Stadium",
+        next_game_pk=999999,
+        idle_subtitle="Wednesday, May 14, 2026  ·  7:07 PM PDT",
+    )
+    return st
+
+
 def _apply_linux_framebuffer_env_defaults() -> None:
     """fbcon is Linux-only; macOS/Windows SDL builds raise 'fbcon not available'."""
     if not sys.platform.startswith("linux"):
@@ -75,9 +114,11 @@ def main() -> None:
     # Before pygame.init(): Pi framebuffer (setdefault — explicit shell env still wins).
     _apply_linux_framebuffer_env_defaults()
 
-    demo = "--demo" in sys.argv
+    demo_live = "--demo" in sys.argv or "--demo-live" in sys.argv
+    demo_final = "--demo-final" in sys.argv
     no_schedule = "--no-schedule" in sys.argv
     pygame.init()
+    pygame.mouse.set_visible(False)
     pygame.display.set_caption("BigA Pi Tracker")
     flags = 0
     if "--fullscreen" in sys.argv:
@@ -86,7 +127,15 @@ def main() -> None:
     screen = pygame.display.set_mode((config.SCREEN_WIDTH, config.SCREEN_HEIGHT), display_flags)
     clock = pygame.time.Clock()
 
-    state = _demo_state() if demo else SharedGameState()
+    state: SharedGameState
+    if demo_final:
+        state = _demo_final_state()
+    elif demo_live:
+        state = _demo_state()
+    else:
+        state = SharedGameState()
+        if not no_schedule:
+            try_restore_final_scene_for_today(state)
 
     team_ids = {
         int(state.snapshot().get("away_team_id", 0)),
@@ -109,6 +158,7 @@ def main() -> None:
     stop_game_day = threading.Event()
     schedule_thread: threading.Thread | None = None
     game_day_thread: threading.Thread | None = None
+    demo = demo_live or demo_final
     if not demo and not no_schedule:
         from .game_day_poller import start_game_day_poller
         from .schedule_poller import start_idle_schedule_poller

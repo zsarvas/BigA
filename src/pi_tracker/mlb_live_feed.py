@@ -81,6 +81,65 @@ def _pitcher_batter_team_ids(
     return pit, bat
 
 
+def _inning_runs_cell(value: Any) -> str:
+    if value is None or value == "":
+        return "-"
+    try:
+        return str(int(value))
+    except (TypeError, ValueError):
+        return "-"
+
+
+def linescore_grid_from_feed(feed: dict[str, Any]) -> dict[str, Any]:
+    """Innings 1–9 runs per side plus R/H/E hits & errors from live feed linescore."""
+    linescore = (feed.get("liveData") or {}).get("linescore") or {}
+    innings = linescore.get("innings") or []
+    by_num: dict[int, dict[str, Any]] = {}
+    for inn in innings:
+        if not isinstance(inn, dict):
+            continue
+        n = _safe_int(inn.get("num"))
+        if n is None or n < 1:
+            continue
+        by_num[n] = inn
+
+    away_cells: list[str] = []
+    home_cells: list[str] = []
+    for col in range(1, 10):
+        inn = by_num.get(col)
+        if inn is None:
+            away_cells.append("-")
+            home_cells.append("-")
+            continue
+        aside = inn.get("away") or {}
+        hside = inn.get("home") or {}
+        away_cells.append(_inning_runs_cell(aside.get("runs")))
+        home_cells.append(_inning_runs_cell(hside.get("runs")))
+
+    tr = linescore.get("teams") or {}
+    at = tr.get("away") or {}
+    ht = tr.get("home") or {}
+    return {
+        "linescore_away_innings": away_cells,
+        "linescore_home_innings": home_cells,
+        "away_hits": int(at.get("hits", 0) or 0),
+        "home_hits": int(ht.get("hits", 0) or 0),
+        "away_errors": int(at.get("errors", 0) or 0),
+        "home_errors": int(ht.get("errors", 0) or 0),
+    }
+
+
+def merge_linescore_patch_for_pk(game_pk: int) -> dict[str, Any]:
+    """Fetch final feed and return linescore patch; empty dict if unavailable or not final."""
+    try:
+        feed = fetch_live_feed_v11(game_pk)
+        if not game_is_final(feed):
+            return {}
+        return linescore_grid_from_feed(feed)
+    except Exception:
+        return {}
+
+
 def live_feed_to_state_patch(feed: dict[str, Any]) -> dict[str, Any]:
     live_data = feed.get("liveData") or {}
     game_data = feed.get("gameData") or {}
@@ -175,6 +234,7 @@ def live_feed_to_state_patch(feed: dict[str, Any]) -> dict[str, Any]:
         "pitcher_team_id": pit_tid,
         "batter_team_id": bat_tid,
         "last_play": last_play,
+        **linescore_grid_from_feed(feed),
     }
     if pk is not None:
         patch["live_game_pk"] = int(pk)
