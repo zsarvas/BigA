@@ -31,7 +31,6 @@ import pygame
 
 from . import config
 from .assets import AssetManager
-from .idle_mpv import IdleMpvScheduler, discover_idle_videos, suspend_pygame_run_mpv_resume
 from .mlb_schedule import try_restore_final_scene_for_today
 from .state import SharedGameState
 from .scenes import FinalLossScene, FinalWinScene, IdleScene, LiveScene
@@ -278,26 +277,7 @@ def main() -> None:
         schedule_thread = start_idle_schedule_poller(state, stop_schedule)
         game_day_thread = start_game_day_poller(state, stop_game_day)
 
-    idle_video_paths: list[Path] = []
-    if "--no-idle-videos" not in sys.argv:
-        idle_video_paths = discover_idle_videos()
-    idle_debug = "--idle-video-debug" in sys.argv
-    idle_mpv = IdleMpvScheduler(idle_video_paths, debug_interval_sec=10.0 if idle_debug else None)
     debug_hud = _debug_hud_enabled()
-
-    def play_idle_clip(path: Path) -> None:
-        nonlocal screen
-        screen = suspend_pygame_run_mpv_resume(path, display_flags)
-        s = state.snapshot()
-        tids = {
-            108,
-            int(s.get("away_team_id") or 0),
-            int(s.get("home_team_id") or 0),
-            int(s.get("next_opponent_team_id") or 0),
-        }
-        tids.discard(0)
-        assets.load(tids)
-        pygame.display.set_caption("BigA Pi Tracker")
 
     last_team_key: tuple[int, int, int] | None = None
     running = True
@@ -344,8 +324,6 @@ def main() -> None:
                 screen, assets, frame_i=frame_i, scene_key=scene_key, loop_start=loop_start
             )
         pygame.display.flip()
-
-        idle_mpv.tick(scene_key, play_idle_clip)
 
         clock.tick(config.FPS)
         frame_i += 1

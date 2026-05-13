@@ -392,10 +392,11 @@ Run from repo root (after pip install -r requirements.txt):
 
   python3 run_pi_ui.py              # idle scene + MLB next-game poll (immediate + every 20 min)
   python3 run_pi_ui.py --no-schedule # no network (offline / CI)
-  python3 run_pi_ui.py --no-idle-videos  # no random mpv clips in assets/
-  python3 run_pi_ui.py --idle-video-debug # idle mp4 every 10s (mpv layout test)
   python3 run_pi_ui.py --demo       # starts on LIVE with sample Giants @ Angels
   python3 run_pi_ui.py --fullscreen # Pi / kiosk style
+
+(Fullscreen idle mpv clips were removed from the app loop; see git history / stub
+``idle_mpv.py`` if you restore them.)
 
 Or:  cd src && PYTHONPATH=. python3 -m pi_tracker --demo
 
@@ -412,7 +413,7 @@ Layout under src/pi_tracker/:
   schedule_poller.py background thread: fetch on startup, then every 20 minutes
   game_day_poller.py  idle: today's schedule every 5s → auto scene live when game
                       is active; live: MLB live feed every 2s → scene win/loss when final
-  idle_mpv.py        random-interval fullscreen mpv clips while scene is idle
+  idle_mpv.py        stub only (fullscreen mpv between scenes removed for Pi stability)
   embedded_shim.py   Pi: stub fc-list before pygame import to avoid fontconfig hangs
   drawing/diamond.py runner-on-base diamond
   scenes/            idle, live, final_win, final_loss
@@ -420,14 +421,8 @@ Layout under src/pi_tracker/:
 Idle screen reads schedule_* and next_game_* fields from SharedGameState (poller
 writes, pygame reads snapshots).
 
-Idle fullscreen video (optional): put one or more *.mp4 files in
-src/pi_tracker/assets/. While scene is idle, after a random delay (default
-300–1200 s; override with env BIGA_IDLE_VID_MIN / BIGA_IDLE_VID_MAX) the app runs
-mpv fullscreen: --vo=drm on Linux (set BIGA_MPV_VO to override), --vo=gpu on
-macOS for local tests. Pygame quits the display before mpv, then reopens the
-window and reloads logos/fonts. Not embedded video—mpv owns the display for the
-clip. Disable: python run_pi_ui.py --no-idle-videos. Debug cadence (play every
-10s while on idle): python run_pi_ui.py --idle-video-debug
+Fullscreen idle mpv between idle/win/loss scenes was **removed** (Pi fbcon / SDL).
+The stub ``idle_mpv.py`` remains as a pointer to git history if you reintroduce clips.
 
 Keep *.mp4 out of git (see repo .gitignore): binaries bloat history/clones and may
 raise licensing issues; rsync or copy them onto the Pi beside the repo.
