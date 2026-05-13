@@ -2,21 +2,30 @@
 Pygame main loop: 480×640 portrait, scene state machine.
 
 Dev: ``--demo`` / ``--demo-live`` = live scoreboard sample. ``--demo-final`` = final win screen (no network pollers in demo mode).
-On Linux (Pi), fbcon defaults apply before init; on macOS do not set SDL_VIDEODRIVER=fbcon
-(use plain ``python3 run_pi_ui.py`` or a desktop driver).
+``--debug-hud`` or ``BIGA_DEBUG_HUD=1`` draws a small updating clock + frame counter (confirms the main loop is alive).
+On Linux Pi **from a text VT** (no X11), ``bootstrap_sdl.configure_sdl()`` runs before pygame
+imports: dummy SDL audio on the console to avoid mixer/ALSA threading quirks. Video is not
+forced (SPI panels often need ``fbcon``). For DRM panels (HDMI / DSI), set ``BIGA_SDL_VIDEO=kmsdrm``.
+``SDL_VIDEODRIVER=fbcon`` can still hit pygame/SDL GIL bugs on some builds (pygame#3687).
 """
 
 from __future__ import annotations
 
+import datetime
 import os
 import sys
 import threading
+import time
 from pathlib import Path
 
 from .embedded_shim import install_fc_list_stub_if_needed
 
 install_fc_list_stub_if_needed()
 os.environ["PYGAME_HIDE_SUPPORT_PROMPT"] = "1"
+
+from .bootstrap_sdl import configure_sdl
+
+configure_sdl()
 
 import pygame
 
@@ -26,6 +35,34 @@ from .idle_mpv import IdleMpvScheduler, discover_idle_videos, suspend_pygame_run
 from .mlb_schedule import try_restore_final_scene_for_today
 from .state import SharedGameState
 from .scenes import FinalLossScene, FinalWinScene, IdleScene, LiveScene
+
+
+def _debug_hud_enabled() -> bool:
+    if "--debug-hud" in sys.argv:
+        return True
+    return os.environ.get("BIGA_DEBUG_HUD", "").strip().lower() in ("1", "true", "yes")
+
+
+def _draw_debug_hud(
+    screen: pygame.Surface,
+    assets: AssetManager,
+    *,
+    frame_i: int,
+    scene_key: str,
+    loop_start: float,
+) -> None:
+    """Top-right overlay: wall time (ms), frame index, uptime — updates every tick if the loop runs."""
+    now = datetime.datetime.now().strftime("%H:%M:%S.%f")[:-3]
+    up = time.monotonic() - loop_start
+    line_a = f"{now}  f={frame_i}  +{up:.1f}s"
+    line_b = f"scene={scene_key}"
+    s_a = assets.font_small.render(line_a, True, config.GRAY)
+    s_b = assets.font_small.render(line_b, True, config.GRAY)
+    pad = 4
+    y = pad
+    screen.blit(s_a, (config.SCREEN_WIDTH - pad - s_a.get_width(), y))
+    y += s_a.get_height() + 1
+    screen.blit(s_b, (config.SCREEN_WIDTH - pad - s_b.get_width(), y))
 
 
 def _demo_state() -> SharedGameState:
@@ -102,27 +139,13 @@ def _demo_final_state() -> SharedGameState:
     return st
 
 
-def _apply_linux_framebuffer_env_defaults() -> None:
-    """fbcon is Linux-only; macOS/Windows SDL builds raise 'fbcon not available'."""
-    if not sys.platform.startswith("linux"):
-        return
-    os.environ.setdefault("SDL_VIDEODRIVER", "fbcon")
-    os.environ.setdefault("SDL_FBDEV", "/dev/fb0")
-
-
 def main() -> None:
-    # Before pygame.init(): Pi framebuffer (setdefault — explicit shell env still wins).
-    _apply_linux_framebuffer_env_defaults()
-
+    # SDL video/audio driver env is applied in bootstrap_sdl.configure_sdl() before pygame import.
     demo_live = "--demo" in sys.argv or "--demo-live" in sys.argv
     demo_final = "--demo-final" in sys.argv
     no_schedule = "--no-schedule" in sys.argv
-    pygame.init()
-    # Pi + SDL_VIDEODRIVER=fbcon: some pygame/SDL2 builds hit
-    # "PyEval_SaveThread ... GIL is released" inside set_mode. Cycling the display
-    # subsystem after the generic init clears a bad thread/GIL state before set_mode.
-    pygame.display.quit()
     pygame.display.init()
+    pygame.font.init()
     pygame.mouse.set_visible(False)
     pygame.display.set_caption("BigA Pi Tracker")
     flags = 0
@@ -176,6 +199,7 @@ def main() -> None:
         idle_video_paths = discover_idle_videos()
     idle_debug = "--idle-video-debug" in sys.argv
     idle_mpv = IdleMpvScheduler(idle_video_paths, debug_interval_sec=10.0 if idle_debug else None)
+    debug_hud = _debug_hud_enabled()
 
     def play_idle_clip(path: Path) -> None:
         nonlocal screen
@@ -193,6 +217,8 @@ def main() -> None:
 
     last_team_key: tuple[int, int, int] | None = None
     running = True
+    loop_start = time.monotonic()
+    frame_i = 0
     while running:
         for event in pygame.event.get():
             if event.type == pygame.QUIT:
@@ -229,11 +255,16 @@ def main() -> None:
         scene_key = str(snap.get("scene", "idle"))
         scene = scenes.get(scene_key, scenes["idle"])
         scene.draw(screen, assets, snap)
+        if debug_hud:
+            _draw_debug_hud(
+                screen, assets, frame_i=frame_i, scene_key=scene_key, loop_start=loop_start
+            )
         pygame.display.flip()
 
         idle_mpv.tick(scene_key, play_idle_clip)
 
         clock.tick(config.FPS)
+        frame_i += 1
 
     stop_schedule.set()
     stop_game_day.set()

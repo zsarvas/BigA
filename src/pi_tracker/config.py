@@ -3,6 +3,10 @@ Display constants.
 
 Hardware: Waveshare 2.8" panel at 480×640 (portrait). Layout Y positions in scenes
 that used the older 480×320 target should use ``layout_y`` so they scale with height.
+
+Override for testing (e.g. if a given ``set_mode`` height triggers SDL/fb issues on Bullseye)::
+
+    BIGA_SCREEN_WIDTH=480 BIGA_SCREEN_HEIGHT=320 python3 run_pi_ui.py --demo
 """
 
 import os
@@ -14,8 +18,20 @@ REPO_ROOT = Path(__file__).resolve().parent.parent.parent
 LOGOS_DIR = REPO_ROOT / "logos"
 ASSETS_DIR = Path(__file__).resolve().parent / "assets"
 
-SCREEN_WIDTH = 480
-SCREEN_HEIGHT = 640
+
+def _env_positive_int(name: str, default: int) -> int:
+    raw = os.environ.get(name, "").strip()
+    if not raw:
+        return default
+    try:
+        v = int(raw, 10)
+        return v if v > 0 else default
+    except ValueError:
+        return default
+
+
+SCREEN_WIDTH = _env_positive_int("BIGA_SCREEN_WIDTH", 480)
+SCREEN_HEIGHT = _env_positive_int("BIGA_SCREEN_HEIGHT", 640)
 
 # Original pygame layout was tuned for this height (480×320 landscape).
 LAYOUT_REF_HEIGHT = 320
