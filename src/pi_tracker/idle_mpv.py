@@ -79,14 +79,18 @@ def suspend_pygame_run_mpv_resume(
 
 class IdleMpvScheduler:
     """
-    While the scene stays on ``idle``, fire ``play`` after random wall intervals.
-    When leaving idle, the timer is not consumed; entering idle again picks a
-    fresh random delay from ``now``.
+    Fire ``play`` after random wall-clock intervals while the scene is one of:
+    ``idle``, ``win``, or ``loss`` (highlights between games / after final).
 
-    If ``debug_interval_sec`` is set (e.g. 10), min/max interval are both that
-    value so clips fire on a fixed cadence for local testing.
+    ``live`` does not run clips — the scoreboard stays up for the whole game.
+
+    When leaving those scenes (e.g. to ``live``), the timer is not consumed;
+    returning to an mpv-eligible scene picks behavior from ``_prev_scene``:
+    from ``live`` we schedule a fresh delay; moving among idle/win/loss keeps
+    the same pending fire time.
     """
 
+    _MPV_SCENES = frozenset({"idle", "win", "loss"})
     def __init__(self, paths: list[Path], debug_interval_sec: float | None = None) -> None:
         self.paths = list(paths)
         if debug_interval_sec is not None and debug_interval_sec > 0:
@@ -114,13 +118,13 @@ class IdleMpvScheduler:
             return
 
         now = time.monotonic()
-        if scene_key != "idle":
+        if scene_key not in self._MPV_SCENES:
             self._prev_scene = scene_key
             return
 
-        if self._prev_scene != "idle":
+        if self._prev_scene not in self._MPV_SCENES:
             self._roll_next(now)
-        self._prev_scene = "idle"
+        self._prev_scene = scene_key
 
         if self._next_at is not None and now >= self._next_at:
             clip = random.choice(self.paths)

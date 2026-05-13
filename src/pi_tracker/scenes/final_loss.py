@@ -6,15 +6,26 @@ import pygame
 
 from .. import config
 from ..assets import AssetManager
+from .final_score_row import draw_score_with_flanking_logos
+from .linescore_table import draw_linescore_table_centered
 
 
 class FinalLossScene:
     def draw(self, screen: pygame.Surface, assets: AssetManager, state: dict[str, Any]) -> None:
         screen.fill((18, 18, 22))
-        ar = int(state.get("away_runs", 0))
-        hr = int(state.get("home_runs", 0))
-        line = assets.font_score.render(f"{ar}  —  {hr}", True, config.GRAY)
-        screen.blit(line, line.get_rect(center=(config.SCREEN_WIDTH // 2, 130)))
+        draw_score_with_flanking_logos(
+            screen, assets, state, y_center=92, score_color=config.GRAY
+        )
 
         w = assets.font_title.render("FINAL", True, config.WHITE)
-        screen.blit(w, w.get_rect(center=(config.SCREEN_WIDTH // 2, 200)))
+        screen.blit(w, w.get_rect(center=(config.SCREEN_WIDTH // 2, 152)))
+
+        draw_linescore_table_centered(
+            screen,
+            assets,
+            state,
+            config.SCREEN_WIDTH // 2,
+            178,
+            fg=config.WHITE,
+            hdr=config.GRAY,
+        )

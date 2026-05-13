@@ -126,6 +126,3 @@ class IdleScene:
                 y = _blit_matchup_row(screen, assets, matchup, opp_id, y + 10)
             if venue:
                 y = _blit_wrapped_center(screen, assets.font_small, venue, y, config.GRAY, 48)
-
-        hint = assets.font_small.render("1–4 scenes · Esc quit", True, config.GRAY)
-        screen.blit(hint, hint.get_rect(center=(config.SCREEN_WIDTH // 2, config.SCREEN_HEIGHT - 14)))

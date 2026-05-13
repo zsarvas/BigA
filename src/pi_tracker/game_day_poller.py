@@ -10,8 +10,10 @@ from .mlb_http import fetch_live_feed_v11
 from .mlb_live_feed import angels_won, game_is_final, live_feed_to_state_patch
 from .mlb_schedule import (
     fetch_angels_schedule_for_date,
+    find_todays_final_angels_game,
     find_todays_scoreboard_angels_game,
     live_transition_from_schedule_game,
+    patch_from_final_schedule_game,
 )
 from .state import SharedGameState
 
@@ -35,6 +37,16 @@ def game_day_loop(state: SharedGameState, stop: threading.Event) -> None:
                 active = find_todays_scoreboard_angels_game(sched)
                 if active:
                     state.update(live_transition_from_schedule_game(active))
+                    continue
+                final_g = find_todays_final_angels_game(sched)
+                if final_g:
+                    patch = patch_from_final_schedule_game(final_g)
+                    pk = patch.get("live_game_pk")
+                    if pk:
+                        from .mlb_live_feed import merge_linescore_patch_for_pk
+
+                        patch.update(merge_linescore_patch_for_pk(int(pk)))
+                    state.update(patch)
                     continue
             elif scene == "live":
                 wait = LIVE_POLL_SEC

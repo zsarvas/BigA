@@ -5,7 +5,7 @@ from __future__ import annotations
 from datetime import date, datetime, timedelta, timezone
 from typing import Any
 
-from .mlb_http import ANGELS_TEAM_ID, LIVE_DETAILED, api_get as _get
+from .mlb_http import ANGELS_TEAM_ID, FINAL_DETAILED, LIVE_DETAILED, api_get as _get
 
 # Skip when picking the next game to advertise on idle
 _SKIP_DETAILED = {
@@ -82,6 +82,38 @@ def find_todays_scoreboard_angels_game(
     return None
 
 
+def _schedule_game_is_final(game: dict[str, Any]) -> bool:
+    st = game.get("status") or {}
+    if st.get("abstractGameState") == "Final":
+        return True
+    return (st.get("detailedState") or "") in FINAL_DETAILED
+
+
+def find_todays_final_angels_game(
+    schedule_json: dict[str, Any],
+    angels_id: int = ANGELS_TEAM_ID,
+) -> dict[str, Any] | None:
+    """Latest (by first pitch) Angels game on this schedule date that is final."""
+    finals: list[tuple[datetime, dict[str, Any]]] = []
+    for g in _iter_games(schedule_json):
+        aid = g.get("teams", {}).get("away", {}).get("team", {}).get("id")
+        hid = g.get("teams", {}).get("home", {}).get("team", {}).get("id")
+        if aid != angels_id and hid != angels_id:
+            continue
+        if not _schedule_game_is_final(g):
+            continue
+        dt = _parse_game_datetime(g)
+        if dt is None:
+            continue
+        if dt.tzinfo is None:
+            dt = dt.replace(tzinfo=timezone.utc)
+        finals.append((dt, g))
+    if not finals:
+        return None
+    finals.sort(key=lambda x: x[0])
+    return finals[-1][1]
+
+
 def live_transition_from_schedule_game(game: dict[str, Any]) -> dict[str, Any]:
     teams = game.get("teams") or {}
     away = teams.get("away", {}).get("team", {})
@@ -108,6 +140,49 @@ def live_transition_from_schedule_game(game: dict[str, Any]) -> dict[str, Any]:
     if opp_id is not None:
         out["next_opponent_team_id"] = opp_id
     return out
+
+
+def angels_won_from_schedule_game(
+    game: dict[str, Any],
+    angels_id: int = ANGELS_TEAM_ID,
+) -> bool | None:
+    """True / False from schedule row scores; None if tie or Angels not in game."""
+    teams = game.get("teams") or {}
+    ta = teams.get("away") or {}
+    th = teams.get("home") or {}
+    away_team = ta.get("team") or {}
+    home_team = th.get("team") or {}
+    try:
+        aid = int(away_team.get("id") or 0)
+        hid = int(home_team.get("id") or 0)
+    except (TypeError, ValueError):
+        return None
+    ar = int(ta.get("score", 0) or 0)
+    hr = int(th.get("score", 0) or 0)
+    if ar == hr:
+        return None
+    if aid == angels_id:
+        return ar > hr
+    if hid == angels_id:
+        return hr > ar
+    return None
+
+
+def patch_from_final_schedule_game(game: dict[str, Any]) -> dict[str, Any]:
+    """Win/loss scene + runs/teams from a final schedule row."""
+    patch = live_transition_from_schedule_game(game)
+    ta = game.get("teams", {}).get("away", {})
+    th = game.get("teams", {}).get("home", {})
+    patch["away_runs"] = int(ta.get("score", 0) or 0)
+    patch["home_runs"] = int(th.get("score", 0) or 0)
+    won = angels_won_from_schedule_game(game)
+    if won is True:
+        patch["scene"] = "win"
+    elif won is False:
+        patch["scene"] = "loss"
+    else:
+        patch["scene"] = "loss"
+    return patch
 
 
 def _parse_game_datetime(game: dict[str, Any]) -> datetime | None:
@@ -250,3 +325,29 @@ def fetch_and_format_next_game(
     raw = fetch_angels_schedule_window(start=start, days=window_days, team_id=team_id)
     nxt = pick_next_angels_game(raw, angels_id=team_id)
     return format_next_game_for_ui(nxt, angels_id=team_id)
+
+
+def try_restore_final_scene_for_today(state: Any) -> None:
+    """
+    If state is idle and today's Angels game is already final, show win/loss (e.g. after reboot).
+    """
+    import logging
+
+    log = logging.getLogger(__name__)
+    try:
+        snap = state.snapshot()
+        if str(snap.get("scene", "idle")) != "idle":
+            return
+        sched = fetch_angels_schedule_for_date(date.today())
+        g = find_todays_final_angels_game(sched)
+        if g is None:
+            return
+        patch = patch_from_final_schedule_game(g)
+        pk = patch.get("live_game_pk")
+        if pk:
+            from .mlb_live_feed import merge_linescore_patch_for_pk
+
+            patch.update(merge_linescore_patch_for_pk(int(pk)))
+        state.update(patch)
+    except Exception as e:  # noqa: BLE001
+        log.warning("try_restore_final_scene_for_today: %s", e)
