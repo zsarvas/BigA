@@ -4,14 +4,18 @@ Fullscreen idle clips via mpv (subprocess).
 Pygame cannot embed ``--vo=drm`` output. The safe pattern is:
   pygame.display.quit() → mpv runs → pygame.display.init() + set_mode again.
 
-On Pi you may need pygame and mpv coordinated with your stack (fbcpy vs KMS);
-see project notes.
+On Pi with pygame on **fbcon** (SPI / classic framebuffer), ``--vo=drm`` usually targets
+a KMS connector (often HDMI), not the SPI buffer — black screen + tty flash is common.
+In that case we default mpv to ``gpu``; override with ``BIGA_MPV_VO=drm`` or ``fbdev``-style
+builds if your stack supports them. Extra mpv flags: ``BIGA_MPV_OPTS`` (shell-quoted list).
 """
 
 from __future__ import annotations
 
 import logging
+import os
 import random
+import shlex
 import shutil
 import subprocess
 import sys
@@ -33,19 +37,29 @@ def discover_idle_videos() -> list[Path]:
 def _default_mpv_vo() -> str:
     if config.IDLE_MPV_VO:
         return config.IDLE_MPV_VO
-    return "drm" if sys.platform.startswith("linux") else "gpu"
+    if not sys.platform.startswith("linux"):
+        return "gpu"
+    # fbcon + SPI: drm VO is usually the wrong surface; gpu often hits EGL/fbdev context.
+    if os.environ.get("SDL_VIDEODRIVER", "").strip().lower() == "fbcon":
+        return "gpu"
+    return "drm"
 
 
 def build_mpv_command(video: Path) -> list[str]:
     vo = _default_mpv_vo()
-    return [
+    cmd = [
         "mpv",
         "--fullscreen",
         f"--vo={vo}",
         "--no-osd-bar",
         "--really-quiet",
-        str(video),
+        "--no-terminal",
     ]
+    extra = os.environ.get("BIGA_MPV_OPTS", "").strip()
+    if extra:
+        cmd.extend(shlex.split(extra))
+    cmd.append(str(video))
+    return cmd
 
 
 def suspend_pygame_run_mpv_resume(
@@ -66,14 +80,29 @@ def suspend_pygame_run_mpv_resume(
     if shutil.which(cmd[0]) is None:
         log.warning("mpv not found on PATH; skipping %s", video.name)
         pygame.display.init()
-        return pygame.display.set_mode((width, height), display_flags)
+        screen = pygame.display.set_mode((width, height), display_flags)
+        pygame.mouse.set_visible(False)
+        return screen
 
     log.info("idle clip: %s", " ".join(cmd))
     try:
-        subprocess.run(cmd, check=False)
+        proc = subprocess.run(
+            cmd,
+            check=False,
+            stdin=subprocess.DEVNULL,
+            stdout=subprocess.DEVNULL,
+            stderr=subprocess.PIPE,
+        )
+        if proc.returncode != 0:
+            err = (proc.stderr or b"").decode("utf-8", errors="replace").strip()
+            if err:
+                log.warning("mpv exit %s: %s", proc.returncode, err[:800])
+            else:
+                log.warning("mpv exited with code %s", proc.returncode)
     finally:
         pygame.display.init()
         screen = pygame.display.set_mode((width, height), display_flags)
+        pygame.mouse.set_visible(False)
     return screen
 
 

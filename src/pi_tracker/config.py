@@ -56,5 +56,6 @@ LOGO_HEADER_SIZE = (72, 72)
 # Seconds between fullscreen highlight (mpv) on idle / win / loss. Not used during live.
 IDLE_HIGHLIGHT_INTERVAL_SEC = 600  # 10 minutes
 
-# mpv video output: drm on Pi KMS; gpu (or libmpv) for desktop dev.
+# mpv: BIGA_MPV_VO overrides auto (Linux + SDL fbcon → gpu; other Linux → drm; else gpu).
+# Optional: BIGA_MPV_OPTS="--drm-connector=HDMI-A-1" (space-separated, shell quoting rules).
 IDLE_MPV_VO = os.environ.get("BIGA_MPV_VO", "").strip()
