@@ -37,6 +37,60 @@ from .state import SharedGameState
 from .scenes import FinalLossScene, FinalWinScene, IdleScene, LiveScene
 
 
+def _linux_text_console() -> bool:
+    return sys.platform.startswith("linux") and not (
+        os.environ.get("DISPLAY") or os.environ.get("WAYLAND_DISPLAY")
+    )
+
+
+def _pygame_bootstrap_linux_console() -> None:
+    """Full SDL init; mixer is unused (mpv for video). Helps some fbcon/SDL builds."""
+    pygame.init()
+    try:
+        pygame.mixer.quit()
+    except pygame.error:
+        pass
+
+
+def _open_pygame_window(width: int, height: int, flags: int) -> pygame.Surface:
+    """
+    Headless Linux: ``pygame.init()`` before ``set_mode`` (fbcon often needs it).
+    If ``set_mode`` still fails with fbcon / not available, reset SDL once without
+    forced ``SDL_VIDEODRIVER=fbcon`` (SPI may still need fbcon — then install a pygame/SDL
+    build that includes fbcon, or use KMS/fbcp per panel docs).
+    """
+    if _linux_text_console():
+        _pygame_bootstrap_linux_console()
+    try:
+        return pygame.display.set_mode((width, height), flags)
+    except pygame.error as first:
+        if not _linux_text_console():
+            raise
+        err_l = str(first).lower()
+        if "fbcon" not in err_l and "not available" not in err_l:
+            raise
+        had_fbcon = os.environ.get("SDL_VIDEODRIVER", "").strip().lower() == "fbcon"
+        print(
+            f"BigA: pygame set_mode failed ({first!s}); retrying after SDL reset "
+            f"(had_fbcon={had_fbcon}).",
+            file=sys.stderr,
+            flush=True,
+        )
+        if had_fbcon:
+            os.environ.pop("SDL_VIDEODRIVER", None)
+            os.environ.pop("SDL_FBDEV", None)
+            os.environ.pop("FRAMEBUFFER", None)
+        try:
+            pygame.quit()
+        except Exception:
+            pass
+        _pygame_bootstrap_linux_console()
+        try:
+            return pygame.display.set_mode((width, height), flags)
+        except pygame.error as second:
+            raise second from first
+
+
 def _debug_hud_enabled() -> bool:
     if "--debug-hud" in sys.argv:
         return True
@@ -144,13 +198,11 @@ def main() -> None:
     demo_live = "--demo" in sys.argv or "--demo-live" in sys.argv
     demo_final = "--demo-final" in sys.argv
     no_schedule = "--no-schedule" in sys.argv
-    # Do not call pygame.display.init() before set_mode — some fbcon/SDL builds error with
-    # "fbcon not available" until set_mode() creates the window.
     flags = 0
     if "--fullscreen" in sys.argv:
         flags |= pygame.FULLSCREEN
     display_flags = flags
-    screen = pygame.display.set_mode((config.SCREEN_WIDTH, config.SCREEN_HEIGHT), display_flags)
+    screen = _open_pygame_window(config.SCREEN_WIDTH, config.SCREEN_HEIGHT, display_flags)
     pygame.display.set_caption("BigA Pi Tracker")
     pygame.mouse.set_visible(False)
     clock = pygame.time.Clock()

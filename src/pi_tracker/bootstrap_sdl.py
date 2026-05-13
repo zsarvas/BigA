@@ -40,3 +40,8 @@ def configure_sdl() -> None:
     elif mode == "fbcon":
         os.environ["SDL_VIDEODRIVER"] = "fbcon"
         os.environ.setdefault("SDL_FBDEV", "/dev/fb0")
+
+    # Some SDL/fbcon stacks look for FRAMEBUFFER as well as SDL_FBDEV.
+    if os.environ.get("SDL_VIDEODRIVER", "").strip().lower() == "fbcon":
+        fbdev = os.environ.get("SDL_FBDEV", "/dev/fb0")
+        os.environ.setdefault("FRAMEBUFFER", fbdev)
