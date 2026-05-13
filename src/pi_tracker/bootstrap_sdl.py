@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import os
 import sys
+import tempfile
 
 
 def configure_sdl() -> None:
@@ -24,11 +25,23 @@ def configure_sdl() -> None:
 
     If ``DISPLAY`` or ``WAYLAND_DISPLAY`` is set (desktop session), only generic
     ``setdefault`` calls apply and your environment wins.
+
+    Headless Linux also sets a private ``XDG_RUNTIME_DIR`` under ``/tmp`` when unset, so SDL
+    does not spam the log when probing session/Wayland paths on fbcon-only systems.
     """
     if not sys.platform.startswith("linux"):
         return
     if not (os.environ.get("DISPLAY") or os.environ.get("WAYLAND_DISPLAY")):
         os.environ.setdefault("SDL_AUDIODRIVER", "dummy")
+        # SDL 2 still probes session paths; avoids noisy "XDG_RUNTIME_DIR" errors on fbcon-only Pi.
+        if not os.environ.get("XDG_RUNTIME_DIR"):
+            rt = os.path.join(tempfile.gettempdir(), f"biga-xdg-{os.getuid()}")
+            try:
+                os.makedirs(rt, mode=0o700, exist_ok=True)
+            except OSError:
+                pass
+            else:
+                os.environ["XDG_RUNTIME_DIR"] = rt
 
     if os.environ.get("DISPLAY") or os.environ.get("WAYLAND_DISPLAY"):
         return

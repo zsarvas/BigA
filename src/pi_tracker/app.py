@@ -54,40 +54,72 @@ def _pygame_bootstrap_linux_console() -> None:
 
 def _open_pygame_window(width: int, height: int, flags: int) -> pygame.Surface:
     """
-    Headless Linux: ``pygame.init()`` before ``set_mode`` (fbcon often needs it).
-    If ``set_mode`` still fails with fbcon / not available, reset SDL once without
-    forced ``SDL_VIDEODRIVER=fbcon`` (SPI may still need fbcon — then install a pygame/SDL
-    build that includes fbcon, or use KMS/fbcp per panel docs).
+    Headless Linux: ``pygame.init()`` before ``set_mode``.
+
+    On fbcon failure we **do not** drop ``SDL_VIDEODRIVER=fbcon`` by default: SPI-only systems
+    then fall through to KMS/Wayland and fail with ``No available video device`` (no
+    ``/dev/dri``). We retry once with the same env after ``pygame.quit()``.
+
+    Optional: ``BIGA_SDL_FALLBACK_KMS=1`` — if ``/dev/dri/card0`` exists, try KMSDRM after
+    fbcon still fails (HDMI / DSI setups).
     """
     if _linux_text_console():
         _pygame_bootstrap_linux_console()
-    try:
+
+    def _set_mode() -> pygame.Surface:
         return pygame.display.set_mode((width, height), flags)
+
+    try:
+        return _set_mode()
     except pygame.error as first:
         if not _linux_text_console():
             raise
         err_l = str(first).lower()
         if "fbcon" not in err_l and "not available" not in err_l:
             raise
-        had_fbcon = os.environ.get("SDL_VIDEODRIVER", "").strip().lower() == "fbcon"
+
         print(
-            f"BigA: pygame set_mode failed ({first!s}); retrying after SDL reset "
-            f"(had_fbcon={had_fbcon}).",
+            f"BigA: set_mode failed ({first!s}); retrying same SDL video driver after pygame.quit().",
             file=sys.stderr,
             flush=True,
         )
-        if had_fbcon:
-            os.environ.pop("SDL_VIDEODRIVER", None)
-            os.environ.pop("SDL_FBDEV", None)
-            os.environ.pop("FRAMEBUFFER", None)
         try:
             pygame.quit()
         except Exception:
             pass
         _pygame_bootstrap_linux_console()
         try:
-            return pygame.display.set_mode((width, height), flags)
+            return _set_mode()
         except pygame.error as second:
+            want_kms = os.environ.get("BIGA_SDL_FALLBACK_KMS", "").strip().lower() in (
+                "1",
+                "true",
+                "yes",
+            )
+            dri = Path("/dev/dri/card0")
+            if want_kms and dri.exists():
+                print(
+                    "BigA: BIGA_SDL_FALLBACK_KMS=1 and /dev/dri/card0 present; trying KMSDRM.",
+                    file=sys.stderr,
+                    flush=True,
+                )
+                os.environ["SDL_VIDEODRIVER"] = "KMSDRM"
+                os.environ.pop("SDL_FBDEV", None)
+                os.environ.pop("FRAMEBUFFER", None)
+                try:
+                    pygame.quit()
+                except Exception:
+                    pass
+                _pygame_bootstrap_linux_console()
+                return _set_mode()
+
+            print(
+                "BigA: fbcon still unavailable. SPI/console: use pygame linked to SDL with fbcon "
+                "(e.g. distro python3-pygame), run from the framebuffer VT (e.g. login on tty2), "
+                "and ensure /dev/fb0 is readable. HDMI/DSI with DRI: BIGA_SDL_FALLBACK_KMS=1.",
+                file=sys.stderr,
+                flush=True,
+            )
             raise second from first
 
 
