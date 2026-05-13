@@ -28,8 +28,8 @@ def _env_positive_int(name: str, default: int) -> int:
         return default
 
 
-SCREEN_WIDTH = _env_positive_int("BIGA_SCREEN_WIDTH", 480)
-SCREEN_HEIGHT = _env_positive_int("BIGA_SCREEN_HEIGHT", 320)
+SCREEN_WIDTH = _env_positive_int("BIGA_SCREEN_WIDTH", 640)
+SCREEN_HEIGHT = _env_positive_int("BIGA_SCREEN_HEIGHT", 480)
 
 # Original pygame layout was tuned for this height (480×320 landscape).
 LAYOUT_REF_HEIGHT = 320
