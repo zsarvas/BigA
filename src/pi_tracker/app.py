@@ -1,5 +1,5 @@
 """
-Pygame main loop: 480×640 portrait, scene state machine.
+Pygame main loop: default 480×320 (set ``BIGA_SCREEN_HEIGHT=640`` for Waveshare portrait), scene state machine.
 
 Dev: ``--demo`` / ``--demo-live`` = live scoreboard sample. ``--demo-final`` = final win screen (no network pollers in demo mode).
 ``--debug-hud`` or ``BIGA_DEBUG_HUD=1`` draws a small updating clock + frame counter (confirms the main loop is alive).
