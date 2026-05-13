@@ -31,10 +31,8 @@ ANGELS_GOLD = (186, 147, 62)
 # Logo tile size for header row (landscape)
 LOGO_HEADER_SIZE = (72, 72)
 
-# Idle fullscreen clips: mpv plays between random intervals while scene is idle.
-# Override with env BIGA_IDLE_VID_MIN / BIGA_IDLE_VID_MAX (seconds).
-IDLE_VIDEO_MIN_INTERVAL_SEC = float(os.environ.get("BIGA_IDLE_VID_MIN", "300"))
-IDLE_VIDEO_MAX_INTERVAL_SEC = float(os.environ.get("BIGA_IDLE_VID_MAX", "1200"))
+# Seconds between fullscreen highlight (mpv) on idle / win / loss. Not used during live.
+IDLE_HIGHLIGHT_INTERVAL_SEC = 600  # 10 minutes
 
 # mpv video output: drm on Pi KMS; gpu (or libmpv) for desktop dev.
 IDLE_MPV_VO = os.environ.get("BIGA_MPV_VO", "").strip()

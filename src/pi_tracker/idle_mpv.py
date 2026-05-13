@@ -79,7 +79,8 @@ def suspend_pygame_run_mpv_resume(
 
 class IdleMpvScheduler:
     """
-    Fire ``play`` after random wall-clock intervals while the scene is one of:
+    Fire ``play`` every ``config.IDLE_HIGHLIGHT_INTERVAL_SEC`` wall seconds (fixed;
+    ``--idle-video-debug`` uses a shorter fixed interval) while the scene is one of:
     ``idle``, ``win``, or ``loss`` (highlights between games / after final).
 
     ``live`` does not run clips — the scoreboard stays up for the whole game.
@@ -91,15 +92,13 @@ class IdleMpvScheduler:
     """
 
     _MPV_SCENES = frozenset({"idle", "win", "loss"})
+
     def __init__(self, paths: list[Path], debug_interval_sec: float | None = None) -> None:
         self.paths = list(paths)
         if debug_interval_sec is not None and debug_interval_sec > 0:
-            self._lo = self._hi = float(debug_interval_sec)
+            self._interval_sec = float(debug_interval_sec)
         else:
-            lo = min(config.IDLE_VIDEO_MIN_INTERVAL_SEC, config.IDLE_VIDEO_MAX_INTERVAL_SEC)
-            hi = max(config.IDLE_VIDEO_MIN_INTERVAL_SEC, config.IDLE_VIDEO_MAX_INTERVAL_SEC)
-            self._lo = float(lo)
-            self._hi = float(hi)
+            self._interval_sec = float(config.IDLE_HIGHLIGHT_INTERVAL_SEC)
         self._next_at: float | None = None
         self._prev_scene: str | None = None
 
@@ -108,10 +107,10 @@ class IdleMpvScheduler:
         return bool(self.paths)
 
     def _roll_next(self, now: float) -> None:
-        if self._hi <= 0:
+        if self._interval_sec <= 0:
             self._next_at = None
             return
-        self._next_at = now + random.uniform(self._lo, self._hi)
+        self._next_at = now + self._interval_sec
 
     def tick(self, scene_key: str, play: Callable[[Path], None]) -> None:
         if not self.enabled:
