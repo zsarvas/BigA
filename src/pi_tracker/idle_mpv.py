@@ -1,13 +1,17 @@
 """
 Fullscreen idle clips via mpv (subprocess).
 
-Pygame cannot embed ``--vo=drm`` output. The safe pattern is:
-  pygame.display.quit() → mpv runs → pygame.display.init() + set_mode again.
+**Non-fbcon (KMS / desktop):** release pygame video, run mpv, then ``set_mode`` again::
 
-On Pi with pygame on **fbcon** (SPI / classic framebuffer), ``--vo=drm`` usually targets
-a KMS connector (often HDMI), not the SPI buffer — black screen + tty flash is common.
-In that case we default mpv to ``gpu``; override with ``BIGA_MPV_VO=drm`` or ``fbdev``-style
-builds if your stack supports them. Extra mpv flags: ``BIGA_MPV_OPTS`` (shell-quoted list).
+  pygame.display.quit() → mpv → pygame.display.init() + set_mode
+
+**fbcon (SPI / classic framebuffer):** do **not** call ``pygame.display.quit()`` — on Pi Zero
+and similar stacks, re-init often raises ``fbcon not available``. Keep the display open, run
+mpv on top (best-effort), then return ``pygame.display.get_surface()``.
+
+On Pi with pygame on **fbcon**, ``--vo=drm`` usually targets KMS (e.g. HDMI), not the SPI
+buffer; we default mpv to ``gpu`` when ``SDL_VIDEODRIVER=fbcon``. Override with
+``BIGA_MPV_VO=…``. Extra flags: ``BIGA_MPV_OPTS``.
 """
 
 from __future__ import annotations
@@ -28,6 +32,10 @@ import pygame
 from . import config
 
 log = logging.getLogger(__name__)
+
+
+def _sdl_fbcon() -> bool:
+    return os.environ.get("SDL_VIDEODRIVER", "").strip().lower() == "fbcon"
 
 
 def discover_idle_videos() -> list[Path]:
@@ -69,36 +77,62 @@ def suspend_pygame_run_mpv_resume(
     height: int = config.SCREEN_HEIGHT,
 ) -> pygame.Surface:
     """
-    Release the pygame display, run mpv until exit, then recreate the window.
-    Returns the new screen surface.
+    Run mpv fullscreen, then return the surface to draw on.
+
+    fbcon: never ``display.quit()`` — reclaiming fbcon often fails on Pi.
+    Other drivers: quit display, mpv, then ``init`` + ``set_mode`` again.
     """
-    pygame.display.quit()
-    if pygame.mixer.get_init():
-        pygame.mixer.quit()
-
     cmd = build_mpv_command(video)
-    if shutil.which(cmd[0]) is None:
-        log.warning("mpv not found on PATH; skipping %s", video.name)
-        pygame.display.init()
-        screen = pygame.display.set_mode((width, height), display_flags)
-        pygame.mouse.set_visible(False)
-        return screen
+    mpv_bin = shutil.which(cmd[0])
 
-    log.info("idle clip: %s", " ".join(cmd))
-    try:
-        proc = subprocess.run(
-            cmd,
-            check=False,
-            stdin=subprocess.DEVNULL,
-            stdout=subprocess.DEVNULL,
-            stderr=subprocess.PIPE,
-        )
+    def _log_mpv_result(proc: subprocess.CompletedProcess) -> None:
         if proc.returncode != 0:
             err = (proc.stderr or b"").decode("utf-8", errors="replace").strip()
             if err:
                 log.warning("mpv exit %s: %s", proc.returncode, err[:800])
             else:
                 log.warning("mpv exited with code %s", proc.returncode)
+
+    def _run_mpv() -> subprocess.CompletedProcess | None:
+        if mpv_bin is None:
+            return None
+        log.info("idle clip: %s", " ".join(cmd))
+        return subprocess.run(
+            cmd,
+            check=False,
+            stdin=subprocess.DEVNULL,
+            stdout=subprocess.DEVNULL,
+            stderr=subprocess.PIPE,
+        )
+
+    if _sdl_fbcon():
+        proc = _run_mpv()
+        if proc is not None:
+            _log_mpv_result(proc)
+        else:
+            log.warning("mpv not found on PATH; skipping %s", video.name)
+        pygame.mouse.set_visible(False)
+        surf = pygame.display.get_surface()
+        if surf is None:
+            log.error("get_surface() is None after idle clip; recreating window")
+            return pygame.display.set_mode((width, height), display_flags)
+        return surf
+
+    pygame.display.quit()
+    if pygame.mixer.get_init():
+        pygame.mixer.quit()
+
+    if mpv_bin is None:
+        log.warning("mpv not found on PATH; skipping %s", video.name)
+        pygame.display.init()
+        screen = pygame.display.set_mode((width, height), display_flags)
+        pygame.mouse.set_visible(False)
+        return screen
+
+    try:
+        proc = _run_mpv()
+        assert proc is not None
+        _log_mpv_result(proc)
     finally:
         pygame.display.init()
         screen = pygame.display.set_mode((width, height), display_flags)

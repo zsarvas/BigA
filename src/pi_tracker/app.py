@@ -144,15 +144,15 @@ def main() -> None:
     demo_live = "--demo" in sys.argv or "--demo-live" in sys.argv
     demo_final = "--demo-final" in sys.argv
     no_schedule = "--no-schedule" in sys.argv
-    pygame.display.init()
-    pygame.font.init()
-    pygame.mouse.set_visible(False)
-    pygame.display.set_caption("BigA Pi Tracker")
+    # Do not call pygame.display.init() before set_mode — some fbcon/SDL builds error with
+    # "fbcon not available" until set_mode() creates the window.
     flags = 0
     if "--fullscreen" in sys.argv:
         flags |= pygame.FULLSCREEN
     display_flags = flags
     screen = pygame.display.set_mode((config.SCREEN_WIDTH, config.SCREEN_HEIGHT), display_flags)
+    pygame.display.set_caption("BigA Pi Tracker")
+    pygame.mouse.set_visible(False)
     clock = pygame.time.Clock()
 
     state: SharedGameState
