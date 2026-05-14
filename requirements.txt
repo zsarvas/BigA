@@ -2,3 +2,5 @@
 # and needs SDL2 headers — use a 3.12 venv for local dev (see BigA_project_notes §15).
 requests
 pygame>=2.5.0
+# Rasterize logos/{id}.svg when {id}.png is absent (needs libcairo on some Linux images).
+cairosvg>=2.7.0

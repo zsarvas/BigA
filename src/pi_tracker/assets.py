@@ -2,9 +2,11 @@
 
 from __future__ import annotations
 
+import io
 import os
 import platform
 import sys
+import warnings
 from pathlib import Path
 
 import pygame
@@ -70,12 +72,58 @@ def _repo_font(size: int) -> pygame.font.Font:
     return pygame.font.Font(None, size)
 
 
+_SVG_DEP_WARNED = False
+
+
+def _raster_svg_to_surface(path: Path) -> pygame.Surface | None:
+    """Render ``path`` to a raster surface, or ``None`` if cairosvg is missing or conversion fails."""
+    global _SVG_DEP_WARNED
+    try:
+        import cairosvg
+    except ImportError:
+        if not _SVG_DEP_WARNED:
+            warnings.warn(
+                f'{path.name}: SVG logo present but package "cairosvg" is not installed; '
+                "`pip install cairosvg` (and libcairo where needed) or add a matching `.png`.",
+                stacklevel=1,
+            )
+            _SVG_DEP_WARNED = True
+        return None
+    buf = io.BytesIO()
+    try:
+        edge = max(config.LOGO_HEADER_SIZE) * 3
+        cairosvg.svg2png(bytestring=path.read_bytes(), write_to=buf, output_width=edge)
+    except Exception:
+        return None
+    buf.seek(0)
+    try:
+        return pygame.image.load(buf).convert_alpha()
+    except Exception:
+        return None
+
+
+def _letterbox_logo(img: pygame.Surface, dest: tuple[int, int]) -> pygame.Surface:
+    """Scale ``img`` to fit inside ``dest`` (keep aspect); center on transparent square."""
+    dw, dh = dest
+    iw, ih = img.get_size()
+    if iw <= 0 or ih <= 0:
+        return pygame.transform.smoothscale(img, dest)
+    scale = min(dw / iw, dh / ih)
+    nw, nh = max(1, int(round(iw * scale))), max(1, int(round(ih * scale)))
+    scaled = pygame.transform.smoothscale(img, (nw, nh))
+    out = pygame.Surface((dw, dh), pygame.SRCALPHA)
+    out.fill((0, 0, 0, 0))
+    out.blit(scaled, ((dw - nw) // 2, (dh - nh) // 2))
+    return out
+
+
 class AssetManager:
     def __init__(self) -> None:
         self.font_title: pygame.font.Font
         self.font_score: pygame.font.Font
         self.font_ui: pygame.font.Font
         self.font_small: pygame.font.Font
+        self.font_linescore: pygame.font.Font
         self.font_idle_clock: pygame.font.Font
         self.logos: dict[int, pygame.Surface] = {}
 
@@ -85,16 +133,21 @@ class AssetManager:
         self.font_score = _repo_font(44)
         self.font_ui = _repo_font(16)
         self.font_small = _repo_font(13)
+        self.font_linescore = _repo_font(14)
         self.font_idle_clock = _repo_font(28)
 
         self.logos.clear()
         for tid in team_ids:
-            path = config.LOGOS_DIR / f"{tid}.png"
-            if path.is_file():
-                img = pygame.image.load(str(path)).convert_alpha()
-                self.logos[tid] = pygame.transform.smoothscale(
-                    img, config.LOGO_HEADER_SIZE
-                )
+            logos_dir = config.LOGOS_DIR
+            png_path = logos_dir / f"{tid}.png"
+            svg_path = logos_dir / f"{tid}.svg"
+            img: pygame.Surface | None = None
+            if png_path.is_file():
+                img = pygame.image.load(str(png_path)).convert_alpha()
+            elif svg_path.is_file():
+                img = _raster_svg_to_surface(svg_path)
+            if img is not None:
+                self.logos[tid] = _letterbox_logo(img, config.LOGO_HEADER_SIZE)
             else:
                 surf = pygame.Surface(config.LOGO_HEADER_SIZE, pygame.SRCALPHA)
                 surf.fill((60, 60, 60, 255))

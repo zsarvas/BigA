@@ -1,10 +1,13 @@
 """
 Display constants.
 
-Default window size is **480×320** (original Pi layout). Waveshare 2.8" portrait is **480×640**;
-set ``BIGA_SCREEN_HEIGHT=640`` (and optionally ``BIGA_SCREEN_WIDTH=480``) for that panel.
+**Window size** is whatever you set with ``BIGA_SCREEN_WIDTH`` and ``BIGA_SCREEN_HEIGHT`` (defaults
+in this file are for local dev only). Change those env vars when the target panel resolution is
+final; no code edits are required for a new resolution.
 
-Scene Y positions use ``layout_y`` so they scale when height is not 320.
+**Vertical layout:** scene code uses small integers (tuned on a short landscape panel) and
+``layout_y()`` maps them onto the current height using ``LAYOUT_REF_HEIGHT`` — that reference is
+*not* the same as the default window height; it is only the baseline for proportional Y scaling.
 """
 
 import os
@@ -36,7 +39,7 @@ LAYOUT_REF_HEIGHT = 320
 
 
 def layout_y(y_for_ref: int) -> int:
-    """Map a Y coordinate from the 480×320 reference layout onto the current screen height."""
+    """Map a Y coordinate from the ``LAYOUT_REF_HEIGHT`` reference frame onto the current height."""
     return int(round(y_for_ref * SCREEN_HEIGHT / LAYOUT_REF_HEIGHT))
 
 FPS = 10

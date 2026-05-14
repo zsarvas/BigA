@@ -2,23 +2,35 @@
 
 from __future__ import annotations
 
+import os
 import threading
 from typing import Any
+
+
+def _env_tracked_home() -> tuple[int, str, str]:
+    try:
+        tid = int(os.environ.get("BIGA_TEAM_ID", "108"), 10)
+    except ValueError:
+        tid = 108
+    abbr = os.environ.get("BIGA_TEAM_ABBR", "LAA").strip() or "LAA"
+    name = os.environ.get("BIGA_TEAM_NAME", "Angels").strip() or "Angels"
+    return tid, abbr, name
 
 
 class SharedGameState:
     """Minimal dict-backed state with copy-on-read for the render thread."""
 
     def __init__(self) -> None:
+        home_id, home_abbr, home_name = _env_tracked_home()
         self._lock = threading.Lock()
         self._data: dict[str, Any] = {
             "scene": "idle",
             "away_team_id": 137,
-            "home_team_id": 108,
+            "home_team_id": home_id,
             "away_abbr": "SF",
-            "home_abbr": "LAA",
+            "home_abbr": home_abbr,
             "away_name": "Giants",
-            "home_name": "Angels",
+            "home_name": home_name,
             "away_runs": 0,
             "home_runs": 0,
             "linescore_away_innings": ["-"] * 9,

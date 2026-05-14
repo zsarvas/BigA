@@ -1,7 +1,10 @@
 """
 Pygame main loop: default 480×320 (set ``BIGA_SCREEN_HEIGHT=640`` for Waveshare portrait), scene state machine.
 
-Dev: ``--demo`` / ``--demo-live`` = live scoreboard sample. ``--demo-final`` = final win screen (no network pollers in demo mode).
+Dev: ``python run_pi_ui.py yankees --debug-hud`` — first non-flag arg is an MLB team slug (see
+``team_config``). Same as ``BIGA_TEAM_ID`` / ``BIGA_TEAM_NAME`` env if set before launch.
+
+``--demo`` / ``--demo-live`` = live scoreboard sample. ``--demo-final`` = final win screen (no network pollers in demo mode).
 ``--debug-hud`` or ``BIGA_DEBUG_HUD=1`` draws a small updating clock + frame counter (confirms the main loop is alive).
 On Linux Pi **from a text VT** (no X11), ``bootstrap_sdl.configure_sdl()`` runs before pygame
 imports: dummy SDL audio on the console to avoid mixer/ALSA threading quirks. Video is not
@@ -31,9 +34,32 @@ import pygame
 
 from . import config
 from .assets import AssetManager
+from .mlb_http import ANGELS_TEAM_ID as TRACKED_TEAM_ID
 from .mlb_schedule import try_restore_final_scene_for_today
 from .state import SharedGameState
+from .team_config import tracked_team_abbr, tracked_team_name
 from .scenes import FinalLossScene, FinalWinScene, IdleScene, LiveScene
+
+
+def _demo_opponent() -> tuple[int, str, str]:
+    """Sample away club: Giants unless the tracked team is SF, then Dodgers."""
+    if TRACKED_TEAM_ID == 137:
+        return 119, "LAD", "Dodgers"
+    return 137, "SF", "Giants"
+
+
+def _demo_pitcher_name(away_abbr: str) -> str:
+    if away_abbr == "SF":
+        return "Logan Webb"
+    if away_abbr == "LAD":
+        return "Clayton Kershaw"
+    return "Opponent pitcher"
+
+
+def _demo_batter_name() -> str:
+    if TRACKED_TEAM_ID == 108:
+        return "Mike Trout"
+    return f"{tracked_team_name()} batter"
 
 
 def _linux_text_console() -> bool:
@@ -151,15 +177,18 @@ def _draw_debug_hud(
 
 
 def _demo_state() -> SharedGameState:
+    aw_id, aw_abbr, aw_name = _demo_opponent()
+    hb, hn = tracked_team_abbr(), tracked_team_name()
+    tid = TRACKED_TEAM_ID
     st = SharedGameState()
     st.update(
         scene="live",
-        away_team_id=137,
-        home_team_id=108,
-        away_abbr="SF",
-        home_abbr="LAA",
-        away_name="Giants",
-        home_name="Angels",
+        away_team_id=aw_id,
+        home_team_id=tid,
+        away_abbr=aw_abbr,
+        home_abbr=hb,
+        away_name=aw_name,
+        home_name=hn,
         away_runs=4,
         home_runs=3,
         linescore_away_innings=["0", "2", "0", "1", "1", "0", "-", "-", "-"],
@@ -174,11 +203,11 @@ def _demo_state() -> SharedGameState:
         balls=2,
         strikes=1,
         runners={"first": True, "second": False, "third": True},
-        pitcher_name="Logan Webb",
-        batter_name="Mike Trout",
-        pitcher_team_id=137,
-        batter_team_id=108,
-        last_play="Trout doubles to left field; runner scores from first.",
+        pitcher_name=_demo_pitcher_name(aw_abbr),
+        batter_name=_demo_batter_name(),
+        pitcher_team_id=aw_id,
+        batter_team_id=tid,
+        last_play=f"{_demo_batter_name()} doubles to left field; runner scores from first.",
         schedule_status="ok",
         schedule_error="",
         next_game_date_display="Wednesday, May 14, 2026",
@@ -194,14 +223,17 @@ def _demo_state() -> SharedGameState:
 
 
 def _demo_final_state() -> SharedGameState:
-    """Final win screen sample (same teams/score as live demo)."""
+    """Final win screen sample (tracked team wins at home vs demo opponent)."""
+    aw_id, aw_abbr, _aw_name = _demo_opponent()
+    hb = tracked_team_abbr()
+    tid = TRACKED_TEAM_ID
     st = SharedGameState()
     st.update(
         scene="win",
-        away_team_id=137,
-        home_team_id=108,
-        away_abbr="SF",
-        home_abbr="LAA",
+        away_team_id=aw_id,
+        home_team_id=tid,
+        away_abbr=aw_abbr,
+        home_abbr=hb,
         away_runs=4,
         home_runs=3,
         linescore_away_innings=["0", "2", "0", "1", "1", "0", "-", "-", "-"],
@@ -252,7 +284,9 @@ def main() -> None:
         int(state.snapshot().get("away_team_id", 0)),
         int(state.snapshot().get("home_team_id", 0)),
         int(state.snapshot().get("next_opponent_team_id") or 0),
-        108,
+        int(state.snapshot().get("pitcher_team_id") or 0),
+        int(state.snapshot().get("batter_team_id") or 0),
+        TRACKED_TEAM_ID,
     }
     team_ids.discard(0)
     assets = AssetManager()
@@ -279,7 +313,7 @@ def main() -> None:
 
     debug_hud = _debug_hud_enabled()
 
-    last_team_key: tuple[int, int, int] | None = None
+    last_team_key: tuple[int, int, int, int, int] | None = None
     running = True
     loop_start = time.monotonic()
     frame_i = 0
@@ -309,10 +343,19 @@ def main() -> None:
             int(snap.get("away_team_id") or 0),
             int(snap.get("home_team_id") or 0),
             int(snap.get("next_opponent_team_id") or 0),
+            int(snap.get("pitcher_team_id") or 0),
+            int(snap.get("batter_team_id") or 0),
         )
         if reload_key != last_team_key:
             last_team_key = reload_key
-            team_ids = {108, reload_key[0], reload_key[1], reload_key[2]}
+            team_ids = {
+                TRACKED_TEAM_ID,
+                reload_key[0],
+                reload_key[1],
+                reload_key[2],
+                reload_key[3],
+                reload_key[4],
+            }
             team_ids.discard(0)
             assets.load(team_ids)
 
