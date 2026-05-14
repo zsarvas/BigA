@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import os
 from datetime import date, datetime, timedelta, timezone
 from typing import Any
 
@@ -56,13 +57,12 @@ def _iter_games(schedule_json: dict[str, Any]):
 
 
 def _schedule_game_is_scoreboard_active(game: dict[str, Any]) -> bool:
+    """True only when the game is actually in progress — not hours-ahead ``Pre-Game``."""
     st = game.get("status") or {}
     if st.get("abstractGameState") == "Live":
         return True
     detailed = st.get("detailedState") or ""
     if detailed in LIVE_DETAILED:
-        return True
-    if detailed in ("Warmup", "Pre-Game"):
         return True
     return False
 
@@ -208,7 +208,8 @@ def _opponent_line(game: dict[str, Any], angels_id: int = ANGELS_TEAM_ID) -> tup
         return f"@ {home_name}", home.get("abbreviation", "")
     if hid == angels_id:
         return f"vs {away_name}", away.get("abbreviation", "")
-    return "Angels", ""
+    fb_name = os.environ.get("BIGA_TEAM_NAME", "Team")
+    return fb_name, ""
 
 
 def opponent_team_id_for_next_game(game: dict[str, Any] | None, angels_id: int = ANGELS_TEAM_ID) -> int | None:

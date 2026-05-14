@@ -203,10 +203,18 @@ def live_feed_to_state_patch(feed: dict[str, Any]) -> dict[str, Any]:
     outs = int(linescore.get("outs", 0) or 0)
 
     last_play = ""
-    all_plays = plays.get("allPlays") or []
-    if all_plays:
-        last = all_plays[-1]
-        last_play = str((last.get("result") or {}).get("description") or "")
+    cur_desc = str((current.get("result") or {}).get("description") or "").strip()
+    if cur_desc:
+        last_play = cur_desc
+    else:
+        all_plays = plays.get("allPlays") or []
+        for p in reversed(all_plays):
+            if not isinstance(p, dict):
+                continue
+            d = str((p.get("result") or {}).get("description") or "").strip()
+            if d:
+                last_play = d
+                break
 
     pk = feed.get("gamePk")
     if pk is None:
@@ -233,9 +241,10 @@ def live_feed_to_state_patch(feed: dict[str, Any]) -> dict[str, Any]:
         "batter_name": batter,
         "pitcher_team_id": pit_tid,
         "batter_team_id": bat_tid,
-        "last_play": last_play,
         **linescore_grid_from_feed(feed),
     }
+    if last_play:
+        patch["last_play"] = last_play
     if pk is not None:
         patch["live_game_pk"] = int(pk)
     return patch

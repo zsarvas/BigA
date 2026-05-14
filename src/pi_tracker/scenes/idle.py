@@ -7,9 +7,10 @@ import pygame
 
 from .. import config
 from ..assets import AssetManager
+from ..mlb_http import ANGELS_TEAM_ID as TRACKED_TEAM_ID
+from ..team_config import tracked_team_abbr, tracked_team_name
 
-ANGELS_TEAM_ID = 108
-# Small logo beside "vs / @ …" on idle (hero logo is always Angels).
+# Small logo beside "vs / @ …" on idle (hero logo is the tracked franchise).
 IDLE_OPPONENT_LOGO_SIZE = (34, 34)
 MATCHUP_LOGO_GAP = 8
 
@@ -45,7 +46,7 @@ def _blit_matchup_row(
     """Single-line matchup with optional small opponent logo; return bottom y."""
     tex = assets.font_small.render(matchup, True, config.GRAY)
     sm: pygame.Surface | None = None
-    if opponent_team_id and opponent_team_id != ANGELS_TEAM_ID:
+    if opponent_team_id and opponent_team_id != TRACKED_TEAM_ID:
         base = assets.logos.get(opponent_team_id)
         if base is not None:
             sm = pygame.transform.smoothscale(base, IDLE_OPPONENT_LOGO_SIZE)
@@ -69,8 +70,8 @@ class IdleScene:
     def draw(self, screen: pygame.Surface, assets: AssetManager, state: dict[str, Any]) -> None:
         screen.fill(config.BLACK)
 
-        # Idle is Angels-first: hero logo is always LAA (never the away-game "home" club).
-        logo = assets.logos.get(ANGELS_TEAM_ID)
+        # Idle hero: tracked franchise logo + name (not the generic "home" club from state).
+        logo = assets.logos.get(TRACKED_TEAM_ID)
         logo_y = config.layout_y(48)
         if logo:
             r = logo.get_rect(center=(config.SCREEN_WIDTH // 2, logo_y))
@@ -79,7 +80,10 @@ class IdleScene:
         else:
             logo_y = config.layout_y(24)
 
-        title = assets.font_title.render("ANGELS", True, config.ANGELS_GOLD)
+        nm = tracked_team_name().upper()
+        if len(nm) > 14:
+            nm = tracked_team_abbr().upper()
+        title = assets.font_title.render(nm, True, config.ANGELS_GOLD)
         screen.blit(title, title.get_rect(center=(config.SCREEN_WIDTH // 2, logo_y + 16)))
 
         y = logo_y + config.layout_y(50)
