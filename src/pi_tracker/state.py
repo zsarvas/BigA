@@ -59,6 +59,8 @@ class SharedGameState:
             "next_game_pk": None,
             "live_game_pk": None,
             "next_opponent_team_id": None,
+            # Calendar day (local) when win/loss was shown; idle resumes after this date.
+            "final_display_date": "",
             "idle_subtitle": "Loading schedule…",
         }
 
