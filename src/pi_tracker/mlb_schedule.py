@@ -182,6 +182,7 @@ def patch_from_final_schedule_game(game: dict[str, Any]) -> dict[str, Any]:
         patch["scene"] = "loss"
     else:
         patch["scene"] = "loss"
+    patch["final_display_date"] = date.today().isoformat()
     return patch
 
 

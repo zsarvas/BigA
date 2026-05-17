@@ -18,21 +18,34 @@ def _poll_once(state: SharedGameState) -> None:
     state.update(patch)
 
 
+def refresh_idle_schedule(state: SharedGameState) -> None:
+    """Fetch next-game fields (idle scene only)."""
+    try:
+        _poll_once(state)
+    except Exception as e:  # noqa: BLE001
+        log.warning("schedule poll failed: %s", e)
+        state.update(
+            schedule_status="error",
+            schedule_error=str(e)[:120],
+            idle_subtitle="Could not load schedule.",
+            next_opponent_team_id=None,
+        )
+
+
 def idle_schedule_loop(state: SharedGameState, stop: threading.Event) -> None:
-    """Immediate fetch, then every POLL_INTERVAL_SEC until stop is set."""
+    """Refresh next-game info only while scene is idle (no calls during live / final)."""
+    refresh_idle_schedule(state)
     while not stop.is_set():
-        try:
-            _poll_once(state)
-        except Exception as e:  # noqa: BLE001 — show any network/API failure on idle
-            log.warning("schedule poll failed: %s", e)
-            state.update(
-                schedule_status="error",
-                schedule_error=str(e)[:120],
-                idle_subtitle="Could not load schedule.",
-                next_opponent_team_id=None,
-            )
-        if stop.wait(POLL_INTERVAL_SEC):
-            break
+        snap = state.snapshot()
+        if str(snap.get("scene", "idle")) == "idle":
+            if stop.wait(POLL_INTERVAL_SEC):
+                break
+            if stop.is_set():
+                break
+            refresh_idle_schedule(state)
+        else:
+            if stop.wait(60):
+                break
 
 
 def start_idle_schedule_poller(state: SharedGameState, stop: threading.Event) -> threading.Thread:
