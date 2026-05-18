@@ -20,6 +20,7 @@ print("=" * 50)
 print("\n[1/7] Installing system packages...")
 run("sudo apt update -q")
 run("sudo apt install -y "
+    "python3-pip "
     "python3-pygame "
     "fonts-dejavu-core "
     "libsdl2-dev "
