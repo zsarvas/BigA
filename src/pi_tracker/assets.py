@@ -129,12 +129,12 @@ class AssetManager:
 
     def load(self, team_ids: set[int]) -> None:
         pygame.font.init()
-        self.font_title = _repo_font(22)
-        self.font_score = _repo_font(44)
-        self.font_ui = _repo_font(16)
-        self.font_small = _repo_font(13)
-        self.font_linescore = _repo_font(14)
-        self.font_idle_clock = _repo_font(28)
+        self.font_title = _repo_font(config.layout_size(20))
+        self.font_score = _repo_font(config.layout_size(38))
+        self.font_ui = _repo_font(config.layout_size(14))
+        self.font_small = _repo_font(config.layout_size(11))
+        self.font_linescore = _repo_font(config.layout_size(11))
+        self.font_idle_clock = _repo_font(config.layout_size(22))
 
         self.logos.clear()
         for tid in team_ids:

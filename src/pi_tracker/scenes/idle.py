@@ -11,7 +11,7 @@ from ..mlb_http import ANGELS_TEAM_ID as TRACKED_TEAM_ID
 from ..team_config import tracked_team_abbr, tracked_team_name
 
 # Small logo beside "vs / @ …" on idle (hero logo is the tracked franchise).
-IDLE_OPPONENT_LOGO_SIZE = (34, 34)
+IDLE_OPPONENT_LOGO_SIZE = (config.layout_size(28), config.layout_size(28))
 MATCHUP_LOGO_GAP = 8
 
 
@@ -72,7 +72,7 @@ class IdleScene:
 
         # Idle hero: tracked franchise logo + name (not the generic "home" club from state).
         logo = assets.logos.get(TRACKED_TEAM_ID)
-        logo_y = config.layout_y(48)
+        logo_y = config.layout_y(36)
         if logo:
             r = logo.get_rect(center=(config.SCREEN_WIDTH // 2, logo_y))
             screen.blit(logo, r)
@@ -86,10 +86,10 @@ class IdleScene:
         title = assets.font_title.render(nm, True, config.ANGELS_GOLD)
         screen.blit(title, title.get_rect(center=(config.SCREEN_WIDTH // 2, logo_y + 16)))
 
-        y = logo_y + config.layout_y(50)
+        y = logo_y + config.layout_y(42)
         label = assets.font_small.render("NEXT GAME", True, config.ANGELS_GOLD)
         screen.blit(label, label.get_rect(center=(config.SCREEN_WIDTH // 2, y)))
-        y += 22
+        y += config.layout_y(18)
 
         status = str(state.get("schedule_status", "loading"))
 
@@ -124,8 +124,8 @@ class IdleScene:
                 y = _blit_wrapped_center(screen, assets.font_ui, date_txt, y, config.WHITE, 40)
             if time_txt:
                 t_surf = assets.font_idle_clock.render(time_txt, True, config.WHITE)
-                screen.blit(t_surf, t_surf.get_rect(center=(config.SCREEN_WIDTH // 2, y + 18)))
-                y += 40
+                screen.blit(t_surf, t_surf.get_rect(center=(config.SCREEN_WIDTH // 2, y + 14)))
+                y += config.layout_y(32)
             if matchup:
                 y = _blit_matchup_row(screen, assets, matchup, opp_id, y + 10)
             if venue:

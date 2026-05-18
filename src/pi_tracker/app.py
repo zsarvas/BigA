@@ -1,5 +1,6 @@
 """
-Pygame main loop: default 480×320 (set ``BIGA_SCREEN_HEIGHT=640`` for Waveshare portrait), scene state machine.
+Pygame main loop: default **480×320** landscape (``BIGA_SCREEN_WIDTH`` / ``BIGA_SCREEN_HEIGHT``), scene state machine.
+Win scene drives GPIO BCM 19 HIGH (``BIGA_WIN_LED_GPIO`` to override).
 
 Dev: ``python run_pi_ui.py yankees --debug-hud`` — first non-flag arg is an MLB team slug (see
 ``team_config``). Same as ``BIGA_TEAM_ID`` / ``BIGA_TEAM_NAME`` env if set before launch.
@@ -38,6 +39,7 @@ from .mlb_http import ANGELS_TEAM_ID as TRACKED_TEAM_ID
 from .mlb_schedule import try_restore_final_scene_for_today
 from .state import SharedGameState
 from .team_config import tracked_team_abbr, tracked_team_name
+from .gpio_leds import cleanup_gpio, init_gpio, set_win_led
 from .scenes import FinalLossScene, FinalWinScene, IdleScene, LiveScene
 
 
@@ -313,63 +315,72 @@ def main() -> None:
 
     debug_hud = _debug_hud_enabled()
 
+    init_gpio()
     last_team_key: tuple[int, int, int, int, int] | None = None
+    last_scene_key: str | None = None
     running = True
     loop_start = time.monotonic()
     frame_i = 0
-    while running:
-        for event in pygame.event.get():
-            if event.type == pygame.QUIT:
-                running = False
-            elif event.type == pygame.KEYDOWN:
-                if event.key == pygame.K_ESCAPE:
+    try:
+        while running:
+            for event in pygame.event.get():
+                if event.type == pygame.QUIT:
                     running = False
-                elif event.key == pygame.K_1:
-                    state.update(scene="idle")
-                elif event.key == pygame.K_2:
-                    sn = state.snapshot()
-                    pk = sn.get("live_game_pk") or sn.get("next_game_pk")
-                    p2: dict = {"scene": "live"}
-                    if pk is not None:
-                        p2["live_game_pk"] = pk
-                    state.update(p2)
-                elif event.key == pygame.K_3:
-                    state.update(scene="win")
-                elif event.key == pygame.K_4:
-                    state.update(scene="loss")
+                elif event.type == pygame.KEYDOWN:
+                    if event.key == pygame.K_ESCAPE:
+                        running = False
+                    elif event.key == pygame.K_1:
+                        state.update(scene="idle")
+                    elif event.key == pygame.K_2:
+                        sn = state.snapshot()
+                        pk = sn.get("live_game_pk") or sn.get("next_game_pk")
+                        p2: dict = {"scene": "live"}
+                        if pk is not None:
+                            p2["live_game_pk"] = pk
+                        state.update(p2)
+                    elif event.key == pygame.K_3:
+                        state.update(scene="win")
+                    elif event.key == pygame.K_4:
+                        state.update(scene="loss")
 
-        snap = state.snapshot()
-        reload_key = (
-            int(snap.get("away_team_id") or 0),
-            int(snap.get("home_team_id") or 0),
-            int(snap.get("next_opponent_team_id") or 0),
-            int(snap.get("pitcher_team_id") or 0),
-            int(snap.get("batter_team_id") or 0),
-        )
-        if reload_key != last_team_key:
-            last_team_key = reload_key
-            team_ids = {
-                TRACKED_TEAM_ID,
-                reload_key[0],
-                reload_key[1],
-                reload_key[2],
-                reload_key[3],
-                reload_key[4],
-            }
-            team_ids.discard(0)
-            assets.load(team_ids)
-
-        scene_key = str(snap.get("scene", "idle"))
-        scene = scenes.get(scene_key, scenes["idle"])
-        scene.draw(screen, assets, snap)
-        if debug_hud:
-            _draw_debug_hud(
-                screen, assets, frame_i=frame_i, scene_key=scene_key, loop_start=loop_start
+            snap = state.snapshot()
+            reload_key = (
+                int(snap.get("away_team_id") or 0),
+                int(snap.get("home_team_id") or 0),
+                int(snap.get("next_opponent_team_id") or 0),
+                int(snap.get("pitcher_team_id") or 0),
+                int(snap.get("batter_team_id") or 0),
             )
-        pygame.display.flip()
+            if reload_key != last_team_key:
+                last_team_key = reload_key
+                team_ids = {
+                    TRACKED_TEAM_ID,
+                    reload_key[0],
+                    reload_key[1],
+                    reload_key[2],
+                    reload_key[3],
+                    reload_key[4],
+                }
+                team_ids.discard(0)
+                assets.load(team_ids)
 
-        clock.tick(config.FPS)
-        frame_i += 1
+            scene_key = str(snap.get("scene", "idle"))
+            if scene_key != last_scene_key:
+                last_scene_key = scene_key
+                set_win_led(scene_key == "win")
+            scene = scenes.get(scene_key, scenes["idle"])
+            scene.draw(screen, assets, snap)
+            if debug_hud:
+                _draw_debug_hud(
+                    screen, assets, frame_i=frame_i, scene_key=scene_key, loop_start=loop_start
+                )
+            pygame.display.flip()
+
+            clock.tick(config.FPS)
+            frame_i += 1
+    finally:
+        set_win_led(False)
+        cleanup_gpio()
 
     stop_schedule.set()
     stop_game_day.set()

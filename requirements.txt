@@ -1,6 +1,7 @@
 # pygame: macOS wheels exist for 3.11–3.13; 3.14 often falls back to a source build
 # and needs SDL2 headers — use a 3.12 venv for local dev (see BigA_project_notes §15).
 requests
-pygame>=2.5.0
+pillow
 # Rasterize logos/{id}.svg when {id}.png is absent (needs libcairo on some Linux images).
 cairosvg>=2.7.0
+pygame

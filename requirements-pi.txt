@@ -1,0 +1,7 @@
+requests
+cairosvg>=2.7.0
+pillow
+RPi.GPIO
+rpi_ws281x
+adafruit-blinka
+adafruit-circuitpython-neopixel

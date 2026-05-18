@@ -19,10 +19,10 @@ PITCHER_ROW_FROM_BOTTOM = 44
 BATTER_ROW_FROM_BOTTOM = 26
 GAP_PLAY_ABOVE_PITCHER = 6
 
-# Live linescore: nudged toward lower-right vs. screen center; roomier cells + font.
-LINESCORE_CENTER_X_FRAC = 0.62
-LINESCORE_TABLE_DROP_REF = 6
-LINESCORE_CELL_PAD = 4
+# Live linescore: right half of 480×320 panel.
+LINESCORE_CENTER_X_FRAC = 0.58
+LINESCORE_TABLE_DROP_REF = 4
+LINESCORE_CELL_PAD = 2
 
 
 def _inning_label(n: int | str) -> str:
@@ -93,23 +93,33 @@ class LiveScene:
         away_logo = assets.logos.get(away_id)
         home_logo = assets.logos.get(home_id)
 
-        y_logo = 12
+        y_logo = config.layout_y(8)
+        logo_h = config.LOGO_HEADER_SIZE[1]
         if away_logo:
-            screen.blit(away_logo, (16, y_logo))
+            screen.blit(away_logo, (config.layout_x(12), y_logo))
         if home_logo:
-            screen.blit(home_logo, (config.SCREEN_WIDTH - 16 - home_logo.get_width(), y_logo))
+            screen.blit(
+                home_logo,
+                (config.SCREEN_WIDTH - config.layout_x(12) - home_logo.get_width(), y_logo),
+            )
 
         away_abbr = str(state.get("away_abbr", "AWY"))
         home_abbr = str(state.get("home_abbr", "HME"))
         away_tag = assets.font_small.render(away_abbr, True, config.WHITE)
         home_tag = assets.font_small.render(home_abbr, True, config.WHITE)
-        screen.blit(away_tag, (16 + (config.LOGO_HEADER_SIZE[0] - away_tag.get_width()) // 2, y_logo + 76))
+        tag_y = y_logo + logo_h + 2
+        screen.blit(
+            away_tag,
+            (config.layout_x(12) + (config.LOGO_HEADER_SIZE[0] - away_tag.get_width()) // 2, tag_y),
+        )
         screen.blit(
             home_tag,
             (
-                config.SCREEN_WIDTH - 16 - config.LOGO_HEADER_SIZE[0]
+                config.SCREEN_WIDTH
+                - config.layout_x(12)
+                - config.LOGO_HEADER_SIZE[0]
                 + (config.LOGO_HEADER_SIZE[0] - home_tag.get_width()) // 2,
-                y_logo + 76,
+                tag_y,
             ),
         )
 
@@ -117,22 +127,22 @@ class LiveScene:
         hr = int(state.get("home_runs", 0))
         score_s = f"{ar}  —  {hr}"
         score = assets.font_score.render(score_s, True, config.WHITE)
-        screen.blit(score, score.get_rect(center=(config.SCREEN_WIDTH // 2, config.layout_y(52))))
+        screen.blit(score, score.get_rect(center=(config.SCREEN_WIDTH // 2, config.layout_y(46))))
 
         inning_line = assets.font_ui.render(_fmt_inning(state), True, config.WHITE)
         screen.blit(
-            inning_line, inning_line.get_rect(center=(config.SCREEN_WIDTH // 2, config.layout_y(108)))
+            inning_line, inning_line.get_rect(center=(config.SCREEN_WIDTH // 2, config.layout_y(98)))
         )
 
         balls = int(state.get("balls", 0))
         strikes = int(state.get("strikes", 0))
         count = assets.font_ui.render(f"Count: {balls}-{strikes}", True, config.GRAY)
-        count_cy = config.layout_y(132)
+        count_cy = config.layout_y(118)
         count_rect = count.get_rect(center=(config.SCREEN_WIDTH // 2, count_cy))
         screen.blit(count, count_rect)
 
         gap_after_count = max(
-            16, int(round(16 * config.SCREEN_HEIGHT / config.LAYOUT_REF_HEIGHT))
+            10, int(round(10 * config.SCREEN_HEIGHT / config.LAYOUT_REF_HEIGHT))
         )
         tbl_top = count_rect.bottom + gap_after_count
         tbl_top += int(
@@ -162,7 +172,7 @@ class LiveScene:
         )
 
         runners = state.get("runners") or {}
-        rsize = max(20, min(34, int(round(22 * config.SCREEN_HEIGHT / config.LAYOUT_REF_HEIGHT))))
+        rsize = max(16, min(28, int(round(20 * config.SCREEN_HEIGHT / config.LAYOUT_REF_HEIGHT))))
         gap_edge = 4
         table_left = geom.origin_x
         while rsize > 16:
@@ -199,7 +209,7 @@ class LiveScene:
             y_table_bottom = tbl_top + h_tbl + 4
             wrap_chars = max(24, (config.SCREEN_WIDTH - PLAY_TEXT_X - 16) // 7)
             wrapped = textwrap.fill(last, width=wrap_chars)
-            lines = wrapped.split("\n")[:8]
+            lines = wrapped.split("\n")[:5]
             while len(lines) > 1:
                 y_first = play_bottom - len(lines) * line_h
                 if y_first >= y_table_bottom:
