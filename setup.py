@@ -1,3 +1,4 @@
+import glob
 import subprocess
 import os
 import sys
@@ -9,6 +10,24 @@ def run(cmd, desc=None):
     if result.returncode != 0:
         print(f"  ✗ Failed: {cmd}")
         sys.exit(1)
+
+
+def _pip_break_system_flag() -> str:
+    """``--break-system-packages`` exists only on pip 23+ (PEP 668). Omit on older Pi images."""
+    help_proc = subprocess.run(
+        ["pip3", "install", "--help"],
+        capture_output=True,
+        text=True,
+        check=False,
+    )
+    if help_proc.returncode == 0 and "--break-system-packages" in (help_proc.stdout or ""):
+        return " --break-system-packages"
+    return ""
+
+
+def _externally_managed_python() -> bool:
+    return any(glob.glob("/usr/lib/python3*/EXTERNALLY-MANAGED"))
+
 
 REPO = "/home/pi/BigA"
 
@@ -31,10 +50,18 @@ run("sudo apt install -y "
     "python3-dev",
     "apt packages")
 
-# 2. pip deps (Pi-specific only)
+# 2. pip deps (Pi-specific only; pygame comes from apt above, not requirements-pi.txt)
 print("\n[2/7] Installing Python packages...")
-run(f"pip3 install -r {REPO}/requirements-pi.txt --break-system-packages",
-    "pip requirements-pi.txt")
+pip_extra = _pip_break_system_flag()
+if _externally_managed_python() and not pip_extra:
+    print(
+        "  ⚠ This OS marks Python as externally managed but pip is too old for "
+        "--break-system-packages. If pip install fails, upgrade pip or use a venv."
+    )
+run(
+    f"pip3 install -r {REPO}/requirements-pi.txt{pip_extra}",
+    "pip requirements-pi.txt",
+)
 
 # 3. video group
 print("\n[3/7] Configuring user permissions...")
