@@ -36,7 +36,7 @@ print("  BigA Angels Tracker — Setup")
 print("=" * 50)
 
 # 1. apt deps
-print("\n[1/7] Installing system packages...")
+print("\n[1/8] Installing system packages...")
 run("sudo apt update -q")
 run("sudo apt install -y "
     "python3-pip "
@@ -51,7 +51,7 @@ run("sudo apt install -y "
     "apt packages")
 
 # 2. pip deps (Pi-specific only; pygame comes from apt above, not requirements-pi.txt)
-print("\n[2/7] Installing Python packages...")
+print("\n[2/8] Installing Python packages...")
 pip_extra = _pip_break_system_flag()
 if _externally_managed_python() and not pip_extra:
     print(
@@ -64,15 +64,15 @@ run(
 )
 
 # 3. video group
-print("\n[3/7] Configuring user permissions...")
+print("\n[3/8] Configuring user permissions...")
 run("sudo usermod -a -G video pi", "adding pi to video group")
 
 # 4. timezone
-print("\n[4/7] Setting timezone...")
+print("\n[4/8] Setting timezone...")
 run("sudo timedatectl set-timezone America/Los_Angeles", "timezone → America/Los_Angeles")
 
 # 5. display drivers
-print("\n[5/7] Installing display drivers...")
+print("\n[5/8] Installing display drivers...")
 overlays = f"{REPO}/overlays"
 if os.path.isdir(overlays) and os.listdir(overlays):
     run(f"sudo cp {overlays}/*.dtbo /boot/overlays/", "copying .dtbo overlay files")
@@ -80,7 +80,7 @@ else:
     print("  ⚠ No overlay files found in overlays/ — skipping")
 
 # 6. config.txt
-print("\n[6/7] Updating /boot/config.txt...")
+print("\n[6/8] Updating /boot/config.txt...")
 config_append = f"{REPO}/config_append.txt"
 if os.path.exists(config_append):
     with open(config_append, 'r') as f:
@@ -97,8 +97,27 @@ else:
     print("  ✗ config_append.txt not found in repo")
     sys.exit(1)
 
-# 7. systemd service
-print("\n[7/7] Setting up systemd service...")
+# 7. start script (fbcon + chvt 2 + openvt wrapper for systemd)
+print("\n[7/8] Installing start script...")
+start_script = f"""#!/bin/sh
+set -eu
+export SDL_VIDEODRIVER=fbcon
+export SDL_FBDEV=/dev/fb0
+export PYTHONUNBUFFERED=1
+exec >>/tmp/biga.log 2>&1
+echo "biga-start $(date -Is)"
+/usr/bin/chvt 2 || echo "chvt 2 failed with $?"
+exec /usr/bin/openvt -c 2 -f -w -- /bin/sh -c "/usr/bin/python3 {REPO}/run_pi_ui.py --no-idle-videos >>/tmp/biga.log 2>&1; echo PYEXIT=$? >>/tmp/biga.log"
+"""
+
+with open("/tmp/biga-start.sh", "w", encoding="utf-8") as f:
+    f.write(start_script)
+
+run("sudo mv /tmp/biga-start.sh /usr/local/bin/biga-start.sh", "installing /usr/local/bin/biga-start.sh")
+run("sudo chmod +x /usr/local/bin/biga-start.sh", "making start script executable")
+
+# 8. systemd service
+print("\n[8/8] Setting up systemd service...")
 run(f"sudo cp {REPO}/biga.service.example /etc/systemd/system/biga.service",
     "copying service file")
 run("sudo systemctl daemon-reload", "reloading systemd")

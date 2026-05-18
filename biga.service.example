@@ -1,0 +1,15 @@
+[Unit]
+Description=Big A Angels Tracker
+After=network-online.target multi-user.target
+Wants=network-online.target
+
+[Service]
+Type=simple
+User=root
+WorkingDirectory=/home/pi/BigA
+ExecStart=/usr/local/bin/biga-start.sh
+Restart=on-failure
+RestartSec=5
+
+[Install]
+WantedBy=multi-user.target
