@@ -9,7 +9,7 @@ import pygame
 from .. import config
 from ..assets import AssetManager
 
-_LOGO_SCORE_GAP = 32
+_LOGO_SCORE_GAP = config.layout_size(20)
 
 
 def draw_score_with_flanking_logos(

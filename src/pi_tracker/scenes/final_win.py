@@ -15,7 +15,7 @@ class FinalWinScene:
     def draw(self, screen: pygame.Surface, assets: AssetManager, state: dict[str, Any]) -> None:
         screen.fill((12, 40, 12))
         draw_score_with_flanking_logos(
-            screen, assets, state, y_center=config.layout_y(88), score_color=config.ANGELS_GOLD
+            screen, assets, state, y_center=config.layout_y(72), score_color=config.ANGELS_GOLD
         )
 
         ar = int(state.get("away_runs", 0))
@@ -37,22 +37,16 @@ class FinalWinScene:
                 headline = f"{win_abbr} WIN"
 
         w = assets.font_title.render(headline, True, config.WHITE)
-        screen.blit(w, w.get_rect(center=(config.SCREEN_WIDTH // 2, config.layout_y(148))))
+        screen.blit(w, w.get_rect(center=(config.SCREEN_WIDTH // 2, config.layout_y(128))))
 
-        tbl_y = config.layout_y(176)
-        h = draw_linescore_table_centered(
+        draw_linescore_table_centered(
             screen,
             assets,
             state,
             config.SCREEN_WIDTH // 2,
-            tbl_y,
+            config.layout_y(152),
             fg=config.WHITE,
             hdr=(160, 200, 160),
+            cell_pad=2,
+            table_font=assets.font_linescore,
         )
-
-        sub = assets.font_small.render("(GPIO LED pulse hooks here later)", True, config.GRAY)
-        cy = min(
-            tbl_y + h + 8 + sub.get_height() // 2,
-            config.SCREEN_HEIGHT - sub.get_height() // 2 - 4,
-        )
-        screen.blit(sub, sub.get_rect(center=(config.SCREEN_WIDTH // 2, cy)))
