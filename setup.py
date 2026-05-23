@@ -1,7 +1,12 @@
 import glob
-import subprocess
 import os
+import re
+import subprocess
 import sys
+
+REPO = os.path.dirname(os.path.abspath(__file__))
+DEFAULT_PANEL_INCLUDE = os.environ.get("BIGA_PANEL_INCLUDE", "mzp351hv00tr-old.txt")
+
 
 def run(cmd, desc=None):
     if desc:
@@ -29,7 +34,106 @@ def _externally_managed_python() -> bool:
     return any(glob.glob("/usr/lib/python3*/EXTERNALLY-MANAGED"))
 
 
-REPO = "/home/pi/BigA"
+def _boot_paths() -> tuple[str, str]:
+    """(config.txt directory, overlays directory) for this Pi OS generation."""
+    if os.path.isdir("/boot/firmware"):
+        return "/boot/firmware", "/boot/firmware/overlays"
+    return "/boot", "/boot/overlays"
+
+
+def _sudo_read(path: str) -> str:
+    proc = subprocess.run(["sudo", "cat", path], capture_output=True, text=True, check=False)
+    if proc.returncode != 0:
+        print(f"  ✗ Cannot read {path}: {proc.stderr.strip()}")
+        sys.exit(1)
+    return proc.stdout
+
+
+def _sudo_write(path: str, content: str) -> None:
+    tmp = "/tmp/biga-config-edit.txt"
+    with open(tmp, "w", encoding="utf-8") as f:
+        f.write(content)
+    run(f"sudo cp {tmp} {path}", f"writing {path}")
+
+
+def _strip_legacy_inline_panel(text: str) -> str:
+    """
+    Remove panel block wrongly appended by older setup (inline copy of mzp351hv00tr-*.txt).
+    Safe to run when migrating to ``include mzp351hv00tr-old.txt``.
+    """
+    lines = text.splitlines()
+    out: list[str] = []
+    i = 0
+    while i < len(lines):
+        line = lines[i]
+        stripped = line.strip()
+        if stripped.startswith("dtoverlay=ads7846") and "penirq=27" in stripped:
+            i += 1
+            while i < len(lines):
+                if lines[i].strip().startswith("hdmi_timings=480"):
+                    i += 1
+                    break
+                i += 1
+            continue
+        out.append(line)
+        i += 1
+    return re.sub(r"\n{3,}", "\n\n", "\n".join(out).rstrip()) + "\n"
+
+
+def _strip_old_biga_markers(text: str) -> str:
+    """Drop prior BigA snippet lines so re-run does not duplicate includes."""
+    drop_prefixes = (
+        "dtparam=spi=on",
+        "include mzp351hv00tr-old.txt",
+        "include mzp351hv00tr-new.txt",
+        "enable_uart=1",
+    )
+    lines = []
+    for line in text.splitlines():
+        s = line.strip()
+        if s.startswith("# BigA"):
+            continue
+        if any(s == p or s.startswith(p + " ") for p in drop_prefixes):
+            continue
+        lines.append(line)
+    return re.sub(r"\n{3,}", "\n\n", "\n".join(lines).rstrip()) + "\n"
+
+
+def _install_panel_config(boot_dir: str, config_path: str) -> None:
+    panel_name = DEFAULT_PANEL_INCLUDE
+    panel_src = os.path.join(REPO, "boot", panel_name)
+    if not os.path.isfile(panel_src):
+        print(f"  ✗ Missing panel file in repo: boot/{panel_name}")
+        sys.exit(1)
+
+    run(f"sudo cp {panel_src} {boot_dir}/{panel_name}", f"installing {boot_dir}/{panel_name}")
+
+    snippet_path = os.path.join(REPO, "config_append.txt")
+    if not os.path.isfile(snippet_path):
+        print("  ✗ config_append.txt not found in repo")
+        sys.exit(1)
+
+    with open(snippet_path, encoding="utf-8") as f:
+        snippet_raw = f.read()
+    # Allow env override: rewrite include line in snippet copy.
+    snippet = snippet_raw.replace("mzp351hv00tr-old.txt", panel_name)
+
+    current = _sudo_read(config_path)
+    cleaned = _strip_legacy_inline_panel(current)
+    cleaned = _strip_old_biga_markers(cleaned)
+
+    marker = f"include {panel_name}"
+    if marker not in cleaned:
+        cleaned = cleaned.rstrip() + "\n\n# BigA panel + touch (480×320 DPI)\n" + snippet.strip() + "\n"
+        _sudo_write(config_path, cleaned)
+        print(f"  → {config_path} updated ({marker})")
+    else:
+        if cleaned != current:
+            _sudo_write(config_path, cleaned)
+            print(f"  → {config_path} cleaned legacy inline panel block")
+        else:
+            print(f"  → {config_path} already has {marker}, skipping append")
+
 
 print("=" * 50)
 print("  BigA Angels Tracker — Setup")
@@ -38,7 +142,8 @@ print("=" * 50)
 # 1. apt deps
 print("\n[1/8] Installing system packages...")
 run("sudo apt update -q")
-run("sudo apt install -y "
+run(
+    "sudo apt install -y "
     "python3-pip "
     "python3-pygame "
     "fonts-dejavu-core "
@@ -48,7 +153,8 @@ run("sudo apt install -y "
     "libcairo2-dev "
     "pkg-config "
     "python3-dev",
-    "apt packages")
+    "apt packages",
+)
 
 # 2. pip deps (Pi-specific only; pygame comes from apt above, not requirements-pi.txt)
 print("\n[2/8] Installing Python packages...")
@@ -73,29 +179,26 @@ run("sudo timedatectl set-timezone America/Los_Angeles", "timezone → America/L
 
 # 5. display drivers
 print("\n[5/8] Installing display drivers...")
-overlays = f"{REPO}/overlays"
+boot_dir, overlays_dir = _boot_paths()
+print(f"  → boot dir: {boot_dir}")
+overlays = os.path.join(REPO, "overlays")
 if os.path.isdir(overlays) and os.listdir(overlays):
-    run(f"sudo cp {overlays}/*.dtbo /boot/overlays/", "copying .dtbo overlay files")
+    run(f"sudo cp {overlays}/*.dtbo {overlays_dir}/", "copying .dtbo overlay files")
 else:
-    print("  ⚠ No overlay files found in overlays/ — skipping")
+    print("  ⚠ No overlay files found in overlays/ — skipping (panel uses include file)")
 
-# 6. config.txt
-print("\n[6/8] Updating /boot/config.txt...")
-config_append = f"{REPO}/config_append.txt"
-if os.path.exists(config_append):
-    with open(config_append, 'r') as f:
-        append_content = f.read()
-    with open('/boot/config.txt', 'r') as f:
-        current = f.read()
-    if "dtoverlay=dpi24" not in current:
-        with open('/boot/config.txt', 'a') as f:
-            f.write('\n' + append_content)
-        print("  → config.txt updated")
-    else:
-        print("  → config.txt already configured, skipping")
-else:
-    print("  ✗ config_append.txt not found in repo")
+# 6. config.txt + panel include file
+print("\n[6/8] Updating boot config + panel include...")
+config_path = os.path.join(boot_dir, "config.txt")
+if not os.path.exists(config_path):
+    print(f"  ✗ {config_path} not found")
     sys.exit(1)
+_install_panel_config(boot_dir, config_path)
+print(
+    f"\n  Diagnostics (SSH): sudo cat {config_path}\n"
+    "  SSH daemon config is NOT here — use: sudo cat /etc/ssh/sshd_config\n"
+    f"  Panel include on disk: sudo cat {boot_dir}/{DEFAULT_PANEL_INCLUDE}"
+)
 
 # 7. start script (fbcon + chvt 2 + openvt wrapper for systemd)
 print("\n[7/8] Installing start script...")
@@ -118,8 +221,10 @@ run("sudo chmod +x /usr/local/bin/biga-start.sh", "making start script executabl
 
 # 8. systemd service
 print("\n[8/8] Setting up systemd service...")
-run(f"sudo cp {REPO}/biga.service.example /etc/systemd/system/biga.service",
-    "copying service file")
+run(
+    f"sudo cp {REPO}/biga.service.example /etc/systemd/system/biga.service",
+    "copying service file",
+)
 run("sudo systemctl daemon-reload", "reloading systemd")
 run("sudo systemctl enable biga", "enabling biga service")
 
