@@ -6,7 +6,7 @@ from typing import Any
 import pygame
 
 from .. import config
-from ..assets import AssetManager
+from ..assets import AssetManager, scale_surface
 from ..mlb_http import ANGELS_TEAM_ID as TRACKED_TEAM_ID
 from ..team_config import tracked_team_abbr, tracked_team_name
 
@@ -49,7 +49,7 @@ def _blit_matchup_row(
     if opponent_team_id and opponent_team_id != TRACKED_TEAM_ID:
         base = assets.logos.get(opponent_team_id)
         if base is not None:
-            sm = pygame.transform.smoothscale(base, IDLE_OPPONENT_LOGO_SIZE)
+            sm = scale_surface(base, IDLE_OPPONENT_LOGO_SIZE)
     if sm is not None:
         total_w = sm.get_width() + MATCHUP_LOGO_GAP + tex.get_width()
         max_h = max(sm.get_height(), tex.get_height())
