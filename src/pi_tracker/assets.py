@@ -102,15 +102,36 @@ def _raster_svg_to_surface(path: Path) -> pygame.Surface | None:
         return None
 
 
+def _ensure_scalable_surface(surf: pygame.Surface) -> pygame.Surface:
+    """Return 24/32-bit RGB/RGBA safe for ``pygame.transform.smoothscale`` (fbcon can load 8-bit PNGs)."""
+    if surf.get_bitsize() in (24, 32):
+        return surf
+    try:
+        converted = surf.convert_alpha()
+        if converted.get_bitsize() in (24, 32):
+            return converted
+    except pygame.error:
+        pass
+    out = pygame.Surface(surf.get_size(), pygame.SRCALPHA, 32)
+    out.blit(surf, (0, 0))
+    return out
+
+
+def scale_surface(surf: pygame.Surface, size: tuple[int, int]) -> pygame.Surface:
+    """``smoothscale`` with a guaranteed-compatible source format."""
+    return pygame.transform.smoothscale(_ensure_scalable_surface(surf), size)
+
+
 def _letterbox_logo(img: pygame.Surface, dest: tuple[int, int]) -> pygame.Surface:
     """Scale ``img`` to fit inside ``dest`` (keep aspect); center on transparent square."""
+    img = _ensure_scalable_surface(img)
     dw, dh = dest
     iw, ih = img.get_size()
     if iw <= 0 or ih <= 0:
-        return pygame.transform.smoothscale(img, dest)
+        return scale_surface(img, dest)
     scale = min(dw / iw, dh / ih)
     nw, nh = max(1, int(round(iw * scale))), max(1, int(round(ih * scale)))
-    scaled = pygame.transform.smoothscale(img, (nw, nh))
+    scaled = scale_surface(img, (nw, nh))
     out = pygame.Surface((dw, dh), pygame.SRCALPHA)
     out.fill((0, 0, 0, 0))
     out.blit(scaled, ((dw - nw) // 2, (dh - nh) // 2))

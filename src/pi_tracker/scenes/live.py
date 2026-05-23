@@ -6,7 +6,7 @@ from typing import Any
 import pygame
 
 from .. import config
-from ..assets import AssetManager
+from ..assets import AssetManager, scale_surface
 from ..drawing.diamond import draw_diamond
 from .linescore_table import compute_linescore_geometry, draw_linescore_table_centered
 
@@ -56,7 +56,7 @@ def _tiny_team_logo(assets: AssetManager, team_id: int) -> pygame.Surface | None
     base = assets.logos.get(team_id)
     if base is None:
         return None
-    return pygame.transform.smoothscale(base, PB_LOGO_SIZE)
+    return scale_surface(base, PB_LOGO_SIZE)
 
 
 def _blit_pb_line(
