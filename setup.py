@@ -83,6 +83,7 @@ def _strip_legacy_inline_panel(text: str) -> str:
 def _strip_old_biga_markers(text: str) -> str:
     """Drop prior BigA snippet lines so re-run does not duplicate includes."""
     drop_prefixes = (
+        "disable_fw_kms_setup=1",
         "dtparam=spi=on",
         "include mzp351hv00tr-old.txt",
         "include mzp351hv00tr-new.txt",
@@ -122,17 +123,28 @@ def _install_panel_config(boot_dir: str, config_path: str) -> None:
     cleaned = _strip_legacy_inline_panel(current)
     cleaned = _strip_old_biga_markers(cleaned)
 
-    marker = f"include {panel_name}"
-    if marker not in cleaned:
-        cleaned = cleaned.rstrip() + "\n\n# BigA panel + touch (480×320 DPI)\n" + snippet.strip() + "\n"
+    missing: list[str] = []
+    for line in snippet.strip().splitlines():
+        s = line.strip()
+        if not s or s.startswith("#"):
+            continue
+        if s not in cleaned:
+            missing.append(s)
+
+    if missing:
+        block = (
+            "\n\n# BigA panel + touch (480×320 DPI)\n"
+            + "\n".join(missing)
+            + "\n"
+        )
+        cleaned = cleaned.rstrip() + block
         _sudo_write(config_path, cleaned)
-        print(f"  → {config_path} updated ({marker})")
+        print(f"  → {config_path} updated ({', '.join(missing)})")
+    elif cleaned != current:
+        _sudo_write(config_path, cleaned)
+        print(f"  → {config_path} cleaned legacy inline panel block")
     else:
-        if cleaned != current:
-            _sudo_write(config_path, cleaned)
-            print(f"  → {config_path} cleaned legacy inline panel block")
-        else:
-            print(f"  → {config_path} already has {marker}, skipping append")
+        print(f"  → {config_path} already has BigA snippet ({panel_name})")
 
 
 print("=" * 50)
@@ -204,11 +216,20 @@ print(
 print("\n[7/8] Installing start script...")
 start_script = f"""#!/bin/sh
 set -eu
+export PYTHONUNBUFFERED=1
+export BIGA_SDL_FALLBACK_KMS=1
 export SDL_VIDEODRIVER=fbcon
 export SDL_FBDEV=/dev/fb0
-export PYTHONUNBUFFERED=1
+export FRAMEBUFFER=/dev/fb0
 exec >>/tmp/biga.log 2>&1
 echo "biga-start $(date -Is)"
+i=0
+while [ ! -e /dev/fb0 ] && [ "$i" -lt 15 ]; do
+  echo "waiting for /dev/fb0 ($i)..."
+  i=$((i + 1))
+  sleep 1
+done
+ls -l /dev/fb0 /dev/dri/card0 2>&1 || true
 /usr/bin/chvt 2 || echo "chvt 2 failed with $?"
 exec /usr/bin/openvt -c 2 -f -w -- /bin/sh -c "/usr/bin/python3 {REPO}/run_pi_ui.py --no-idle-videos >>/tmp/biga.log 2>&1; echo PYEXIT=$? >>/tmp/biga.log"
 """

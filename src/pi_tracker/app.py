@@ -118,15 +118,18 @@ def _open_pygame_window(width: int, height: int, flags: int) -> pygame.Surface:
         try:
             return _set_mode()
         except pygame.error as second:
+            dri = Path("/dev/dri/card0")
             want_kms = os.environ.get("BIGA_SDL_FALLBACK_KMS", "").strip().lower() in (
                 "1",
                 "true",
                 "yes",
             )
-            dri = Path("/dev/dri/card0")
-            if want_kms and dri.exists():
+            if dri.exists() and (
+                want_kms
+                or os.environ.get("SDL_VIDEODRIVER", "").lower() == "fbcon"
+            ):
                 print(
-                    "BigA: BIGA_SDL_FALLBACK_KMS=1 and /dev/dri/card0 present; trying KMSDRM.",
+                    "BigA: fbcon failed; trying KMSDRM (/dev/dri/card0 present).",
                     file=sys.stderr,
                     flush=True,
                 )
@@ -138,12 +141,19 @@ def _open_pygame_window(width: int, height: int, flags: int) -> pygame.Surface:
                 except Exception:
                     pass
                 _pygame_bootstrap_linux_console()
-                return _set_mode()
+                try:
+                    return _set_mode()
+                except pygame.error as third:
+                    print(
+                        f"BigA: KMSDRM also failed ({third!s}).",
+                        file=sys.stderr,
+                        flush=True,
+                    )
+                    raise third from second
 
             print(
-                "BigA: fbcon still unavailable. SPI/console: use pygame linked to SDL with fbcon "
-                "(e.g. distro python3-pygame), run from the framebuffer VT (e.g. login on tty2), "
-                "and ensure /dev/fb0 is readable. HDMI/DSI with DRI: BIGA_SDL_FALLBACK_KMS=1.",
+                "BigA: fbcon still unavailable. Check: ls -l /dev/fb0 /dev/dri/card0; "
+                "reboot after config.txt changes; run from framebuffer VT (openvt/chvt 2).",
                 file=sys.stderr,
                 flush=True,
             )
