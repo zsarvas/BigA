@@ -1,4 +1,6 @@
-# BigA — append under [all] in config.txt (panel details live in boot/mzp351hv00tr-*.txt)
+# BigA — under [all] in config.txt (panel timings in boot/mzp351hv00tr-*.txt)
+# Matches working Pi: KMS + DPI needs disable_fw_kms_setup=1
+disable_fw_kms_setup=1
 dtparam=spi=on
 include mzp351hv00tr-old.txt
 enable_uart=1
