@@ -1,7 +1,7 @@
 requests
 cairosvg>=2.7.0
 pillow
-RPi.GPIO
+# NeoPixel strip on win scene (rpi_ws281x drives WS2812B from a PWM/PCM-capable
+# GPIO; default BCM 19 = PWM channel 1). Requires root, which the systemd unit
+# already uses.
 rpi_ws281x
-adafruit-blinka
-adafruit-circuitpython-neopixel
