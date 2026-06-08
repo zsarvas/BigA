@@ -63,7 +63,8 @@ _DMA_FOR_CHANNEL = {0: 10, 1: 10}
 _HALOS_R = (190, 30, 30)
 _HALOS_GOLD = (186, 147, 62)
 
-_lock = threading.Lock()
+# Reentrant: set_win_led() holds the lock and may call init_gpio(), which re-acquires it.
+_lock = threading.RLock()
 _strip = None  # type: ignore[var-annotated]
 _initialized = False
 _win_active = False
