@@ -1,7 +1,6 @@
 # BigA — appended under [all] in config.txt.
-# Generation-agnostic: panel timings (legacy DPI vs KMS DPI) live in the
-# included boot/mzp351hv00tr-*.txt file. setup.py rewrites the include line to
-# the panel selected by BIGA_PANEL_INCLUDE (default mzp351hv00tr-new.txt = Bookworm/KMS).
-dtparam=spi=on
+# All panel + touch settings live in the included boot/mzp351hv00tr-*.txt file
+# (setup.py rewrites the include line to BIGA_PANEL_INCLUDE, default
+# mzp351hv00tr-new.txt = Bookworm/KMS). Don't add DPI settings here.
 include mzp351hv00tr-new.txt
 enable_uart=1

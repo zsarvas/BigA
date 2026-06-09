@@ -1,26 +1,19 @@
-# Bookworm (KMS) panel config for MZP351HV00TR (480x320 DPI).
-# Use with BIGA_SDL_VIDEO=kmsdrm (SDL backend = KMSDRM). Pairs with config_append.txt.
+# Bookworm/Trixie (KMS) panel config for MZP351HV00TR (480x320 DPI).
+# Manufacturer's exact overlay/order. Pairs with config_append.txt and
+# BIGA_SDL_VIDEO=kmsdrm. setup.py copies this verbatim to /boot/firmware/.
 #
-# ⚠ REPLACE WITH THE MANUFACTURER'S BOOKWORM FILE WHEN AVAILABLE.
-#   The values below are translated from the legacy firmware-DPI timings
-#   (mzp351hv00tr-old.txt) into the vc4-kms-dpi-generic overlay. The pixel
-#   timings carry over 1:1, but the RGB bus format (legacy dpi_output_format
-#   0x07f203) is a best-effort guess — confirm against the panel datasheet or
-#   the vendor's Bookworm config.txt and adjust the rgbXXX dtparam if colors
-#   look wrong (try rgb666, rgb666-padhi, rgb888, or rgb565).
-#
-# Reference legacy timing string:
-#   hdmi_timings=480 0 20 10 10 320 0 10 2 2 0 0 0 60 0 32000000 3
-#     hactive=480 hfp=20 hsync=10 hbp=10  vactive=320 vfp=10 vsync=2 vbp=2
-#     pixel clock = 32 MHz, hsync/vsync polarity = active low
+# Order matters: spi0-0cs frees the CS pin BEFORE ads7846 touch loads, then
+# KMS loads with no GPIO conflict.
 
-# Resistive touch over SPI (same controller as the legacy panel).
-dtoverlay=ads7846,penirq=27,swapxy=1,xmin=150,xmax=3970,ymin=150,ymax=3970
-
-# KMS DPI panel. clock-frequency in Hz; porches/sync in pixels/lines.
-dtoverlay=vc4-kms-dpi-generic,clock-frequency=32000000,hactive=480,hfp=20,hsync=10,hbp=10,vactive=320,vfp=10,vsync=2,vbp=2,hsync-invert,vsync-invert,rgb666
-
-# DPI bus pins in alt2 (matches the legacy panel; leaves GPIO 27 free for touch penirq).
-gpio=0-8=a2
-gpio=12-17=a2
-gpio=20-24=a2
+dtoverlay=spi0-0cs
+dtoverlay=ads7846,penirq=27,swapxy=1,xmin=180,xmax=3900,ymin=180,ymax=3900
+dtoverlay=vc4-kms-v3d
+max_framebuffers=2
+dtoverlay=vc4-kms-dpi-generic
+dtparam=hactive=480,hfp=20,hsync=10,hbp=10
+dtparam=vactive=320,vfp=10,vsync=2,vbp=2
+dtparam=clock-frequency=12000000
+dtparam=hsync-invert,vsync-invert,pixclk-invert
+dtparam=rgb565-padhi
+dtparam=backlight-gpio=18
+gpio=18=op,dh,pd

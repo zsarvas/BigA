@@ -80,14 +80,14 @@ No reboot is needed for the day-to-day cycle.
 
 ```bash
 sudo apt update && sudo apt install -y git
-git clone <your-repo-url> /home/pi/BigA
+git clone https://github.com/zsarvas/BigA /home/pi/BigA
 cd /home/pi/BigA
 ```
 
 3. **Run setup (installs everything, configures the panel, enables the service, reboots):**
 
 ```bash
-sudo python3 setup.py
+sudo python3 BigA/setup.py
 ```
 
 That's it. After reboot the scoreboard auto-starts on the panel.
