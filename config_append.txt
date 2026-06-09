@@ -1,6 +1,7 @@
-# BigA — under [all] in config.txt (panel timings in boot/mzp351hv00tr-*.txt)
-# Matches working Pi: KMS + DPI needs disable_fw_kms_setup=1
-disable_fw_kms_setup=1
+# BigA — appended under [all] in config.txt.
+# Generation-agnostic: panel timings (legacy DPI vs KMS DPI) live in the
+# included boot/mzp351hv00tr-*.txt file. setup.py rewrites the include line to
+# the panel selected by BIGA_PANEL_INCLUDE (default mzp351hv00tr-new.txt = Bookworm/KMS).
 dtparam=spi=on
-include mzp351hv00tr-old.txt
+include mzp351hv00tr-new.txt
 enable_uart=1

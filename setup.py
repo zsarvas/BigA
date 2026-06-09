@@ -5,7 +5,8 @@ import subprocess
 import sys
 
 REPO = os.path.dirname(os.path.abspath(__file__))
-DEFAULT_PANEL_INCLUDE = os.environ.get("BIGA_PANEL_INCLUDE", "mzp351hv00tr-old.txt")
+# Bookworm + KMS is the target. Use mzp351hv00tr-old.txt for legacy Bullseye/fbcon images.
+DEFAULT_PANEL_INCLUDE = os.environ.get("BIGA_PANEL_INCLUDE", "mzp351hv00tr-new.txt")
 
 
 def run(cmd, desc=None):
@@ -85,6 +86,7 @@ def _strip_old_biga_markers(text: str) -> str:
     drop_prefixes = (
         "disable_fw_kms_setup=1",
         "dtparam=spi=on",
+        "dtoverlay=vc4-kms-dpi-generic",
         "include mzp351hv00tr-old.txt",
         "include mzp351hv00tr-new.txt",
         "enable_uart=1",
@@ -116,8 +118,12 @@ def _install_panel_config(boot_dir: str, config_path: str) -> None:
 
     with open(snippet_path, encoding="utf-8") as f:
         snippet_raw = f.read()
-    # Allow env override: rewrite include line in snippet copy.
-    snippet = snippet_raw.replace("mzp351hv00tr-old.txt", panel_name)
+    # Point the include at the selected panel file regardless of which one the snippet ships with.
+    snippet = re.sub(
+        r"include\s+mzp351hv00tr-(?:old|new)\.txt",
+        f"include {panel_name}",
+        snippet_raw,
+    )
 
     current = _sudo_read(config_path)
     cleaned = _strip_legacy_inline_panel(current)
@@ -212,24 +218,23 @@ print(
     f"  Panel include on disk: sudo cat {boot_dir}/{DEFAULT_PANEL_INCLUDE}"
 )
 
-# 7. start script (fbcon + chvt 2 + openvt wrapper for systemd)
+# 7. start script (Bookworm KMSDRM + chvt 2 + openvt wrapper for systemd)
 print("\n[7/8] Installing start script...")
 start_script = f"""#!/bin/sh
 set -eu
 export PYTHONUNBUFFERED=1
-export BIGA_SDL_FALLBACK_KMS=1
-export SDL_VIDEODRIVER=fbcon
-export SDL_FBDEV=/dev/fb0
-export FRAMEBUFFER=/dev/fb0
+# Bookworm + KMS: panel is vc4-kms-dpi-generic, so SDL uses KMSDRM (no SDL_FBDEV).
+export BIGA_SDL_VIDEO=kmsdrm
+export SDL_VIDEODRIVER=kmsdrm
 exec >>/tmp/biga.log 2>&1
 echo "biga-start $(date -Is)"
 i=0
-while [ ! -e /dev/fb0 ] && [ "$i" -lt 15 ]; do
-  echo "waiting for /dev/fb0 ($i)..."
+while [ ! -e /dev/dri/card0 ] && [ ! -e /dev/dri/card1 ] && [ "$i" -lt 20 ]; do
+  echo "waiting for /dev/dri/card* ($i)..."
   i=$((i + 1))
   sleep 1
 done
-ls -l /dev/fb0 /dev/dri/card0 2>&1 || true
+ls -l /dev/dri/card* /dev/fb0 2>&1 || true
 /usr/bin/chvt 2 || echo "chvt 2 failed with $?"
 exec /usr/bin/openvt -c 2 -f -w -- /bin/sh -c "/usr/bin/python3 {REPO}/run_pi_ui.py --no-idle-videos >>/tmp/biga.log 2>&1; echo PYEXIT=$? >>/tmp/biga.log"
 """

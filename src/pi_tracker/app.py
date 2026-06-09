@@ -8,9 +8,10 @@ Dev: ``python run_pi_ui.py yankees --debug-hud`` — first non-flag arg is an ML
 ``--demo`` / ``--demo-live`` = live scoreboard sample. ``--demo-final`` = final win screen (no network pollers in demo mode).
 ``--debug-hud`` or ``BIGA_DEBUG_HUD=1`` draws a small updating clock + frame counter (confirms the main loop is alive).
 On Linux Pi **from a text VT** (no X11), ``bootstrap_sdl.configure_sdl()`` runs before pygame
-imports: dummy SDL audio on the console to avoid mixer/ALSA threading quirks. Video is not
-forced (SPI panels often need ``fbcon``). For DRM panels (HDMI / DSI), set ``BIGA_SDL_VIDEO=kmsdrm``.
-``SDL_VIDEODRIVER=fbcon`` can still hit pygame/SDL GIL bugs on some builds (pygame#3687).
+imports: dummy SDL audio plus the video backend. Target is **Bookworm + KMS**, so the default
+is ``BIGA_SDL_VIDEO=kmsdrm`` (panel = ``vc4-kms-dpi-generic``). Legacy Bullseye/SPI panels can
+set ``BIGA_SDL_VIDEO=fbcon``; ``_open_pygame_window`` falls back across KMSDRM/fbcon by probing
+``/dev/dri/card*`` and ``/dev/fb0``.
 """
 
 from __future__ import annotations
@@ -79,16 +80,39 @@ def _pygame_bootstrap_linux_console() -> None:
         pass
 
 
+def _try_set_mode(
+    width: int, height: int, flags: int, driver: str
+) -> tuple[pygame.Surface | None, "pygame.error | None"]:
+    """Re-init SDL with ``driver`` and attempt ``set_mode``; return (surface, error)."""
+    if driver == "KMSDRM":
+        os.environ["SDL_VIDEODRIVER"] = "KMSDRM"
+        os.environ.pop("SDL_FBDEV", None)
+        os.environ.pop("FRAMEBUFFER", None)
+    elif driver == "fbcon":
+        os.environ["SDL_VIDEODRIVER"] = "fbcon"
+        os.environ.setdefault("SDL_FBDEV", "/dev/fb0")
+        os.environ.setdefault("FRAMEBUFFER", os.environ["SDL_FBDEV"])
+
+    try:
+        pygame.quit()
+    except Exception:
+        pass
+    _pygame_bootstrap_linux_console()
+    try:
+        return pygame.display.set_mode((width, height), flags), None
+    except pygame.error as e:
+        return None, e
+
+
 def _open_pygame_window(width: int, height: int, flags: int) -> pygame.Surface:
     """
-    Headless Linux: ``pygame.init()`` before ``set_mode``.
+    Open the display. Target is **Bookworm + KMSDRM**.
 
-    On fbcon failure we **do not** drop ``SDL_VIDEODRIVER=fbcon`` by default: SPI-only systems
-    then fall through to KMS/Wayland and fail with ``No available video device`` (no
-    ``/dev/dri``). We retry once with the same env after ``pygame.quit()``.
-
-    Optional: ``BIGA_SDL_FALLBACK_KMS=1`` — if ``/dev/dri/card0`` exists, try KMSDRM after
-    fbcon still fails (HDMI / DSI setups).
+    Order:
+      1. Whatever ``configure_sdl()`` selected (KMSDRM by default).
+      2. If that fails on a text console, retry **KMSDRM** explicitly when
+         ``/dev/dri/card0`` exists.
+      3. Last resort: legacy **fbcon** when ``/dev/fb0`` exists (Bullseye / SPI).
     """
     if _linux_text_console():
         _pygame_bootstrap_linux_console()
@@ -101,63 +125,40 @@ def _open_pygame_window(width: int, height: int, flags: int) -> pygame.Surface:
     except pygame.error as first:
         if not _linux_text_console():
             raise
-        err_l = str(first).lower()
-        if "fbcon" not in err_l and "not available" not in err_l:
-            raise
 
         print(
-            f"BigA: set_mode failed ({first!s}); retrying same SDL video driver after pygame.quit().",
+            f"BigA: set_mode failed with {os.environ.get('SDL_VIDEODRIVER', '?')} ({first!s}); "
+            "trying fallbacks.",
             file=sys.stderr,
             flush=True,
         )
-        try:
-            pygame.quit()
-        except Exception:
-            pass
-        _pygame_bootstrap_linux_console()
-        try:
-            return _set_mode()
-        except pygame.error as second:
-            dri = Path("/dev/dri/card0")
-            want_kms = os.environ.get("BIGA_SDL_FALLBACK_KMS", "").strip().lower() in (
-                "1",
-                "true",
-                "yes",
-            )
-            if dri.exists() and (
-                want_kms
-                or os.environ.get("SDL_VIDEODRIVER", "").lower() == "fbcon"
-            ):
-                print(
-                    "BigA: fbcon failed; trying KMSDRM (/dev/dri/card0 present).",
-                    file=sys.stderr,
-                    flush=True,
-                )
-                os.environ["SDL_VIDEODRIVER"] = "KMSDRM"
-                os.environ.pop("SDL_FBDEV", None)
-                os.environ.pop("FRAMEBUFFER", None)
-                try:
-                    pygame.quit()
-                except Exception:
-                    pass
-                _pygame_bootstrap_linux_console()
-                try:
-                    return _set_mode()
-                except pygame.error as third:
-                    print(
-                        f"BigA: KMSDRM also failed ({third!s}).",
-                        file=sys.stderr,
-                        flush=True,
-                    )
-                    raise third from second
 
-            print(
-                "BigA: fbcon still unavailable. Check: ls -l /dev/fb0 /dev/dri/card0; "
-                "reboot after config.txt changes; run from framebuffer VT (openvt/chvt 2).",
-                file=sys.stderr,
-                flush=True,
-            )
-            raise second from first
+        attempts: list[str] = []
+        if Path("/dev/dri/card0").exists() or Path("/dev/dri/card1").exists():
+            attempts.append("KMSDRM")
+        if Path("/dev/fb0").exists():
+            attempts.append("fbcon")
+
+        last_err: pygame.error = first
+        for driver in attempts:
+            if driver == os.environ.get("SDL_VIDEODRIVER", ""):
+                continue
+            print(f"BigA: retrying SDL_VIDEODRIVER={driver}.", file=sys.stderr, flush=True)
+            surface, err = _try_set_mode(width, height, flags, driver)
+            if surface is not None:
+                return surface
+            if err is not None:
+                last_err = err
+                print(f"BigA: {driver} failed ({err!s}).", file=sys.stderr, flush=True)
+
+        print(
+            "BigA: no usable SDL video device. Check: ls -l /dev/dri/card* /dev/fb0; "
+            "Bookworm needs vc4-kms-dpi-generic (KMS) and BIGA_SDL_VIDEO=kmsdrm; "
+            "reboot after config.txt changes.",
+            file=sys.stderr,
+            flush=True,
+        )
+        raise last_err from first
 
 
 def _debug_hud_enabled() -> bool:

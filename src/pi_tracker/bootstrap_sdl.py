@@ -10,51 +10,49 @@ import tempfile
 def configure_sdl() -> None:
     """
     Headless / text-VT Linux: default ``SDL_AUDIODRIVER`` to ``dummy`` so SDL_mixer
-    does not probe ALSA (extra threads; some pygame/SDL2 + fbcon builds mis-handle GIL).
+    does not probe ALSA (extra threads; some pygame/SDL2 builds mis-handle the GIL).
 
-    Video driver is **not** forced here: SPI panels often need ``SDL_VIDEODRIVER=fbcon``
-    (no KMSDRM). HDMI / DSI DRM on Bookworm can use KMSDRM explicitly::
+    Video driver (target = **Bookworm + KMS**):
 
-        BIGA_SDL_VIDEO=kmsdrm
+    * Default backend is **KMSDRM** (``/dev/dri/card*``). The panel uses
+      ``vc4-kms-dpi-generic``, so KMS is the correct path on Bookworm.
+    * Override with ``BIGA_SDL_VIDEO``:
+        - ``kmsdrm`` (default) → ``SDL_VIDEODRIVER=KMSDRM``, ``SDL_FBDEV`` cleared.
+        - ``fbcon``           → legacy framebuffer (Bullseye / SPI panels).
+        - any other value     → forced verbatim into ``SDL_VIDEODRIVER``.
 
-    That sets ``SDL_VIDEODRIVER=KMSDRM`` and clears ``SDL_FBDEV`` (not used by KMS).
+    Legacy ``fbcon`` is still selectable but is a known source of pygame/SDL GIL
+    crashes on the Pi (pygame#3687); prefer KMSDRM on Bookworm.
 
-    ``fbcon`` + pygame on Pi is a known source of ``PyEval_SaveThread`` crashes
-    (see pygame#3687); prefer KMSDRM when your hardware supports it, or try a
-    newer pygame / pygame-ce build when you must use fbcon.
+    If ``DISPLAY`` / ``WAYLAND_DISPLAY`` is set (desktop session), the driver is
+    left to the environment and only ``setdefault`` calls apply.
 
-    If ``DISPLAY`` or ``WAYLAND_DISPLAY`` is set (desktop session), only generic
-    ``setdefault`` calls apply and your environment wins.
-
-    Headless Linux also sets a private ``XDG_RUNTIME_DIR`` under ``/tmp`` when unset, so SDL
-    does not spam the log when probing session/Wayland paths on fbcon-only systems.
+    Headless Linux also sets a private ``XDG_RUNTIME_DIR`` under ``/tmp`` when unset
+    (KMSDRM/SDL probe session paths) to avoid noisy log spam.
     """
     if not sys.platform.startswith("linux"):
         return
-    if not (os.environ.get("DISPLAY") or os.environ.get("WAYLAND_DISPLAY")):
-        os.environ.setdefault("SDL_AUDIODRIVER", "dummy")
-        # SDL 2 still probes session paths; avoids noisy "XDG_RUNTIME_DIR" errors on fbcon-only Pi.
-        if not os.environ.get("XDG_RUNTIME_DIR"):
-            rt = os.path.join(tempfile.gettempdir(), f"biga-xdg-{os.getuid()}")
-            try:
-                os.makedirs(rt, mode=0o700, exist_ok=True)
-            except OSError:
-                pass
-            else:
-                os.environ["XDG_RUNTIME_DIR"] = rt
-
     if os.environ.get("DISPLAY") or os.environ.get("WAYLAND_DISPLAY"):
         return
 
-    mode = os.environ.get("BIGA_SDL_VIDEO", "").strip().lower()
+    os.environ.setdefault("SDL_AUDIODRIVER", "dummy")
+    if not os.environ.get("XDG_RUNTIME_DIR"):
+        rt = os.path.join(tempfile.gettempdir(), f"biga-xdg-{os.getuid()}")
+        try:
+            os.makedirs(rt, mode=0o700, exist_ok=True)
+        except OSError:
+            pass
+        else:
+            os.environ["XDG_RUNTIME_DIR"] = rt
+
+    mode = os.environ.get("BIGA_SDL_VIDEO", "kmsdrm").strip().lower()
     if mode == "kmsdrm":
         os.environ["SDL_VIDEODRIVER"] = "KMSDRM"
         os.environ.pop("SDL_FBDEV", None)
+        os.environ.pop("FRAMEBUFFER", None)
     elif mode == "fbcon":
         os.environ["SDL_VIDEODRIVER"] = "fbcon"
         os.environ.setdefault("SDL_FBDEV", "/dev/fb0")
-
-    # Some SDL/fbcon stacks look for FRAMEBUFFER as well as SDL_FBDEV.
-    if os.environ.get("SDL_VIDEODRIVER", "").strip().lower() == "fbcon":
-        fbdev = os.environ.get("SDL_FBDEV", "/dev/fb0")
-        os.environ.setdefault("FRAMEBUFFER", fbdev)
+        os.environ.setdefault("FRAMEBUFFER", os.environ["SDL_FBDEV"])
+    elif mode:
+        os.environ["SDL_VIDEODRIVER"] = mode
