@@ -299,6 +299,8 @@ To change the team for the **service**, edit the launch line in
 | `BIGA_SDL_VIDEO` | `kmsdrm` | SDL backend: `kmsdrm` (Bookworm) or `fbcon` (Bullseye). |
 | `BIGA_SCREEN_WIDTH` | `480` | Display width (px). |
 | `BIGA_SCREEN_HEIGHT` | `320` | Display height (px). |
+| `BIGA_UI_SCALE` | `1.15` | Readability multiplier for all fonts, logos, and the linescore table. `1.0` = original size; higher = bigger. Clamped 0.6–2.0. |
+| `BIGA_LINESCORE_SCALE` | `1.3` | Extra size multiplier for the linescore/score table only (on top of `BIGA_UI_SCALE`). Clamped 0.6–2.5. |
 | `BIGA_WIN_LED_GPIO` | `19` | NeoPixel data pin (BCM). |
 | `BIGA_WIN_LED_COUNT` | `16` | NeoPixel count. |
 | `BIGA_WIN_LED_BRIGHTNESS` | `96` | NeoPixel brightness (0–255). |

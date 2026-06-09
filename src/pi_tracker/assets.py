@@ -154,7 +154,9 @@ class AssetManager:
         self.font_score = _repo_font(config.layout_size(38))
         self.font_ui = _repo_font(config.layout_size(14))
         self.font_small = _repo_font(config.layout_size(11))
-        self.font_linescore = _repo_font(config.layout_size(11))
+        self.font_linescore = _repo_font(
+            max(1, int(round(config.layout_size(11) * config.LINESCORE_SCALE)))
+        )
         self.font_idle_clock = _repo_font(config.layout_size(22))
 
         self.logos.clear()

@@ -29,12 +29,34 @@ def _env_positive_int(name: str, default: int) -> int:
         return default
 
 
+def _env_float(name: str, default: float, *, lo: float, hi: float) -> float:
+    raw = os.environ.get(name, "").strip()
+    if not raw:
+        return default
+    try:
+        v = float(raw)
+    except ValueError:
+        return default
+    return max(lo, min(hi, v))
+
+
 SCREEN_WIDTH = _env_positive_int("BIGA_SCREEN_WIDTH", 480)
 SCREEN_HEIGHT = _env_positive_int("BIGA_SCREEN_HEIGHT", 320)
 
 # Layout reference: 480×320 landscape (Waveshare / Pi Zero panel).
 LAYOUT_REF_WIDTH = 480
 LAYOUT_REF_HEIGHT = 320
+
+# Global readability multiplier applied to every sized element (fonts, logos,
+# the linescore table, size-based gaps) via ``layout_size``. Positions
+# (``layout_x`` / ``layout_y``) are unaffected, so elements grow in place.
+# Tune with BIGA_UI_SCALE (e.g. 1.0 = original, 1.25 = bigger). Clamped 0.6–2.0.
+UI_SCALE = _env_float("BIGA_UI_SCALE", 1.15, lo=0.6, hi=2.0)
+
+# Extra multiplier applied ONLY to the linescore table (on top of UI_SCALE).
+# The table sizes itself from its font, so this grows cells + rows together.
+# Tune with BIGA_LINESCORE_SCALE. Clamped 0.6–2.5.
+LINESCORE_SCALE = _env_float("BIGA_LINESCORE_SCALE", 1.3, lo=0.6, hi=2.5)
 
 
 def layout_scale() -> float:
@@ -43,8 +65,11 @@ def layout_scale() -> float:
 
 
 def layout_size(base: int) -> int:
-    """Scale a pixel size (logo, font, margin) for the current resolution."""
-    return max(1, int(round(base * layout_scale())))
+    """Scale a pixel size (logo, font, margin) for the current resolution.
+
+    Includes the global ``UI_SCALE`` readability multiplier.
+    """
+    return max(1, int(round(base * layout_scale() * UI_SCALE)))
 
 
 def layout_x(x_for_ref: int) -> int:
