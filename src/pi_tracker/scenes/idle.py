@@ -68,7 +68,7 @@ def _blit_matchup_row(
 
 class IdleScene:
     def draw(self, screen: pygame.Surface, assets: AssetManager, state: dict[str, Any]) -> None:
-        screen.fill(config.BLACK)
+        assets.draw_background(screen)
 
         # Idle hero: tracked franchise logo + name (not the generic "home" club from state).
         logo = assets.logos.get(TRACKED_TEAM_ID)

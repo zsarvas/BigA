@@ -122,6 +122,21 @@ def scale_surface(surf: pygame.Surface, size: tuple[int, int]) -> pygame.Surface
     return pygame.transform.smoothscale(_ensure_scalable_surface(surf), size)
 
 
+def _cover_scale(img: pygame.Surface, dest: tuple[int, int]) -> pygame.Surface:
+    """Scale ``img`` to fully cover ``dest`` (keep aspect, crop overflow), centered."""
+    img = _ensure_scalable_surface(img)
+    dw, dh = dest
+    iw, ih = img.get_size()
+    if iw <= 0 or ih <= 0:
+        return scale_surface(img, dest)
+    scale = max(dw / iw, dh / ih)
+    nw, nh = max(1, int(round(iw * scale))), max(1, int(round(ih * scale)))
+    scaled = scale_surface(img, (nw, nh))
+    out = pygame.Surface(dest)
+    out.blit(scaled, ((dw - nw) // 2, (dh - nh) // 2))
+    return out
+
+
 def _letterbox_logo(img: pygame.Surface, dest: tuple[int, int]) -> pygame.Surface:
     """Scale ``img`` to fit inside ``dest`` (keep aspect); center on transparent square."""
     img = _ensure_scalable_surface(img)
@@ -147,6 +162,8 @@ class AssetManager:
         self.font_linescore: pygame.font.Font
         self.font_idle_clock: pygame.font.Font
         self.logos: dict[int, pygame.Surface] = {}
+        self.background_src: pygame.Surface | None = None
+        self._bg_cache: dict[tuple[int, int], pygame.Surface] = {}
 
     def load(self, team_ids: set[int]) -> None:
         pygame.font.init()
@@ -158,6 +175,16 @@ class AssetManager:
             max(1, int(round(config.layout_size(11) * config.LINESCORE_SCALE)))
         )
         self.font_idle_clock = _repo_font(config.layout_size(22))
+
+        self.background_src = None
+        self._bg_cache.clear()
+        if config.BG_IMAGE:
+            bg_path = config.ASSETS_DIR / config.BG_IMAGE
+            if bg_path.is_file():
+                try:
+                    self.background_src = pygame.image.load(str(bg_path)).convert()
+                except Exception as exc:  # noqa: BLE001 - missing/corrupt image is non-fatal
+                    warnings.warn(f"{bg_path.name}: could not load background ({exc})", stacklevel=1)
 
         self.logos.clear()
         for tid in team_ids:
@@ -181,3 +208,27 @@ class AssetManager:
                     tid_s.get_rect(center=(surf.get_width() // 2, surf.get_height() // 2)),
                 )
                 self.logos[tid] = surf
+
+    def background_for(self, size: tuple[int, int]) -> pygame.Surface | None:
+        """Cover-scaled background for ``size``, or ``None`` if no image is loaded."""
+        if self.background_src is None:
+            return None
+        cached = self._bg_cache.get(size)
+        if cached is None:
+            cached = _cover_scale(self.background_src, size)
+            if config.BG_DIM > 0:
+                scrim = pygame.Surface(size, pygame.SRCALPHA)
+                scrim.fill((0, 0, 0, config.BG_DIM))
+                cached.blit(scrim, (0, 0))
+            self._bg_cache[size] = cached
+        return cached
+
+    def draw_background(
+        self, screen: pygame.Surface, fallback: tuple[int, int, int] = config.BLACK
+    ) -> None:
+        """Blit the stadium background (dimmed) or fill ``fallback`` if unavailable."""
+        bg = self.background_for(screen.get_size())
+        if bg is None:
+            screen.fill(fallback)
+        else:
+            screen.blit(bg, (0, 0))

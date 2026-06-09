@@ -40,6 +40,17 @@ def _env_float(name: str, default: float, *, lo: float, hi: float) -> float:
     return max(lo, min(hi, v))
 
 
+def _env_clamp_int(name: str, default: int, *, lo: int, hi: int) -> int:
+    raw = os.environ.get(name, "").strip()
+    if not raw:
+        return default
+    try:
+        v = int(raw, 10)
+    except ValueError:
+        return default
+    return max(lo, min(hi, v))
+
+
 SCREEN_WIDTH = _env_positive_int("BIGA_SCREEN_WIDTH", 480)
 SCREEN_HEIGHT = _env_positive_int("BIGA_SCREEN_HEIGHT", 320)
 
@@ -57,6 +68,12 @@ UI_SCALE = _env_float("BIGA_UI_SCALE", 1.15, lo=0.6, hi=2.0)
 # The table sizes itself from its font, so this grows cells + rows together.
 # Tune with BIGA_LINESCORE_SCALE. Clamped 0.6–2.5.
 LINESCORE_SCALE = _env_float("BIGA_LINESCORE_SCALE", 1.3, lo=0.6, hi=2.5)
+
+# Background image (in assets/) drawn behind scenes instead of a flat fill.
+# Empty string disables it (falls back to BLACK). BIGA_BG_DIM is a 0–255 black
+# scrim drawn over the image to keep text readable (higher = darker/easier).
+BG_IMAGE = os.environ.get("BIGA_BG_IMAGE", "stadium.jpg").strip()
+BG_DIM = _env_clamp_int("BIGA_BG_DIM", 130, lo=0, hi=255)
 
 
 def layout_scale() -> float:
