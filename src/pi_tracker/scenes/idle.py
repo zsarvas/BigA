@@ -86,10 +86,10 @@ class IdleScene:
         title = assets.font_title.render(nm, True, config.ANGELS_GOLD)
         screen.blit(title, title.get_rect(center=(config.SCREEN_WIDTH // 2, logo_y + 16)))
 
-        y = logo_y + config.layout_y(42)
+        y = logo_y + config.layout_y(46)
         label = assets.font_small.render("NEXT GAME", True, config.ANGELS_GOLD)
         screen.blit(label, label.get_rect(center=(config.SCREEN_WIDTH // 2, y)))
-        y += config.layout_y(18)
+        y += config.layout_y(28)
 
         status = str(state.get("schedule_status", "loading"))
 
@@ -122,11 +122,13 @@ class IdleScene:
 
             if date_txt:
                 y = _blit_wrapped_center(screen, assets.font_ui, date_txt, y, config.WHITE, 40)
+                y += config.layout_y(12)
             if time_txt:
                 t_surf = assets.font_idle_clock.render(time_txt, True, config.WHITE)
                 screen.blit(t_surf, t_surf.get_rect(center=(config.SCREEN_WIDTH // 2, y + 14)))
-                y += config.layout_y(32)
+                y += config.layout_y(42)
             if matchup:
-                y = _blit_matchup_row(screen, assets, matchup, opp_id, y + 10)
+                y = _blit_matchup_row(screen, assets, matchup, opp_id, y + config.layout_y(16))
+                y += config.layout_y(10)
             if venue:
                 y = _blit_wrapped_center(screen, assets.font_small, venue, y, config.GRAY, 48)
