@@ -50,6 +50,39 @@ def _truncate(s: str, max_chars: int) -> str:
     return s if len(s) <= max_chars else s[: max_chars - 1] + "…"
 
 
+def _last_name(full: str) -> str:
+    """Compact display name: surname only (keeps room for the stat line)."""
+    full = full.strip()
+    if not full or full == "—":
+        return full or "—"
+    return full.split()[-1]
+
+
+def _fmt_pitcher_stats(state: dict[str, Any]) -> str:
+    """e.g. ``5.2 IP  7K  2BB  87p`` — empty if the pitcher has no boxscore line yet."""
+    ip = str(state.get("pitcher_ip", "")).strip()
+    if not ip:
+        return ""
+    parts = [f"{ip} IP", f"{int(state.get('pitcher_k', 0) or 0)}K", f"{int(state.get('pitcher_bb', 0) or 0)}BB"]
+    pitches = int(state.get("pitcher_pitches", 0) or 0)
+    if pitches:
+        parts.append(f"{pitches}p")
+    return "  ".join(parts)
+
+
+def _fmt_batter_stats(state: dict[str, Any]) -> str:
+    """e.g. ``1-3  1 RBI`` — empty if the batter has no boxscore line yet."""
+    ab = state.get("batter_ab")
+    if ab is None:
+        return ""
+    hits = int(state.get("batter_hits", 0) or 0)
+    out = f"{hits}-{int(ab or 0)}"
+    rbi = int(state.get("batter_rbi", 0) or 0)
+    if rbi:
+        out += f"  {rbi} RBI"
+    return out
+
+
 def _tiny_team_logo(assets: AssetManager, team_id: int) -> pygame.Surface | None:
     if team_id <= 0:
         return None
@@ -67,19 +100,25 @@ def _blit_pb_line(
     team_id: int,
     y: int,
     x0: int = 12,
+    stats: str = "",
 ) -> None:
-    label = f"{label_prefix}: {name}"
-    surf = assets.font_small.render(label, True, config.WHITE)
+    font = assets.font_small
+    surf = font.render(f"{label_prefix}: {name}", True, config.WHITE)
     tiny = _tiny_team_logo(assets, team_id)
     if tiny is None:
-        screen.blit(surf, (x0, y))
-        return
-    row_h = max(surf.get_height(), tiny.get_height())
-    y0 = y + (row_h - tiny.get_height()) // 2
-    screen.blit(tiny, (x0, y0))
-    sx = x0 + tiny.get_width() + PB_LOGO_GAP
-    sy = y + (row_h - surf.get_height()) // 2
-    screen.blit(surf, (sx, sy))
+        text_x = x0
+        row_h = surf.get_height()
+        sy = y
+        screen.blit(surf, (text_x, sy))
+    else:
+        row_h = max(surf.get_height(), tiny.get_height())
+        screen.blit(tiny, (x0, y + (row_h - tiny.get_height()) // 2))
+        text_x = x0 + tiny.get_width() + PB_LOGO_GAP
+        sy = y + (row_h - surf.get_height()) // 2
+        screen.blit(surf, (text_x, sy))
+    if stats:
+        stat_surf = font.render("  " + stats, True, config.GRAY)
+        screen.blit(stat_surf, (text_x + surf.get_width(), sy))
 
 
 class LiveScene:
@@ -191,10 +230,12 @@ class LiveScene:
         diamond_cy = tbl_top + h_tbl // 2
         draw_diamond(screen, runners, diamond_cx, diamond_cy, size=rsize)
 
-        p = _truncate(str(state.get("pitcher_name", "—")), 34)
-        b = _truncate(str(state.get("batter_name", "—")), 34)
+        p = _truncate(_last_name(str(state.get("pitcher_name", "—"))), 16)
+        b = _truncate(_last_name(str(state.get("batter_name", "—"))), 16)
         pit_tid = int(state.get("pitcher_team_id") or 0)
         bat_tid = int(state.get("batter_team_id") or 0)
+        p_stats = _fmt_pitcher_stats(state)
+        b_stats = _fmt_batter_stats(state)
 
         last = str(state.get("last_play", "")).strip()
         if last:
@@ -223,5 +264,21 @@ class LiveScene:
                 surf = font.render(part, True, config.GRAY)
                 screen.blit(surf, (PLAY_TEXT_X, y_first + i * line_h))
 
-        _blit_pb_line(screen, assets, "P", p, pit_tid, config.SCREEN_HEIGHT - PITCHER_ROW_FROM_BOTTOM)
-        _blit_pb_line(screen, assets, "B", b, bat_tid, config.SCREEN_HEIGHT - BATTER_ROW_FROM_BOTTOM)
+        _blit_pb_line(
+            screen,
+            assets,
+            "P",
+            p,
+            pit_tid,
+            config.SCREEN_HEIGHT - PITCHER_ROW_FROM_BOTTOM,
+            stats=p_stats,
+        )
+        _blit_pb_line(
+            screen,
+            assets,
+            "B",
+            b,
+            bat_tid,
+            config.SCREEN_HEIGHT - BATTER_ROW_FROM_BOTTOM,
+            stats=b_stats,
+        )
