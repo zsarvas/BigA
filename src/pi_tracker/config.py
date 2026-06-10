@@ -75,6 +75,13 @@ LINESCORE_SCALE = _env_float("BIGA_LINESCORE_SCALE", 1.3, lo=0.6, hi=2.5)
 BG_IMAGE = os.environ.get("BIGA_BG_IMAGE", "stadium.jpg").strip()
 BG_DIM = _env_clamp_int("BIGA_BG_DIM", 130, lo=0, hi=255)
 
+# Highlight clip streamed full-screen during the idle scene at random intervals
+# (decoded frame-by-frame to keep RAM low — see assets.StreamingGif). Empty string
+# disables it. Plays roughly HIGHLIGHT_MIN..MAX minutes apart (default 20–30 → ~2–3/hr).
+HIGHLIGHT_GIF = os.environ.get("BIGA_HIGHLIGHT_GIF", "highlight.gif").strip()
+HIGHLIGHT_MIN_GAP_MIN = _env_clamp_int("BIGA_HIGHLIGHT_MIN_MIN", 20, lo=1, hi=720)
+HIGHLIGHT_MAX_GAP_MIN = _env_clamp_int("BIGA_HIGHLIGHT_MAX_MIN", 30, lo=1, hi=720)
+
 
 def layout_scale() -> float:
     """Uniform scale vs. the 480×320 reference panel."""

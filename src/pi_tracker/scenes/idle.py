@@ -1,12 +1,13 @@
 from __future__ import annotations
 
+import random
 import textwrap
 from typing import Any
 
 import pygame
 
 from .. import config
-from ..assets import AssetManager, scale_surface
+from ..assets import AssetManager, StreamingGif, scale_surface
 from ..mlb_http import ANGELS_TEAM_ID as TRACKED_TEAM_ID
 from ..team_config import tracked_team_abbr, tracked_team_name
 
@@ -67,7 +68,78 @@ def _blit_matchup_row(
 
 
 class IdleScene:
+    """Next-game info; occasionally streams a full-screen highlight clip (see config)."""
+
+    def __init__(self) -> None:
+        self._hl: StreamingGif | None = None
+        self._hl_loaded = False
+        self._playing = False
+        self._frame_idx = 0
+        self._cur_frame: pygame.Surface | None = None
+        self._frame_deadline_ms = 0
+        self._next_play_ms: int | None = None
+
+    def _rand_gap_ms(self) -> int:
+        lo = config.HIGHLIGHT_MIN_GAP_MIN
+        hi = max(lo, config.HIGHLIGHT_MAX_GAP_MIN)
+        return random.randint(lo, hi) * 60_000
+
+    def _highlight(self, size: tuple[int, int]) -> StreamingGif | None:
+        if not self._hl_loaded:
+            self._hl_loaded = True
+            if config.HIGHLIGHT_GIF:
+                path = config.ASSETS_DIR / config.HIGHLIGHT_GIF
+                self._hl = StreamingGif(path, size) if path.is_file() else None
+        return self._hl
+
+    def _maybe_play_highlight(self, screen: pygame.Surface) -> bool:
+        """Advance/stream the highlight clip. Returns True if a frame was drawn this tick."""
+        now = pygame.time.get_ticks()
+        if self._next_play_ms is None:
+            self._next_play_ms = now + self._rand_gap_ms()
+
+        if not self._playing and now >= self._next_play_ms:
+            hl = self._highlight(screen.get_size())
+            if hl and hl.ok:
+                surf, dur = hl.decode(0)
+                if surf is not None:
+                    self._playing = True
+                    self._frame_idx = 0
+                    self._cur_frame = surf
+                    self._frame_deadline_ms = now + dur
+                else:
+                    self._next_play_ms = now + self._rand_gap_ms()
+            else:
+                self._next_play_ms = now + self._rand_gap_ms()
+
+        if not self._playing:
+            return False
+
+        if now >= self._frame_deadline_ms and self._hl is not None:
+            self._frame_idx += 1
+            if self._frame_idx >= self._hl.n_frames:
+                self._playing = False
+                self._cur_frame = None
+                self._next_play_ms = now + self._rand_gap_ms()
+                return False
+            surf, dur = self._hl.decode(self._frame_idx)
+            if surf is None:
+                self._playing = False
+                self._cur_frame = None
+                self._next_play_ms = now + self._rand_gap_ms()
+                return False
+            self._cur_frame = surf
+            self._frame_deadline_ms = now + dur
+
+        if self._cur_frame is not None:
+            screen.blit(self._cur_frame, (0, 0))
+            return True
+        return False
+
     def draw(self, screen: pygame.Surface, assets: AssetManager, state: dict[str, Any]) -> None:
+        if self._maybe_play_highlight(screen):
+            return
+
         assets.draw_background(screen)
 
         # Idle hero: tracked franchise logo + name (not the generic "home" club from state).

@@ -13,7 +13,7 @@ from .linescore_table import draw_linescore_table_centered
 
 class FinalWinScene:
     def draw(self, screen: pygame.Surface, assets: AssetManager, state: dict[str, Any]) -> None:
-        screen.fill((12, 40, 12))
+        assets.draw_gif_background(screen, "win.gif", pygame.time.get_ticks(), fallback=(12, 40, 12))
         draw_score_with_flanking_logos(
             screen, assets, state, y_center=config.layout_y(72), score_color=config.ANGELS_GOLD
         )
