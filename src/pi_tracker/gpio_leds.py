@@ -34,6 +34,10 @@ import time
 log = logging.getLogger(__name__)
 
 
+def _env_bool(name: str) -> bool:
+    return os.environ.get(name, "").strip().lower() in ("1", "true", "yes", "on")
+
+
 def _env_int(name: str, default: int, lo: int | None = None, hi: int | None = None) -> int:
     raw = os.environ.get(name, "").strip()
     if not raw:
@@ -52,6 +56,10 @@ def _env_int(name: str, default: int, lo: int | None = None, hi: int | None = No
 _WIN_LED_GPIO = _env_int("BIGA_WIN_LED_GPIO", 19)
 _WIN_LED_COUNT = _env_int("BIGA_WIN_LED_COUNT", 16, lo=1, hi=600)
 _WIN_LED_BRIGHTNESS = _env_int("BIGA_WIN_LED_BRIGHTNESS", 96, lo=0, hi=255)
+# Debug: light every configured LED solid at all times (ignores scene). Use to
+# verify wiring / strip length, then unset. BIGA_LED_DEBUG=1 enables.
+_LED_DEBUG = _env_bool("BIGA_LED_DEBUG")
+_LED_DEBUG_COLOR = (255, 255, 255)
 # rpi_ws281x defaults that are safe for WS2812B-style strips.
 _LED_FREQ_HZ = 800_000
 _LED_INVERT = False
@@ -122,7 +130,18 @@ def init_gpio() -> None:
             strip.begin()
             _strip = strip
             _initialized = True
-            _fill_blocking((0, 0, 0))
+            if _LED_DEBUG:
+                # Solid-on diagnostic: confirms how many physical LEDs the configured
+                # count actually drives. Bump BIGA_WIN_LED_COUNT until the whole strip lights.
+                print(
+                    f"[biga] LED DEBUG: lighting {_WIN_LED_COUNT} LEDs solid on "
+                    f"GPIO {_WIN_LED_GPIO} (ch {channel}). Set BIGA_WIN_LED_COUNT to your "
+                    "strip length.",
+                    flush=True,
+                )
+                _fill_blocking(_LED_DEBUG_COLOR)
+            else:
+                _fill_blocking((0, 0, 0))
         except Exception as e:  # noqa: BLE001
             log.warning("NeoPixel init failed (pin %s ch %s): %s", _WIN_LED_GPIO, channel, e)
 
@@ -186,6 +205,11 @@ def _animate_loop(stop: threading.Event) -> None:
 def set_win_led(active: bool) -> None:
     """Start (active=True) or stop (active=False) the win animation."""
     global _win_active, _anim_thread
+    if _LED_DEBUG:
+        # Debug mode keeps the whole strip solid-on regardless of scene.
+        if not _initialized:
+            init_gpio()
+        return
     with _lock:
         if active == _win_active:
             return
