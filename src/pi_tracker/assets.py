@@ -122,6 +122,106 @@ def scale_surface(surf: pygame.Surface, size: tuple[int, int]) -> pygame.Surface
     return pygame.transform.smoothscale(_ensure_scalable_surface(surf), size)
 
 
+class GifAnimation:
+    """Decoded animated GIF: cover-scaled frames + per-frame durations (ms)."""
+
+    def __init__(self, frames: list[pygame.Surface], durations_ms: list[int]) -> None:
+        self.frames = frames
+        self.durations = durations_ms
+        self.total_ms = max(1, sum(durations_ms))
+
+    def frame_at(self, t_ms: int) -> pygame.Surface | None:
+        """Frame for elapsed time ``t_ms`` (loops)."""
+        if not self.frames:
+            return None
+        t = t_ms % self.total_ms
+        acc = 0
+        for surf, d in zip(self.frames, self.durations):
+            acc += d
+            if t < acc:
+                return surf
+        return self.frames[-1]
+
+
+def _load_gif_cover(path: Path, dest: tuple[int, int]) -> GifAnimation | None:
+    """Decode ``path`` to cover-scaled pygame frames via Pillow, or ``None`` on failure."""
+    try:
+        from PIL import Image
+    except ImportError:
+        warnings.warn(
+            f'{path.name}: animated background needs Pillow ("pip install pillow").', stacklevel=1
+        )
+        return None
+    try:
+        im = Image.open(str(path))
+    except Exception as exc:  # noqa: BLE001 - missing/corrupt gif is non-fatal
+        warnings.warn(f"{path.name}: could not open gif ({exc})", stacklevel=1)
+        return None
+
+    frames: list[pygame.Surface] = []
+    durations: list[int] = []
+    n = getattr(im, "n_frames", 1)
+    for i in range(n):
+        try:
+            im.seek(i)
+        except EOFError:
+            break
+        rgba = im.convert("RGBA")
+        surf = pygame.image.fromstring(rgba.tobytes(), rgba.size, "RGBA")
+        frames.append(_cover_scale(surf, dest))
+        durations.append(int(im.info.get("duration", 100)) or 100)
+    if not frames:
+        return None
+    return GifAnimation(frames, durations)
+
+
+class StreamingGif:
+    """Frame-by-frame GIF player: decodes one frame at a time (low RAM, for long clips).
+
+    Keeps the Pillow image handle open and decodes/cover-scales the requested frame on
+    demand. Resident memory is ~one frame, unlike ``GifAnimation`` which preloads all.
+    """
+
+    def __init__(self, path: Path, size: tuple[int, int]) -> None:
+        self.size = size
+        self.n_frames = 0
+        self.ok = False
+        self._im = None
+        try:
+            from PIL import Image
+        except ImportError:
+            warnings.warn(
+                f'{path.name}: highlight clip needs Pillow ("pip install pillow").', stacklevel=1
+            )
+            return
+        try:
+            self._im = Image.open(str(path))
+            self.n_frames = getattr(self._im, "n_frames", 1)
+            self.ok = self.n_frames > 0
+        except Exception as exc:  # noqa: BLE001 - missing/corrupt gif is non-fatal
+            warnings.warn(f"{path.name}: could not open gif ({exc})", stacklevel=1)
+            self.ok = False
+
+    def decode(self, index: int) -> tuple[pygame.Surface | None, int]:
+        """Decode frame ``index`` → (display-format surface, duration_ms), or (None, 0)."""
+        if not self.ok or self._im is None:
+            return None, 0
+        try:
+            self._im.seek(index)
+        except (EOFError, OSError):
+            return None, 0
+        rgba = self._im.convert("RGBA")
+        surf = pygame.image.fromstring(rgba.tobytes(), rgba.size, "RGBA")
+        if surf.get_size() != self.size:
+            surf = _cover_scale(surf, self.size)
+        try:
+            surf = surf.convert()  # opaque display format: faster blit, smaller resident frame
+        except pygame.error:
+            pass
+        dur = int(self._im.info.get("duration", 83)) or 83
+        return surf, dur
+
+
 def _cover_scale(img: pygame.Surface, dest: tuple[int, int]) -> pygame.Surface:
     """Scale ``img`` to fully cover ``dest`` (keep aspect, crop overflow), centered."""
     img = _ensure_scalable_surface(img)
@@ -164,6 +264,7 @@ class AssetManager:
         self.logos: dict[int, pygame.Surface] = {}
         self.background_src: pygame.Surface | None = None
         self._bg_cache: dict[tuple[int, int], pygame.Surface] = {}
+        self._gif_cache: dict[tuple[str, tuple[int, int]], GifAnimation | None] = {}
 
     def load(self, team_ids: set[int]) -> None:
         pygame.font.init()
@@ -232,3 +333,23 @@ class AssetManager:
             screen.fill(fallback)
         else:
             screen.blit(bg, (0, 0))
+
+    def gif_animation(self, name: str, size: tuple[int, int]) -> GifAnimation | None:
+        """Lazy-load + cache an animated GIF from assets/, cover-scaled to ``size``."""
+        key = (name, size)
+        if key not in self._gif_cache:
+            path = config.ASSETS_DIR / name
+            self._gif_cache[key] = _load_gif_cover(path, size) if path.is_file() else None
+        return self._gif_cache[key]
+
+    def draw_gif_background(
+        self, screen: pygame.Surface, name: str, t_ms: int, fallback: tuple[int, int, int]
+    ) -> bool:
+        """Blit the current frame of ``name``; fill ``fallback`` if unavailable. Returns True if a frame drew."""
+        anim = self.gif_animation(name, screen.get_size())
+        frame = anim.frame_at(t_ms) if anim else None
+        if frame is None:
+            screen.fill(fallback)
+            return False
+        screen.blit(frame, (0, 0))
+        return True
