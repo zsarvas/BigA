@@ -54,6 +54,9 @@ def _env_clamp_int(name: str, default: int, *, lo: int, hi: int) -> int:
 SCREEN_WIDTH = _env_positive_int("BIGA_SCREEN_WIDTH", 480)
 SCREEN_HEIGHT = _env_positive_int("BIGA_SCREEN_HEIGHT", 320)
 
+# Base UI frame rate (kept low to save CPU on the Pi Zero).
+FPS = 10
+
 # Layout reference: 480×320 landscape (Waveshare / Pi Zero panel).
 LAYOUT_REF_WIDTH = 480
 LAYOUT_REF_HEIGHT = 320
@@ -81,6 +84,10 @@ BG_DIM = _env_clamp_int("BIGA_BG_DIM", 130, lo=0, hi=255)
 HIGHLIGHT_GIF = os.environ.get("BIGA_HIGHLIGHT_GIF", "highlight.gif").strip()
 HIGHLIGHT_MIN_GAP_MIN = _env_clamp_int("BIGA_HIGHLIGHT_MIN_MIN", 20, lo=1, hi=720)
 HIGHLIGHT_MAX_GAP_MIN = _env_clamp_int("BIGA_HIGHLIGHT_MAX_MIN", 30, lo=1, hi=720)
+# Frame rate while a highlight clip is streaming. The rest of the UI runs at FPS
+# (10) to save CPU; the clip is ~12 fps, so the loop must tick faster than that
+# during playback or it looks slow/choppy. Tune with BIGA_HIGHLIGHT_FPS.
+HIGHLIGHT_FPS = _env_clamp_int("BIGA_HIGHLIGHT_FPS", 24, lo=FPS, hi=60)
 
 
 def layout_scale() -> float:
@@ -108,8 +115,6 @@ def layout_y(y_for_ref: int) -> int:
 
 # Logo tile for header / final rows (scaled from 56px on 480×320).
 LOGO_HEADER_SIZE = (layout_size(56), layout_size(56))
-
-FPS = 10
 
 BLACK = (0, 0, 0)
 WHITE = (255, 255, 255)

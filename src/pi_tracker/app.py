@@ -394,7 +394,12 @@ def main() -> None:
                 )
             pygame.display.flip()
 
-            clock.tick(config.FPS)
+            # A streaming highlight needs a faster tick than the clip's native rate
+            # or it looks slow/choppy; everything else runs at the low base FPS.
+            tick_fps = config.FPS
+            if scene_key == "idle" and getattr(scene, "_playing", False):
+                tick_fps = config.HIGHLIGHT_FPS
+            clock.tick(tick_fps)
             frame_i += 1
     finally:
         set_win_led(False)
