@@ -81,6 +81,22 @@ def _pitcher_batter_team_ids(
     return pit, bat
 
 
+def _boxscore_stat_group(feed: dict[str, Any], player_id: Any, group: str) -> dict[str, Any]:
+    """Per-game stats for ``player_id`` (``group`` = ``pitching`` / ``batting``) from boxscore."""
+    if not player_id:
+        return {}
+    box = (feed.get("liveData") or {}).get("boxscore") or {}
+    teams = box.get("teams") or {}
+    for side in ("away", "home"):
+        players = (teams.get(side) or {}).get("players") or {}
+        pl = players.get(f"ID{player_id}")
+        if isinstance(pl, dict):
+            stats = pl.get("stats") or {}
+            g = stats.get(group)
+            return g if isinstance(g, dict) else {}
+    return {}
+
+
 def _inning_runs_cell(value: Any) -> str:
     if value is None or value == "":
         return "-"
@@ -193,6 +209,18 @@ def live_feed_to_state_patch(feed: dict[str, Any]) -> dict[str, Any]:
     if pitcher_id:
         pitcher = str((players.get(f"ID{pitcher_id}", {}) or {}).get("fullName") or "—")
 
+    pst = _boxscore_stat_group(feed, pitcher_id, "pitching")
+    bst = _boxscore_stat_group(feed, batter_id, "batting")
+    pitcher_ip = str(pst.get("inningsPitched", "") or "").strip()
+    pitcher_k = _safe_int(pst.get("strikeOuts")) or 0
+    pitcher_bb = _safe_int(pst.get("baseOnBalls")) or 0
+    pitcher_pitches = _safe_int(pst.get("numberOfPitches"))
+    if pitcher_pitches is None:
+        pitcher_pitches = _safe_int(pst.get("pitchesThrown")) or 0
+    batter_ab = _safe_int(bst.get("atBats")) if bst else None
+    batter_hits = _safe_int(bst.get("hits")) or 0
+    batter_rbi = _safe_int(bst.get("rbi")) or 0
+
     current = plays.get("currentPlay") or {}
     count = current.get("count") or {}
     balls = int(count.get("balls", 0) or 0)
@@ -241,6 +269,13 @@ def live_feed_to_state_patch(feed: dict[str, Any]) -> dict[str, Any]:
         "batter_name": batter,
         "pitcher_team_id": pit_tid,
         "batter_team_id": bat_tid,
+        "pitcher_ip": pitcher_ip,
+        "pitcher_k": pitcher_k,
+        "pitcher_bb": pitcher_bb,
+        "pitcher_pitches": pitcher_pitches,
+        "batter_ab": batter_ab,
+        "batter_hits": batter_hits,
+        "batter_rbi": batter_rbi,
         **linescore_grid_from_feed(feed),
     }
     if last_play:
