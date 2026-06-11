@@ -249,7 +249,7 @@ Tunables (set in the service `Environment=` or your shell):
 | Variable | Default | Meaning |
 |----------|---------|---------|
 | `BIGA_WIN_LED_GPIO` | `19` | Data pin (BCM). Must be PWM/PCM-capable. |
-| `BIGA_WIN_LED_COUNT` | `16` | Number of LEDs. |
+| `BIGA_WIN_LED_COUNT` | `32` | Number of LEDs. |
 | `BIGA_WIN_LED_BRIGHTNESS` | `96` | 0–255. |
 
 Notes:
@@ -302,7 +302,7 @@ To change the team for the **service**, edit the launch line in
 | `BIGA_UI_SCALE` | `1.15` | Readability multiplier for all fonts, logos, and the linescore table. `1.0` = original size; higher = bigger. Clamped 0.6–2.0. |
 | `BIGA_LINESCORE_SCALE` | `1.3` | Extra size multiplier for the linescore/score table only (on top of `BIGA_UI_SCALE`). Clamped 0.6–2.5. |
 | `BIGA_WIN_LED_GPIO` | `19` | NeoPixel data pin (BCM). |
-| `BIGA_WIN_LED_COUNT` | `16` | NeoPixel count. |
+| `BIGA_WIN_LED_COUNT` | `32` | NeoPixel count. |
 | `BIGA_WIN_LED_BRIGHTNESS` | `96` | NeoPixel brightness (0–255). |
 | `BIGA_PANEL_INCLUDE` | `mzp351hv00tr-new.txt` | Panel file `setup.py` installs/includes. |
 | `BIGA_FONT_PATH` | (auto) | Override the TTF used for all text. |
