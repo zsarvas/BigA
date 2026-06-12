@@ -17,6 +17,7 @@ set ``BIGA_SDL_VIDEO=fbcon``; ``_open_pygame_window`` falls back across KMSDRM/f
 from __future__ import annotations
 
 import datetime
+import logging
 import os
 import sys
 import threading
@@ -276,7 +277,28 @@ def _demo_final_state() -> SharedGameState:
     return st
 
 
+def _configure_logging() -> None:
+    """Emit INFO+ logs (scene transitions, final lock/release) to stdout/biga.log.
+
+    Without this, the module-level ``log.info(...)`` calls are dropped and we have
+    no record of when the win/loss scene actually cuts over to idle.
+    """
+    if logging.getLogger().handlers:
+        return
+    level_name = os.environ.get("BIGA_LOG_LEVEL", "INFO").upper()
+    level = getattr(logging, level_name, logging.INFO)
+    logging.basicConfig(
+        level=level,
+        format="%(asctime)s %(levelname)s %(name)s: %(message)s",
+        stream=sys.stdout,
+    )
+    # Keep HTTP libraries quiet even at INFO.
+    for noisy in ("urllib3", "requests"):
+        logging.getLogger(noisy).setLevel(logging.WARNING)
+
+
 def main() -> None:
+    _configure_logging()
     # SDL video/audio driver env is applied in bootstrap_sdl.configure_sdl() before pygame import.
     demo_live = "--demo" in sys.argv or "--demo-live" in sys.argv
     demo_final = "--demo-final" in sys.argv

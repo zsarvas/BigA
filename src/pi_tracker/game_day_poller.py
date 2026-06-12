@@ -51,14 +51,19 @@ def _ensure_final_display_date(state: SharedGameState, snap: dict) -> date:
         return locked
     today = date.today()
     state.update(final_display_date=today.isoformat())
+    log.info(
+        "final scene locked: scene=%s final_display_date=%s",
+        snap.get("scene"),
+        today.isoformat(),
+    )
     return today
 
 
-def _release_to_idle(state: SharedGameState) -> None:
+def _release_to_idle(state: SharedGameState, locked: date, today: date) -> None:
     """New calendar day after final score — resume idle / next-game cycle."""
     state.update(scene="idle", final_display_date="")
     refresh_idle_schedule(state)
-    log.info("final display day ended; scene -> idle")
+    log.info("final display day ended (locked=%s today=%s); scene -> idle", locked, today)
 
 
 def _lock_final_patch(patch: dict) -> dict:
@@ -76,7 +81,7 @@ def _handle_final_scene(state: SharedGameState, snap: dict) -> float:
     locked = _ensure_final_display_date(state, snap)
     today = date.today()
     if today > locked:
-        _release_to_idle(state)
+        _release_to_idle(state, locked, today)
         return FINAL_DAYCHECK_SEC
 
     now = time.monotonic()
@@ -118,6 +123,11 @@ def game_day_loop(state: SharedGameState, stop: threading.Event) -> None:
 
                         patch.update(merge_linescore_patch_for_pk(int(pk)))
                     state.update(patch)
+                    log.info(
+                        "today's game already final: scene=%s final_display_date=%s",
+                        patch.get("scene"),
+                        patch.get("final_display_date"),
+                    )
                     continue
             elif scene == "live":
                 wait = LIVE_POLL_SEC
@@ -135,6 +145,11 @@ def game_day_loop(state: SharedGameState, stop: threading.Event) -> None:
                             patch["scene"] = "loss"
                         _lock_final_patch(patch)
                         state.update(patch)
+                        log.info(
+                            "game went final via live feed: scene=%s final_display_date=%s",
+                            patch.get("scene"),
+                            patch.get("final_display_date"),
+                        )
                     else:
                         patch["scene"] = "live"
                         state.update(patch)
