@@ -53,7 +53,7 @@ def _env_int(name: str, default: int, lo: int | None = None, hi: int | None = No
 
 
 _WIN_LED_GPIO = _env_int("BIGA_WIN_LED_GPIO", 19)
-_WIN_LED_COUNT = _env_int("BIGA_WIN_LED_COUNT", 32, lo=1, hi=600)
+_WIN_LED_COUNT = _env_int("BIGA_WIN_LED_COUNT", 30, lo=1, hi=600)
 _WIN_LED_BRIGHTNESS = _env_int("BIGA_WIN_LED_BRIGHTNESS", 96, lo=0, hi=255)
 # Debug: light every configured LED solid white at all times (ignores scene).
 # Use to verify wiring / strip length, then unset. BIGA_LED_DEBUG=1 enables.
