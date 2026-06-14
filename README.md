@@ -398,6 +398,48 @@ BigA/
 
 ---
 
+## Auto-update (daily cron)
+
+`scripts/update_biga.sh` checks origin/main every morning at 4 AM and pulls if the
+commit hash has changed, then restarts the service automatically.
+
+**One-time setup on the Pi:**
+
+```bash
+# Make the script executable
+chmod +x /home/pi/BigA/scripts/update_biga.sh
+
+# Add to root's crontab (service restart requires root)
+sudo crontab -e
+```
+
+Add this line:
+
+```
+0 4 * * * /home/pi/BigA/scripts/update_biga.sh
+```
+
+**Check the update log:**
+
+```bash
+sudo tail -f /var/log/biga_update.log
+```
+
+Sample output when an update is found:
+
+```
+[2026-06-15 04:00:01] --- update check start ---
+[2026-06-15 04:00:03] Update found: 41f7a76... -> 9ba38e4...
+[2026-06-15 04:00:05] Pull successful. Restarting biga service...
+[2026-06-15 04:00:06] Service restarted successfully.
+[2026-06-15 04:00:06] --- update complete ---
+```
+
+No action is taken (and nothing is logged beyond "Already up to date") when the repo
+hasn't changed.
+
+---
+
 ## License
 
 See [LICENSE](LICENSE).
