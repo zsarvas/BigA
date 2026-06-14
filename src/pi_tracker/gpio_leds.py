@@ -26,7 +26,6 @@ No-op when ``rpi_ws281x`` is not installed (e.g. local Mac dev).
 from __future__ import annotations
 
 import logging
-import math
 import os
 import threading
 import time
@@ -70,9 +69,17 @@ _LED_INVERT = False
 _CHANNEL_FOR_GPIO = {12: 0, 18: 0, 21: 0, 13: 1, 19: 1}
 _DMA_FOR_CHANNEL = {0: 10, 1: 10}
 
-# Angels red (BGR-order Color constructor takes RGB ints; library handles strip order).
+# Angels red / gold palette
 _HALOS_R = (190, 30, 30)
 _HALOS_GOLD = (186, 147, 62)
+
+# Animation timing (seconds)
+_PHASE_RED_DUR = 4.0      # red comet chase
+_PHASE_WHITE_DUR = 4.0    # white comet chase
+_PHASE_RAINBOW_DUR = 6.0  # rainbow scroll
+_CHASE_SPEED = 20         # pixels / second for comet phases
+_FLASH_INTERVAL = 7.0     # seconds between full-strip white flashes
+_FLASH_DUR = 0.13         # seconds a flash lasts
 
 # Reentrant: set_win_led() holds the lock and may call init_gpio(), which re-acquires it.
 _lock = threading.RLock()
@@ -190,30 +197,92 @@ def _scale(rgb: tuple[int, int, int], factor: float) -> tuple[int, int, int]:
     )
 
 
-def _animate_loop(stop: threading.Event) -> None:
-    """Slow breathing pulse in Angels red with brief gold flashes every few seconds."""
+def _wheel(pos: int) -> tuple[int, int, int]:
+    """Classic 256-step color wheel: red → green → blue → red."""
+    pos = pos % 256
+    if pos < 85:
+        return (255 - pos * 3, pos * 3, 0)
+    if pos < 170:
+        pos -= 85
+        return (0, 255 - pos * 3, pos * 3)
+    pos -= 170
+    return (pos * 3, 0, 255 - pos * 3)
+
+
+def _render_comet(n: int, head: int, tail_len: int, rgb: tuple[int, int, int]) -> None:
+    """Paint a comet with a fading tail; head is the brightest pixel."""
     if _strip is None:
         return
+    _, Color = _import_neopixel()
+    if Color is None:
+        return
+    blank = Color(0, 0, 0)
+    for i in range(n):
+        dist = (head - i) % n
+        if dist < tail_len:
+            factor = (tail_len - dist) / tail_len
+            r, g, b = rgb
+            _strip.setPixelColor(i, Color(int(r * factor), int(g * factor), int(b * factor)))
+        else:
+            _strip.setPixelColor(i, blank)
+    _strip.show()
+
+
+def _animate_loop(stop: threading.Event) -> None:
+    """
+    Scrolling chase animation: red comet → white comet → rainbow scroll, cycling
+    continuously with brief full-strip white flashes for excitement.
+    """
+    if _strip is None:
+        return
+    n = _strip.numPixels()
+    tail_len = max(4, n // 4)
+    cycle_dur = _PHASE_RED_DUR + _PHASE_WHITE_DUR + _PHASE_RAINBOW_DUR
+
+    _, Color = _import_neopixel()
+    if Color is None:
+        return
+
     t0 = time.monotonic()
-    last_flash = 0.0
-    flash_period = 6.0
-    flash_dur = 0.18
+    last_flash = t0 - _FLASH_INTERVAL  # don't flash immediately on start
+
     try:
         while not stop.is_set():
             now = time.monotonic()
+
+            # Full-strip white flash overrides everything.
+            if now - last_flash >= _FLASH_INTERVAL:
+                last_flash = now
+            if now - last_flash < _FLASH_DUR:
+                _fill_blocking((255, 255, 255))
+                if stop.wait(0.02):
+                    break
+                continue
+
             t = now - t0
-            # Breathing curve: 0.20 .. 1.00 over a ~3.2s period.
-            phase = (math.sin(t * 2 * math.pi / 3.2) + 1.0) / 2.0
-            level = 0.20 + 0.80 * phase
+            cycle_t = t % cycle_dur
 
-            if now - last_flash >= flash_period and (now - last_flash) - flash_period < flash_dur:
-                color = _scale(_HALOS_GOLD, 1.0)
+            if cycle_t < _PHASE_RED_DUR:
+                # Red comet chase
+                head = int(cycle_t * _CHASE_SPEED) % n
+                _render_comet(n, head, tail_len, _HALOS_R)
+
+            elif cycle_t < _PHASE_RED_DUR + _PHASE_WHITE_DUR:
+                # White comet chase
+                phase_t = cycle_t - _PHASE_RED_DUR
+                head = int(phase_t * _CHASE_SPEED) % n
+                _render_comet(n, head, tail_len, (255, 255, 255))
+
             else:
-                color = _scale(_HALOS_R, level)
-                if now - last_flash >= flash_period + flash_dur:
-                    last_flash = now
+                # Rainbow scroll
+                phase_t = cycle_t - _PHASE_RED_DUR - _PHASE_WHITE_DUR
+                offset = int((phase_t / _PHASE_RAINBOW_DUR) * 256)
+                for i in range(n):
+                    hue = (i * 256 // n + offset) % 256
+                    r, g, b = _wheel(hue)
+                    _strip.setPixelColor(i, Color(r, g, b))
+                _strip.show()
 
-            _fill_blocking(color)
             if stop.wait(0.04):
                 break
     except Exception as e:  # noqa: BLE001
