@@ -102,6 +102,31 @@ def _strip_old_biga_markers(text: str) -> str:
     return re.sub(r"\n{3,}", "\n\n", "\n".join(lines).rstrip()) + "\n"
 
 
+def _install_auto_update_cron(repo: str) -> None:
+    """Install scripts/update_biga.sh + a 4 AM root cron entry (idempotent)."""
+    script = os.path.join(repo, "scripts", "update_biga.sh")
+    if not os.path.isfile(script):
+        print(f"  ✗ update script not found: {script}")
+        sys.exit(1)
+
+    run(f"chmod +x {script}", f"making {script} executable")
+
+    cron_entry = f"0 4 * * * {script}"
+    result = subprocess.run(["crontab", "-l"], capture_output=True, text=True, check=False)
+    existing = result.stdout if result.returncode == 0 else ""
+
+    if script in existing:
+        print(f"  → cron job already present, skipping")
+        return
+
+    new_crontab = existing.rstrip("\n") + ("\n" if existing else "") + cron_entry + "\n"
+    proc = subprocess.run(["crontab", "-"], input=new_crontab, text=True, check=False)
+    if proc.returncode != 0:
+        print("  ✗ Failed to write crontab")
+        sys.exit(1)
+    print(f"  → cron job installed: {cron_entry}")
+
+
 def _install_panel_config(boot_dir: str, config_path: str) -> None:
     panel_name = DEFAULT_PANEL_INCLUDE
     panel_src = os.path.join(REPO, "boot", panel_name)
@@ -158,7 +183,7 @@ print("  BigA Angels Tracker — Setup")
 print("=" * 50)
 
 # 1. apt deps
-print("\n[1/8] Installing system packages...")
+print("\n[1/9] Installing system packages...")
 run("sudo apt update -q")
 run(
     "sudo apt install -y "
@@ -175,7 +200,7 @@ run(
 )
 
 # 2. pip deps (Pi-specific only; pygame comes from apt above, not requirements-pi.txt)
-print("\n[2/8] Installing Python packages...")
+print("\n[2/9] Installing Python packages...")
 pip_extra = _pip_break_system_flag()
 if _externally_managed_python() and not pip_extra:
     print(
@@ -188,15 +213,15 @@ run(
 )
 
 # 3. video group
-print("\n[3/8] Configuring user permissions...")
+print("\n[3/9] Configuring user permissions...")
 run("sudo usermod -a -G video pi", "adding pi to video group")
 
 # 4. timezone
-print("\n[4/8] Setting timezone...")
+print("\n[4/9] Setting timezone...")
 run("sudo timedatectl set-timezone America/Los_Angeles", "timezone → America/Los_Angeles")
 
 # 5. display drivers
-print("\n[5/8] Installing display drivers...")
+print("\n[5/9] Installing display drivers...")
 boot_dir, overlays_dir = _boot_paths()
 print(f"  → boot dir: {boot_dir}")
 overlays = os.path.join(REPO, "overlays")
@@ -206,7 +231,7 @@ else:
     print("  ⚠ No overlay files found in overlays/ — skipping (panel uses include file)")
 
 # 6. config.txt + panel include file
-print("\n[6/8] Updating boot config + panel include...")
+print("\n[6/9] Updating boot config + panel include...")
 config_path = os.path.join(boot_dir, "config.txt")
 if not os.path.exists(config_path):
     print(f"  ✗ {config_path} not found")
@@ -219,7 +244,7 @@ print(
 )
 
 # 7. start script (Bookworm KMSDRM + chvt 2 + openvt wrapper for systemd)
-print("\n[7/8] Installing start script...")
+print("\n[7/9] Installing start script...")
 start_script = f"""#!/bin/sh
 set -eu
 export PYTHONUNBUFFERED=1
@@ -246,13 +271,18 @@ run("sudo mv /tmp/biga-start.sh /usr/local/bin/biga-start.sh", "installing /usr/
 run("sudo chmod +x /usr/local/bin/biga-start.sh", "making start script executable")
 
 # 8. systemd service
-print("\n[8/8] Setting up systemd service...")
+print("\n[8/9] Setting up systemd service...")
 run(
     f"sudo cp {REPO}/biga.service.example /etc/systemd/system/biga.service",
     "copying service file",
 )
 run("sudo systemctl daemon-reload", "reloading systemd")
 run("sudo systemctl enable biga", "enabling biga service")
+
+# 9. auto-update cron
+print("\n[9/9] Installing auto-update cron job...")
+_install_auto_update_cron(REPO)
+print("  → update log: /var/log/biga_update.log")
 
 print("\n" + "=" * 50)
 print("  Setup complete! Rebooting in 5 seconds...")
