@@ -1,0 +1,33 @@
+// BigA boot splash — Angels logo centered on black background.
+
+screen_width  = Window.GetWidth();
+screen_height = Window.GetHeight();
+
+// Black background
+bg = Image.CreateFromFile("biga-bg.png");
+if (!bg) {
+    bg_sprite = Sprite();
+    bg_sprite.SetOpacity(0);
+} else {
+    bg_sprite = Sprite(bg);
+    bg_sprite.SetX(0);
+    bg_sprite.SetY(0);
+    bg_sprite.SetZ(0);
+}
+Window.SetBackgroundTopColor(0, 0, 0);
+Window.SetBackgroundBottomColor(0, 0, 0);
+
+// Angels logo — scale to 60% of screen height, centered
+logo = Image("biga-splash.png");
+logo_w = logo.GetWidth();
+logo_h = logo.GetHeight();
+
+scale    = (screen_height * 0.60) / logo_h;
+new_w    = Math.Int(logo_w * scale);
+new_h    = Math.Int(logo_h * scale);
+
+scaled   = logo.Scale(new_w, new_h);
+logo_spr = Sprite(scaled);
+logo_spr.SetX(Math.Int((screen_width  - new_w) / 2));
+logo_spr.SetY(Math.Int((screen_height - new_h) / 2));
+logo_spr.SetZ(10);

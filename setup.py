@@ -85,6 +85,7 @@ def _strip_old_biga_markers(text: str) -> str:
     """Drop prior BigA snippet lines so re-run does not duplicate includes."""
     drop_prefixes = (
         "disable_fw_kms_setup=1",
+        "disable_splash=1",
         "dtparam=spi=on",
         "dtoverlay=vc4-kms-dpi-generic",
         "include mzp351hv00tr-old.txt",
@@ -125,6 +126,49 @@ def _install_auto_update_cron(repo: str) -> None:
         print("  ✗ Failed to write crontab")
         sys.exit(1)
     print(f"  → cron job installed: {cron_entry}")
+
+
+def _install_splash(repo: str, boot_dir: str) -> None:
+    """Install Plymouth theme + quiet boot cmdline (idempotent)."""
+    theme_dir = "/usr/share/plymouth/themes/biga"
+    splash_src = os.path.join(repo, "splash")
+
+    # --- Plymouth theme files ---
+    run(f"sudo mkdir -p {theme_dir}", f"creating {theme_dir}")
+    for fname in ("biga.plymouth", "biga.script"):
+        src = os.path.join(splash_src, fname)
+        if not os.path.isfile(src):
+            print(f"  ✗ Missing splash file: {src}")
+            sys.exit(1)
+        run(f"sudo cp {src} {theme_dir}/{fname}", f"installing {fname}")
+
+    logo_src = os.path.join(repo, "logos", "108.png")
+    run(f"sudo cp {logo_src} {theme_dir}/biga-splash.png", "installing splash logo")
+
+    run("sudo plymouth-set-default-theme biga", "setting default Plymouth theme")
+    run("sudo update-initramfs -u", "rebuilding initramfs with Plymouth theme")
+
+    # --- Quiet kernel cmdline ---
+    cmdline_path = os.path.join(boot_dir, "cmdline.txt")
+    proc = subprocess.run(["sudo", "cat", cmdline_path], capture_output=True, text=True, check=False)
+    if proc.returncode != 0:
+        print(f"  ✗ Cannot read {cmdline_path}")
+        sys.exit(1)
+
+    tokens = proc.stdout.strip().split()
+    quiet_tokens = {
+        "quiet", "splash", "plymouth.ignore-serial-consoles",
+        "loglevel=3", "logo.nologo", "vt.global_cursor_default=0",
+    }
+    # strip any existing conflicting values then append ours
+    cleaned = [t for t in tokens if t not in quiet_tokens and not t.startswith("loglevel=")]
+    new_cmdline = " ".join(cleaned + sorted(quiet_tokens)) + "\n"
+
+    tmp = "/tmp/biga-cmdline.txt"
+    with open(tmp, "w", encoding="utf-8") as f:
+        f.write(new_cmdline)
+    run(f"sudo cp {tmp} {cmdline_path}", f"updating {cmdline_path}")
+    print(f"  → {cmdline_path} updated with quiet splash tokens")
 
 
 def _install_panel_config(boot_dir: str, config_path: str) -> None:
@@ -183,7 +227,7 @@ print("  BigA Angels Tracker — Setup")
 print("=" * 50)
 
 # 1. apt deps
-print("\n[1/9] Installing system packages...")
+print("\n[1/10] Installing system packages...")
 run("sudo apt update -q")
 run(
     "sudo apt install -y "
@@ -195,12 +239,14 @@ run(
     "libsdl2-ttf-dev "
     "libcairo2-dev "
     "pkg-config "
-    "python3-dev",
+    "python3-dev "
+    "plymouth "
+    "plymouth-themes",
     "apt packages",
 )
 
 # 2. pip deps (Pi-specific only; pygame comes from apt above, not requirements-pi.txt)
-print("\n[2/9] Installing Python packages...")
+print("\n[2/10] Installing Python packages...")
 pip_extra = _pip_break_system_flag()
 if _externally_managed_python() and not pip_extra:
     print(
@@ -213,15 +259,15 @@ run(
 )
 
 # 3. video group
-print("\n[3/9] Configuring user permissions...")
+print("\n[3/10] Configuring user permissions...")
 run("sudo usermod -a -G video pi", "adding pi to video group")
 
 # 4. timezone
-print("\n[4/9] Setting timezone...")
+print("\n[4/10] Setting timezone...")
 run("sudo timedatectl set-timezone America/Los_Angeles", "timezone → America/Los_Angeles")
 
 # 5. display drivers
-print("\n[5/9] Installing display drivers...")
+print("\n[5/10] Installing display drivers...")
 boot_dir, overlays_dir = _boot_paths()
 print(f"  → boot dir: {boot_dir}")
 overlays = os.path.join(REPO, "overlays")
@@ -231,7 +277,7 @@ else:
     print("  ⚠ No overlay files found in overlays/ — skipping (panel uses include file)")
 
 # 6. config.txt + panel include file
-print("\n[6/9] Updating boot config + panel include...")
+print("\n[6/10] Updating boot config + panel include...")
 config_path = os.path.join(boot_dir, "config.txt")
 if not os.path.exists(config_path):
     print(f"  ✗ {config_path} not found")
@@ -244,7 +290,7 @@ print(
 )
 
 # 7. start script (Bookworm KMSDRM + chvt 2 + openvt wrapper for systemd)
-print("\n[7/9] Installing start script...")
+print("\n[7/10] Installing start script...")
 start_script = f"""#!/bin/sh
 set -eu
 export PYTHONUNBUFFERED=1
@@ -271,7 +317,7 @@ run("sudo mv /tmp/biga-start.sh /usr/local/bin/biga-start.sh", "installing /usr/
 run("sudo chmod +x /usr/local/bin/biga-start.sh", "making start script executable")
 
 # 8. systemd service
-print("\n[8/9] Setting up systemd service...")
+print("\n[8/10] Setting up systemd service...")
 run(
     f"sudo cp {REPO}/biga.service.example /etc/systemd/system/biga.service",
     "copying service file",
@@ -280,9 +326,13 @@ run("sudo systemctl daemon-reload", "reloading systemd")
 run("sudo systemctl enable biga", "enabling biga service")
 
 # 9. auto-update cron
-print("\n[9/9] Installing auto-update cron job...")
+print("\n[9/10] Installing auto-update cron job...")
 _install_auto_update_cron(REPO)
 print("  → update log: /var/log/biga_update.log")
+
+# 10. boot splash (Plymouth theme + quiet cmdline)
+print("\n[10/10] Installing boot splash...")
+_install_splash(REPO, boot_dir)
 
 print("\n" + "=" * 50)
 print("  Setup complete! Rebooting in 5 seconds...")
