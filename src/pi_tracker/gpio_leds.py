@@ -56,10 +56,13 @@ def _env_int(name: str, default: int, lo: int | None = None, hi: int | None = No
 _WIN_LED_GPIO = _env_int("BIGA_WIN_LED_GPIO", 19)
 _WIN_LED_COUNT = _env_int("BIGA_WIN_LED_COUNT", 32, lo=1, hi=600)
 _WIN_LED_BRIGHTNESS = _env_int("BIGA_WIN_LED_BRIGHTNESS", 96, lo=0, hi=255)
-# Debug: light every configured LED solid at all times (ignores scene). Use to
-# verify wiring / strip length, then unset. BIGA_LED_DEBUG=1 enables.
+# Debug: light every configured LED solid white at all times (ignores scene).
+# Use to verify wiring / strip length, then unset. BIGA_LED_DEBUG=1 enables.
 _LED_DEBUG = _env_bool("BIGA_LED_DEBUG")
 _LED_DEBUG_COLOR = (255, 255, 255)
+# Debug: run the full win animation (breathing red + gold flashes) from startup,
+# regardless of scene. Use to tune the animation. BIGA_LED_WIN_DEBUG=1 enables.
+_LED_WIN_DEBUG = _env_bool("BIGA_LED_WIN_DEBUG")
 # rpi_ws281x defaults that are safe for WS2812B-style strips.
 _LED_FREQ_HZ = 800_000
 _LED_INVERT = False
@@ -140,6 +143,23 @@ def init_gpio() -> None:
                     flush=True,
                 )
                 _fill_blocking(_LED_DEBUG_COLOR)
+            elif _LED_WIN_DEBUG:
+                # Win-animation debug: starts the breathing/flash animation immediately so
+                # you can tune colors and timing without waiting for an actual win.
+                print(
+                    f"[biga] LED WIN DEBUG: running win animation on {_WIN_LED_COUNT} LEDs "
+                    f"(GPIO {_WIN_LED_GPIO}). Ctrl-C or stop the service to exit.",
+                    flush=True,
+                )
+                _anim_stop.clear()
+                t = threading.Thread(
+                    target=_animate_loop,
+                    args=(_anim_stop,),
+                    name="win-leds-debug",
+                    daemon=True,
+                )
+                _anim_thread = t
+                t.start()
             else:
                 _fill_blocking((0, 0, 0))
         except Exception as e:  # noqa: BLE001
@@ -205,8 +225,8 @@ def _animate_loop(stop: threading.Event) -> None:
 def set_win_led(active: bool) -> None:
     """Start (active=True) or stop (active=False) the win animation."""
     global _win_active, _anim_thread
-    if _LED_DEBUG:
-        # Debug mode keeps the whole strip solid-on regardless of scene.
+    if _LED_DEBUG or _LED_WIN_DEBUG:
+        # Debug modes manage the strip themselves; ignore scene-driven calls.
         if not _initialized:
             init_gpio()
         return
