@@ -4,3 +4,4 @@
 # mzp351hv00tr-new.txt = Bookworm/KMS). Don't add DPI settings here.
 include mzp351hv00tr-new.txt
 enable_uart=1
+disable_splash=1

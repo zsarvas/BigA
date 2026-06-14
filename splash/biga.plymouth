@@ -1,0 +1,8 @@
+[Plymouth Theme]
+Name=BigA
+Description=BigA Angels Tracker boot splash
+ModuleName=script
+
+[script]
+ImageDir=/usr/share/plymouth/themes/biga
+ScriptFile=/usr/share/plymouth/themes/biga/biga.script
