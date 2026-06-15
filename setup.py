@@ -396,6 +396,15 @@ run("sudo systemctl enable biga-portal", "enabling biga-portal service")
 print("  → portal log: /var/log/biga-portal.log")
 print("  → runs on port 80 while in AP mode")
 
+setup_screen_src = os.path.join(REPO, "portal", "biga-setup-screen.service")
+run(
+    f"sudo cp {setup_screen_src} /etc/systemd/system/biga-setup-screen.service",
+    "copying setup screen service file",
+)
+run("sudo systemctl daemon-reload", "reloading systemd for setup screen")
+run("sudo systemctl enable biga-setup-screen", "enabling biga-setup-screen service")
+print("  → setup screen shows QR code on tty2 during AP provisioning")
+
 # 12. Factory reset button monitor (GPIO 27)
 print("\n[12/13] Installing factory reset button monitor...")
 reset_script = os.path.join(REPO, "scripts", "reset_button.py")

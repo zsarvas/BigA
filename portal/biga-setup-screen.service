@@ -1,0 +1,21 @@
+[Unit]
+Description=BigA Setup Screen (QR code display during AP provisioning)
+After=biga-portal.service biga-firstboot.service
+ConditionPathExists=!/etc/biga/wifi_creds.json
+
+[Service]
+Type=simple
+User=root
+Environment=PYTHONUNBUFFERED=1
+Environment=BIGA_SDL_VIDEO=kmsdrm
+Environment=SDL_VIDEODRIVER=kmsdrm
+# Clear tty2 then take it over with the setup screen
+ExecStartPre=/bin/bash -c "printf '\\033[2J\\033[H' > /dev/tty2 2>/dev/null || true"
+ExecStart=/usr/bin/openvt -c 2 -s -f -w -- /usr/bin/python3 /home/pi/BigA/portal/setup_screen.py
+Restart=on-failure
+RestartSec=5
+StandardOutput=append:/var/log/biga-setup-screen.log
+StandardError=append:/var/log/biga-setup-screen.log
+
+[Install]
+WantedBy=multi-user.target
