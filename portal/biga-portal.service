@@ -1,15 +1,16 @@
 [Unit]
 Description=BigA WiFi Provisioning Portal
-After=network.target
-# Runs only in AP mode (before client WiFi is provisioned).
-# setup.py enables this; it is disabled automatically once the user
-# connects via the portal and _switch_to_client_mode() fires.
+After=network.target NetworkManager.service biga-firstboot.service
+# Only runs when no user WiFi credentials exist (AP / factory-reset state).
+ConditionPathExists=!/etc/biga/wifi_creds.json
 
 [Service]
 Type=simple
 User=root
 WorkingDirectory=/home/pi/BigA/portal
+ExecStartPre=/usr/bin/nmcli con up biga-ap
 ExecStart=/usr/bin/python3 /home/pi/BigA/portal/portal.py
+ExecStopPost=/usr/bin/nmcli con down biga-ap
 Restart=on-failure
 RestartSec=5
 StandardOutput=append:/var/log/biga-portal.log
