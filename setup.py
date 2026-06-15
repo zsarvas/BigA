@@ -306,8 +306,10 @@ while [ ! -e /dev/dri/card0 ] && [ ! -e /dev/dri/card1 ] && [ "$i" -lt 20 ]; do
   sleep 1
 done
 ls -l /dev/dri/card* /dev/fb0 2>&1 || true
-/usr/bin/chvt 2 || echo "chvt 2 failed with $?"
-exec /usr/bin/openvt -c 2 -f -w -- /bin/sh -c "/usr/bin/python3 {REPO}/run_pi_ui.py --no-idle-videos >>/tmp/biga.log 2>&1; echo PYEXIT=$? >>/tmp/biga.log"
+# Clear any text left on tty2 (login prompt residue) before switching to it.
+printf '\\033[2J\\033[H' > /dev/tty2 2>/dev/null || true
+# -s switches the active VT to tty2 as part of starting the process (no separate chvt needed).
+exec /usr/bin/openvt -c 2 -s -f -w -- /bin/sh -c "/usr/bin/python3 {REPO}/run_pi_ui.py --no-idle-videos >>/tmp/biga.log 2>&1; echo PYEXIT=$? >>/tmp/biga.log"
 """
 
 with open("/tmp/biga-start.sh", "w", encoding="utf-8") as f:
@@ -326,6 +328,7 @@ run("sudo systemctl daemon-reload", "reloading systemd")
 run("sudo systemctl enable biga", "enabling biga service")
 # Mask the getty on tty2 so no "BigA login:" prompt flashes before the app takes the VT.
 run("sudo systemctl mask getty@tty2.service", "masking getty on tty2")
+run("sudo systemctl mask autovt@tty2.service", "masking autovt on tty2")
 
 # 9. auto-update cron
 print("\n[9/12] Installing auto-update cron job...")
