@@ -43,8 +43,10 @@ fi
 
 log "Update found: $LOCAL -> $REMOTE"
 
-if ! git pull origin main >> "$LOG_FILE" 2>&1; then
-    log "ERROR: git pull failed. Service not restarted."
+# Hard reset to origin — the Pi is a deployment target, never a dev machine.
+# This discards any accidental local changes rather than aborting.
+if ! git reset --hard origin/main >> "$LOG_FILE" 2>&1; then
+    log "ERROR: git reset --hard failed. Service not restarted."
     exit 1
 fi
 
