@@ -1,0 +1,344 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>BigA Setup</title>
+  <style>
+    *, *::before, *::after { box-sizing: border-box; margin: 0; padding: 0; }
+
+    :root {
+      --red:    #BA0021;
+      --navy:   #003263;
+      --gold:   #C4A84F;
+      --white:  #FFFFFF;
+      --bg:     #0a0f1e;
+      --card:   #111827;
+      --border: #1f2d45;
+      --muted:  #6b7f99;
+    }
+
+    body {
+      font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
+      background: var(--bg);
+      color: var(--white);
+      min-height: 100dvh;
+      display: flex;
+      flex-direction: column;
+      align-items: center;
+      padding: 24px 16px 48px;
+    }
+
+    header {
+      display: flex;
+      flex-direction: column;
+      align-items: center;
+      gap: 12px;
+      margin-bottom: 28px;
+    }
+
+    .logo-wrap {
+      width: 80px;
+      height: 80px;
+      background: var(--navy);
+      border-radius: 50%;
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      border: 3px solid var(--red);
+    }
+
+    .logo-wrap img { width: 52px; height: 52px; object-fit: contain; }
+
+    h1 { font-size: 1.5rem; font-weight: 700; letter-spacing: 0.04em; }
+    h1 span { color: var(--red); }
+
+    .subtitle {
+      font-size: 0.875rem;
+      color: var(--muted);
+      text-align: center;
+      max-width: 300px;
+    }
+
+    .qr-block {
+      background: var(--white);
+      border-radius: 12px;
+      padding: 12px;
+      margin-bottom: 28px;
+      text-align: center;
+    }
+    .qr-block img { display: block; width: 140px; height: 140px; }
+    .qr-label {
+      margin-top: 8px;
+      font-size: 0.7rem;
+      color: var(--navy);
+      font-weight: 600;
+      letter-spacing: 0.06em;
+      text-transform: uppercase;
+    }
+
+    .card {
+      width: 100%;
+      max-width: 420px;
+      background: var(--card);
+      border: 1px solid var(--border);
+      border-radius: 16px;
+      padding: 24px;
+    }
+
+    .section-label {
+      font-size: 0.7rem;
+      font-weight: 700;
+      letter-spacing: 0.1em;
+      text-transform: uppercase;
+      color: var(--gold);
+      margin-bottom: 12px;
+    }
+
+    .network-list {
+      display: flex;
+      flex-direction: column;
+      gap: 8px;
+      margin-bottom: 20px;
+      max-height: 240px;
+      overflow-y: auto;
+    }
+
+    .network-list::-webkit-scrollbar { width: 4px; }
+    .network-list::-webkit-scrollbar-track { background: transparent; }
+    .network-list::-webkit-scrollbar-thumb { background: var(--border); border-radius: 2px; }
+
+    .network-option { display: none; }
+
+    .network-label {
+      display: flex;
+      align-items: center;
+      gap: 12px;
+      padding: 12px 14px;
+      border: 2px solid var(--border);
+      border-radius: 10px;
+      cursor: pointer;
+      transition: border-color 0.15s, background 0.15s;
+    }
+
+    .network-option:checked + .network-label {
+      border-color: var(--red);
+      background: rgba(186, 0, 33, 0.08);
+    }
+
+    .signal-icon {
+      display: flex;
+      align-items: flex-end;
+      gap: 2px;
+      flex-shrink: 0;
+    }
+    .signal-icon span {
+      display: block;
+      width: 4px;
+      background: var(--border);
+      border-radius: 2px;
+    }
+    .signal-icon span:nth-child(1) { height: 6px; }
+    .signal-icon span:nth-child(2) { height: 10px; }
+    .signal-icon span:nth-child(3) { height: 14px; }
+    .signal-icon span:nth-child(4) { height: 18px; }
+
+    .sig-1 .bar1, .sig-2 .bar1, .sig-2 .bar2,
+    .sig-3 .bar1, .sig-3 .bar2, .sig-3 .bar3,
+    .sig-4 .bar1, .sig-4 .bar2, .sig-4 .bar3, .sig-4 .bar4 { background: var(--gold); }
+
+    .network-name {
+      flex: 1;
+      font-size: 0.95rem;
+      font-weight: 500;
+      white-space: nowrap;
+      overflow: hidden;
+      text-overflow: ellipsis;
+    }
+
+    .network-security {
+      font-size: 0.7rem;
+      color: var(--muted);
+      flex-shrink: 0;
+    }
+
+    .empty-state {
+      text-align: center;
+      color: var(--muted);
+      font-size: 0.875rem;
+      padding: 20px 0;
+    }
+
+    .divider {
+      border: none;
+      border-top: 1px solid var(--border);
+      margin: 20px 0;
+    }
+
+    .field { margin-bottom: 16px; }
+
+    label.field-label {
+      display: block;
+      font-size: 0.75rem;
+      font-weight: 600;
+      color: var(--muted);
+      letter-spacing: 0.06em;
+      text-transform: uppercase;
+      margin-bottom: 6px;
+    }
+
+    .input-wrap { position: relative; }
+
+    input[type="text"],
+    input[type="password"] {
+      width: 100%;
+      padding: 12px 44px 12px 14px;
+      background: var(--bg);
+      border: 1.5px solid var(--border);
+      border-radius: 10px;
+      color: var(--white);
+      font-size: 1rem;
+      outline: none;
+      transition: border-color 0.15s;
+    }
+
+    input:focus { border-color: var(--red); }
+
+    .toggle-pw {
+      position: absolute;
+      right: 12px;
+      top: 50%;
+      transform: translateY(-50%);
+      background: none;
+      border: none;
+      cursor: pointer;
+      color: var(--muted);
+      padding: 4px;
+      line-height: 1;
+      font-size: 1.1rem;
+    }
+
+    .error-banner {
+      background: rgba(186, 0, 33, 0.15);
+      border: 1px solid var(--red);
+      border-radius: 10px;
+      padding: 12px 14px;
+      font-size: 0.875rem;
+      color: #ff6b6b;
+      margin-bottom: 18px;
+    }
+
+    .submit-btn {
+      width: 100%;
+      padding: 14px;
+      background: var(--red);
+      color: var(--white);
+      font-size: 1rem;
+      font-weight: 700;
+      letter-spacing: 0.04em;
+      border: none;
+      border-radius: 10px;
+      cursor: pointer;
+      transition: background 0.15s, transform 0.1s;
+      margin-top: 4px;
+    }
+
+    .submit-btn:hover  { background: #d4002a; }
+    .submit-btn:active { transform: scale(0.98); }
+    .submit-btn:disabled { background: var(--muted); cursor: not-allowed; }
+
+    .footer-note {
+      margin-top: 24px;
+      font-size: 0.75rem;
+      color: var(--muted);
+      text-align: center;
+      max-width: 320px;
+    }
+  </style>
+</head>
+<body>
+
+  <header>
+    <div class="logo-wrap">
+      <img src="/static/108.png" alt="Angels" onerror="this.style.display='none'" />
+    </div>
+    <h1>Big<span> A</span> Setup</h1>
+    <p class="subtitle">Connect this device to your WiFi network to get started.</p>
+  </header>
+
+  <div class="qr-block">
+    <img src="/qr.png" alt="QR code to join {{ ap_ssid }}" />
+    <div class="qr-label">Scan to join {{ ap_ssid }}</div>
+  </div>
+
+  <div class="card">
+    {% if error %}
+    <div class="error-banner">⚠ {{ error }}</div>
+    {% endif %}
+
+    <form method="POST" action="/connect" id="wifi-form">
+
+      <div class="section-label">Select your network</div>
+
+      <div class="network-list">
+        {% if networks %}
+          {% for net in networks %}
+            {% set bars = 1 if net.signal < 25 else (2 if net.signal < 50 else (3 if net.signal < 75 else 4)) %}
+            <input
+              class="network-option"
+              type="radio"
+              name="ssid"
+              id="net-{{ loop.index }}"
+              value="{{ net.ssid }}"
+              {% if selected_ssid is defined and selected_ssid == net.ssid %}checked{% endif %}
+            />
+            <label class="network-label" for="net-{{ loop.index }}">
+              <div class="signal-icon sig-{{ bars }}">
+                <span class="bar1"></span>
+                <span class="bar2"></span>
+                <span class="bar3"></span>
+                <span class="bar4"></span>
+              </div>
+              <span class="network-name">{{ net.ssid }}</span>
+              <span class="network-security">{{ net.security }}</span>
+            </label>
+          {% endfor %}
+        {% else %}
+          <div class="empty-state">No networks found. Move closer to your router and refresh.</div>
+        {% endif %}
+      </div>
+
+      <hr class="divider" />
+
+      <div class="field">
+        <label class="field-label" for="password">WiFi Password</label>
+        <div class="input-wrap">
+          <input type="password" id="password" name="password" placeholder="Enter password" autocomplete="off" />
+          <button type="button" class="toggle-pw" onclick="togglePw()" title="Show/hide password">👁</button>
+        </div>
+      </div>
+
+      <button type="submit" class="submit-btn" id="submit-btn">Connect</button>
+
+    </form>
+  </div>
+
+  <p class="footer-note">
+    Your credentials are stored only on this device and used solely to connect to your network.
+  </p>
+
+  <script>
+    function togglePw() {
+      const f = document.getElementById("password");
+      f.type = f.type === "password" ? "text" : "password";
+    }
+
+    document.getElementById("wifi-form").addEventListener("submit", function () {
+      const btn = document.getElementById("submit-btn");
+      btn.disabled = true;
+      btn.textContent = "Connecting…";
+    });
+  </script>
+
+</body>
+</html>

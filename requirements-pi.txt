@@ -5,3 +5,6 @@ pillow
 # GPIO; default BCM 19 = PWM channel 1). Requires root, which the systemd unit
 # already uses.
 rpi_ws281x
+# WiFi provisioning portal
+flask
+qrcode[pil]

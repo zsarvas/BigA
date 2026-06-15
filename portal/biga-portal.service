@@ -1,0 +1,19 @@
+[Unit]
+Description=BigA WiFi Provisioning Portal
+After=network.target
+# Runs only in AP mode (before client WiFi is provisioned).
+# setup.py enables this; it is disabled automatically once the user
+# connects via the portal and _switch_to_client_mode() fires.
+
+[Service]
+Type=simple
+User=root
+WorkingDirectory=/home/pi/BigA/portal
+ExecStart=/usr/bin/python3 /home/pi/BigA/portal/portal.py
+Restart=on-failure
+RestartSec=5
+StandardOutput=append:/var/log/biga-portal.log
+StandardError=append:/var/log/biga-portal.log
+
+[Install]
+WantedBy=multi-user.target
