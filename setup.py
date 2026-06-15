@@ -368,6 +368,10 @@ run(
     f"sudo cp {REPO}/biga.service.example /etc/systemd/system/biga.service",
     "copying service file",
 )
+# Ensure SSH is enabled and running — this is the only remote access method.
+run("sudo systemctl enable ssh", "enabling SSH")
+run("sudo systemctl start ssh", "starting SSH")
+
 run("sudo systemctl daemon-reload", "reloading systemd")
 run("sudo systemctl enable biga", "enabling biga service")
 # Mask getty on both tty1 and tty2.
