@@ -1,0 +1,17 @@
+[Unit]
+Description=BigA Factory Reset Button Monitor (GPIO 26)
+After=multi-user.target
+
+[Service]
+Type=simple
+User=root
+ExecStart=/usr/bin/python3 /home/pi/BigA/scripts/reset_button.py
+Restart=on-failure
+RestartSec=5
+Environment=BIGA_RESET_PIN=26
+Environment=BIGA_RESET_HOLD=5
+StandardOutput=append:/var/log/biga-reset.log
+StandardError=append:/var/log/biga-reset.log
+
+[Install]
+WantedBy=multi-user.target
