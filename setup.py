@@ -420,6 +420,37 @@ print("  → GPIO BCM 26 — hold 5 s to factory reset")
 print("  → reset log: /var/log/biga-reset.log")
 
 # 13. AP mode setup (NetworkManager profile + firstboot service)
+# If the Pi is already connected to a WiFi network (e.g. flashed with creds for
+# development), write wifi_creds.json now so the portal/setup-screen don't start
+# and take over the network after reboot.
+print("\n  Checking for existing WiFi connection...")
+_active = subprocess.run(
+    ["nmcli", "-t", "-f", "NAME,TYPE,STATE", "connection", "show", "--active"],
+    capture_output=True, text=True, check=False,
+).stdout
+_already_connected = any(
+    ":802-11-wireless:" in line and "biga-ap" not in line
+    for line in _active.splitlines()
+)
+if _already_connected:
+    _creds_path = "/etc/biga/wifi_creds.json"
+    if not os.path.exists(_creds_path):
+        import json as _json
+        _ssid_line = next(
+            (l for l in _active.splitlines() if ":802-11-wireless:" in l and "biga-ap" not in l), ""
+        )
+        _ssid = _ssid_line.split(":")[0]
+        run(f"sudo mkdir -p /etc/biga", "ensuring /etc/biga exists")
+        _tmp = "/tmp/biga-wifi-creds.json"
+        with open(_tmp, "w") as _f:
+            _json.dump({"ssid": _ssid, "password": ""}, _f)
+        run(f"sudo cp {_tmp} {_creds_path} && sudo chmod 600 {_creds_path}",
+            f"writing wifi_creds.json (ssid={_ssid}) — portal will not start")
+    else:
+        print(f"  → wifi_creds.json already exists — portal will not start")
+else:
+    print("  → no existing WiFi — portal will handle provisioning on first boot")
+print("")
 print("\n[13/13] Setting up AP mode...")
 run(f"chmod +x {os.path.join(REPO, 'scripts', 'setup_ap.sh')}", "making setup_ap.sh executable")
 run(f"sudo bash {os.path.join(REPO, 'scripts', 'setup_ap.sh')}", "creating biga-ap NM profile")
