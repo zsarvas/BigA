@@ -103,6 +103,50 @@ def _strip_old_biga_markers(text: str) -> str:
     return re.sub(r"\n{3,}", "\n\n", "\n".join(lines).rstrip()) + "\n"
 
 
+def _configure_deploy_key(repo: str) -> None:
+    """
+    If a deploy key exists at /etc/biga/deploy_key, switch the git remote to
+    SSH and pre-accept GitHub's host key so unattended pulls work.
+    Skips silently if the key isn't present (public repo / HTTPS still works).
+    """
+    key_path = "/etc/biga/deploy_key"
+    ssh_url = "git@github.com:zsarvas/BigA.git"
+
+    if not os.path.exists(key_path):
+        print("  → no deploy key found — skipping SSH remote config (public repo or key not yet set up)")
+        return
+
+    # Pre-accept GitHub's host key for root (cron runs as root)
+    known_hosts = "/root/.ssh/known_hosts"
+    run("mkdir -p /root/.ssh && chmod 700 /root/.ssh", "ensuring /root/.ssh exists")
+    proc = subprocess.run(
+        ["grep", "-q", "github.com", known_hosts],
+        capture_output=True, check=False,
+    )
+    if proc.returncode != 0:
+        run(
+            f"ssh-keyscan -t ed25519 github.com >> {known_hosts} 2>/dev/null; chmod 644 {known_hosts}",
+            "adding GitHub to root known_hosts",
+        )
+    else:
+        print("  → GitHub already in known_hosts")
+
+    # Switch remote to SSH
+    current = subprocess.run(
+        ["git", "-C", repo, "remote", "get-url", "origin"],
+        capture_output=True, text=True, check=False,
+    ).stdout.strip()
+
+    if current != ssh_url:
+        run(f"git -C {repo} remote set-url origin {ssh_url}", "switching remote to SSH")
+    else:
+        print(f"  → remote already set to SSH")
+
+    # Lock down key permissions
+    run(f"chmod 600 {key_path}", "locking deploy key permissions")
+    print(f"  → deploy key configured: {key_path}")
+
+
 def _install_auto_update_cron(repo: str) -> None:
     """Install scripts/update_biga.sh + a 4 AM root cron entry (idempotent)."""
     script = os.path.join(repo, "scripts", "update_biga.sh")
@@ -306,8 +350,10 @@ while [ ! -e /dev/dri/card0 ] && [ ! -e /dev/dri/card1 ] && [ "$i" -lt 20 ]; do
   sleep 1
 done
 ls -l /dev/dri/card* /dev/fb0 2>&1 || true
-/usr/bin/chvt 2 || echo "chvt 2 failed with $?"
-exec /usr/bin/openvt -c 2 -f -w -- /bin/sh -c "/usr/bin/python3 {REPO}/run_pi_ui.py --no-idle-videos >>/tmp/biga.log 2>&1; echo PYEXIT=$? >>/tmp/biga.log"
+# Clear any text left on tty2 (login prompt residue) before switching to it.
+printf '\\033[2J\\033[H' > /dev/tty2 2>/dev/null || true
+# -s switches the active VT to tty2 as part of starting the process (no separate chvt needed).
+exec /usr/bin/openvt -c 2 -s -f -w -- /bin/sh -c "/usr/bin/python3 {REPO}/run_pi_ui.py --no-idle-videos >>/tmp/biga.log 2>&1; echo PYEXIT=$? >>/tmp/biga.log"
 """
 
 with open("/tmp/biga-start.sh", "w", encoding="utf-8") as f:
@@ -326,9 +372,11 @@ run("sudo systemctl daemon-reload", "reloading systemd")
 run("sudo systemctl enable biga", "enabling biga service")
 # Mask the getty on tty2 so no "BigA login:" prompt flashes before the app takes the VT.
 run("sudo systemctl mask getty@tty2.service", "masking getty on tty2")
+run("sudo systemctl mask autovt@tty2.service", "masking autovt on tty2")
 
-# 9. auto-update cron
-print("\n[9/12] Installing auto-update cron job...")
+# 9. auto-update cron + deploy key SSH config
+print("\n[9/12] Configuring auto-update (cron + deploy key)...")
+_configure_deploy_key(REPO)
 _install_auto_update_cron(REPO)
 print("  → update log: /var/log/biga_update.log")
 

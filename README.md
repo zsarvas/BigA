@@ -398,6 +398,46 @@ BigA/
 
 ---
 
+## Golden Image (flash and go)
+
+A pre-built image is published on the [Releases](https://github.com/zsarvas/BigA/releases) page.
+Flash it with [Raspberry Pi Imager](https://www.raspberrypi.com/software/) and the device boots
+straight to the Angels splash screen with everything pre-installed — no `setup.py` required.
+
+> In Imager's **Advanced settings** (⚙) set your hostname, SSH credentials, and WiFi before writing.
+> The app, services, splash screen, auto-update cron, provisioning portal, and reset button are
+> all pre-configured.
+
+### Building a new golden image
+
+**Step 1 — Prepare the golden Pi** (run on the Pi as root):
+
+```bash
+sudo bash /home/pi/BigA/scripts/prep_golden.sh
+```
+
+This stops all services, clears logs/caches, wipes SSH host keys (they regenerate on first boot),
+removes any saved WiFi credentials, and shuts down cleanly.
+
+**Step 2 — Capture, shrink, and publish** (run on your Mac after removing the SD card):
+
+```bash
+./scripts/build_image.sh          # interactive — picks disk, prompts for version tag
+./scripts/build_image.sh disk4 v1.2   # non-interactive
+```
+
+Requires **Docker Desktop** (for pishrink on macOS) and the **`gh` CLI** for release upload.
+The script will `dd` the card, shrink it with [PiShrink](https://github.com/Drewsif/PiShrink),
+compress with `xz`, and offer to create a GitHub release and upload the asset automatically.
+
+What gets stripped from the image before publishing:
+- SSH host keys (regenerated uniquely on each first boot)
+- `machine-id` (regenerated on first boot)
+- Saved WiFi credentials (`/etc/biga/wifi_creds.json`)
+- All logs and package caches
+
+---
+
 ## Auto-update (daily cron)
 
 `scripts/update_biga.sh` checks origin/main every morning at 4 AM and pulls if the
