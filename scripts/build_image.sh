@@ -124,19 +124,48 @@ shrink_image() {
             return
         fi
 
-        # Start the default Lima VM if it isn't already running.
-        if ! limactl list 2>/dev/null | grep -q "^default.*Running"; then
-            info "Starting Lima VM (first time takes ~2 min)..."
-            limactl start default
+        local lima_instance="biga-builder"
+
+        # Create the biga-builder Lima instance if it doesn't exist yet.
+        # Uses the built-in ubuntu template with /Users mounted writable so
+        # pishrink can modify the image in-place.
+        if ! limactl list 2>/dev/null | grep -q "^${lima_instance}"; then
+            info "Creating Lima VM '${lima_instance}' (first time ~3 min)..."
+            limactl start --name="$lima_instance" template://ubuntu \
+                --set='.mounts[0].writable = true'
+        elif ! limactl list 2>/dev/null | grep -q "^${lima_instance}.*Running"; then
+            info "Starting Lima VM '${lima_instance}'..."
+            limactl start "$lima_instance"
         fi
 
         info "Downloading pishrink.sh..."
         curl -fsSL "$pishrink_url" -o "$pishrink_local"
         chmod +x "$pishrink_local"
 
-        info "Running pishrink inside Lima..."
-        # Lima mounts /Users writable; pishrink can shrink the image in-place.
-        limactl shell default -- sudo bash "$pishrink_local" -s "$OUT_DIR/$IMG_NAME"
+        # Loop devices cannot be created over VirtioFS (the Lima /Users mount).
+        # Work around this by copying the image onto Lima's native ext4 disk,
+        # running pishrink there, then copying the shrunk result back.
+        # /tmp in Lima is a 2GB tmpfs RAM disk — use /var/tmp which is on the
+        # VM's actual disk (96GB by default, plenty for even a 64GB image).
+        local lima_img="/var/tmp/biga-shrink.img"
+
+        # Ensure the image is readable by the Lima user (sudo dd makes it root-owned).
+        sudo chown "$(whoami)" "$OUT_DIR/$IMG_NAME"
+
+        info "Copying image into Lima native disk (loop devices need native ext4)…"
+        limactl shell "$lima_instance" -- cp "$OUT_DIR/$IMG_NAME" "$lima_img"
+
+        info "Running pishrink on Lima native disk…"
+        if ! limactl shell "$lima_instance" -- sudo bash "$pishrink_local" -s "$lima_img"; then
+            limactl shell "$lima_instance" -- rm -f "$lima_img"
+            rm -f "$pishrink_local"
+            abort "pishrink failed — original image is untouched at $OUT_DIR/$IMG_NAME"
+        fi
+
+        info "Copying shrunk image back…"
+        limactl shell "$lima_instance" -- cp "$lima_img" "$OUT_DIR/$IMG_NAME"
+        limactl shell "$lima_instance" -- rm -f "$lima_img"
+
         rm -f "$pishrink_local"
         info "Shrunk: $(du -h "$OUT_DIR/$IMG_NAME" | cut -f1)"
         return
