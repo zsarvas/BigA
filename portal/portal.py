@@ -106,6 +106,11 @@ def connect_wifi(ssid: str, password: str) -> tuple[bool, str]:
     Returns (success, human-readable message).
     """
     log.info("Attempting to connect to %r", ssid)
+    # Remove any stale NM profile for this SSID — avoids "key-mgmt missing" errors.
+    subprocess.run(
+        ["nmcli", "connection", "delete", ssid],
+        capture_output=True, check=False,
+    )
     try:
         result = subprocess.run(
             [
