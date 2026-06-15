@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
 # Build a BigA golden image from an SD card and publish it as a GitHub release asset.
 #
-# Runs on macOS or Linux. Requires Docker on macOS (for pishrink).
+# Runs on macOS or Linux.
 # Requires the GitHub CLI (gh) for release upload.
 #
 # Usage:
@@ -10,8 +10,9 @@
 #   ./scripts/build_image.sh sdb  v1.2            # Linux: specify device + version tag
 #
 # Prerequisites:
-#   macOS  — Docker Desktop running, gh installed (brew install gh)
-#   Linux  — pishrink.sh in PATH or auto-downloaded, gh installed
+#   macOS  — Lima installed (brew install lima), gh installed (brew install gh)
+#            First time: limactl start  (takes ~2 min, one-off setup)
+#   Linux  — gh installed
 
 set -euo pipefail
 
@@ -35,11 +36,14 @@ check_deps() {
     for cmd in dd xz; do
         command -v "$cmd" &>/dev/null || missing+=("$cmd")
     done
-    if [ "$OS" = "Darwin" ] && ! command -v docker &>/dev/null; then
-        missing+=("docker  (install Docker Desktop from https://docker.com)")
-    fi
     if [ ${#missing[@]} -gt 0 ]; then
         abort "Missing dependencies: ${missing[*]}"
+    fi
+    if [ "$OS" = "Darwin" ] && ! command -v limactl &>/dev/null; then
+        echo ""
+        echo "  ⚠  Lima not found — pishrink will be skipped and the image will be full card size."
+        echo "     For proper shrinking (recommended): brew install lima && limactl start"
+        echo ""
     fi
 }
 
@@ -106,6 +110,39 @@ capture_image() {
 
 shrink_image() {
     step "2/4" "Shrinking with pishrink"
+
+    local pishrink_url="https://raw.githubusercontent.com/Drewsif/PiShrink/master/pishrink.sh"
+    local pishrink_local="$OUT_DIR/pishrink.sh"
+
+    if [ "$OS" = "Darwin" ]; then
+        # Docker Desktop can't expose /dev/loop devices to containers, so pishrink
+        # always fails there. Lima is a lightweight Linux VM that has proper loop
+        # device support and mounts /Users writable — use it instead.
+        if ! command -v limactl &>/dev/null; then
+            info "Lima not found — skipping pishrink (image will be full card size)"
+            info "Install: brew install lima && limactl start"
+            return
+        fi
+
+        # Start the default Lima VM if it isn't already running.
+        if ! limactl list 2>/dev/null | grep -q "^default.*Running"; then
+            info "Starting Lima VM (first time takes ~2 min)..."
+            limactl start default
+        fi
+
+        info "Downloading pishrink.sh..."
+        curl -fsSL "$pishrink_url" -o "$pishrink_local"
+        chmod +x "$pishrink_local"
+
+        info "Running pishrink inside Lima..."
+        # Lima mounts /Users writable; pishrink can shrink the image in-place.
+        limactl shell default -- sudo bash "$pishrink_local" -s "$OUT_DIR/$IMG_NAME"
+        rm -f "$pishrink_local"
+        info "Shrunk: $(du -h "$OUT_DIR/$IMG_NAME" | cut -f1)"
+        return
+    fi
+
+    # Linux — run pishrink directly.
     if [ "$OS" = "Darwin" ]; then
         # Docker on macOS cannot expose loop devices to containers — pishrink
         # requires them and will always fail. Skip shrinking; xz handles empty
