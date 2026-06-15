@@ -8,6 +8,12 @@ set -euo pipefail
 REPO_DIR="/home/pi/BigA"
 LOG_FILE="/var/log/biga_update.log"
 SERVICE="biga"
+DEPLOY_KEY="/etc/biga/deploy_key"
+
+# Use the deploy key for SSH if present (required for private repos).
+if [ -f "$DEPLOY_KEY" ]; then
+    export GIT_SSH_COMMAND="ssh -i $DEPLOY_KEY -o IdentitiesOnly=yes -o StrictHostKeyChecking=accept-new"
+fi
 
 log() {
     echo "[$(date '+%Y-%m-%d %H:%M:%S')] $*" | tee -a "$LOG_FILE"
