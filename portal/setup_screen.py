@@ -59,6 +59,7 @@ def main() -> None:
         return
 
     pygame.init()
+    pygame.mouse.set_visible(False)
     W = int(os.environ.get("BIGA_SCREEN_WIDTH",  480))
     H = int(os.environ.get("BIGA_SCREEN_HEIGHT", 320))
 

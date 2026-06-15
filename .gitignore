@@ -5,3 +5,8 @@ __pycache__/
 
 # Large local media (clips for idle mpv); copy to Pi separately
 src/pi_tracker/assets/*.mp4
+
+# Golden image artifacts — kept locally, published to GitHub Releases
+*.img
+*.img.xz
+pishrink.sh

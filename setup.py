@@ -370,7 +370,11 @@ run(
 )
 run("sudo systemctl daemon-reload", "reloading systemd")
 run("sudo systemctl enable biga", "enabling biga service")
-# Mask the getty on tty2 so no "BigA login:" prompt flashes before the app takes the VT.
+# Mask getty on both tty1 and tty2.
+# Plymouth exits to tty1; masking it prevents a login flash before openvt switches to tty2.
+# This Pi is a dedicated appliance — SSH is the only console access needed.
+run("sudo systemctl mask getty@tty1.service", "masking getty on tty1")
+run("sudo systemctl mask autovt@tty1.service", "masking autovt on tty1")
 run("sudo systemctl mask getty@tty2.service", "masking getty on tty2")
 run("sudo systemctl mask autovt@tty2.service", "masking autovt on tty2")
 
@@ -395,6 +399,15 @@ run("sudo systemctl daemon-reload", "reloading systemd for portal")
 run("sudo systemctl enable biga-portal", "enabling biga-portal service")
 print("  → portal log: /var/log/biga-portal.log")
 print("  → runs on port 80 while in AP mode")
+
+# Install dnsmasq captive-portal config so all DNS resolves to the Pi,
+# triggering iOS/Android/macOS to auto-open the browser on joining the AP.
+run("sudo mkdir -p /etc/NetworkManager/dnsmasq-shared.d", "ensuring dnsmasq-shared.d exists")
+run(
+    f"sudo cp {os.path.join(REPO, 'portal', 'nm-dnsmasq', 'biga-captive.conf')} "
+    "/etc/NetworkManager/dnsmasq-shared.d/biga-captive.conf",
+    "installing captive portal DNS redirect",
+)
 
 setup_screen_src = os.path.join(REPO, "portal", "biga-setup-screen.service")
 run(
