@@ -396,6 +396,15 @@ run("sudo systemctl enable biga-portal", "enabling biga-portal service")
 print("  → portal log: /var/log/biga-portal.log")
 print("  → runs on port 80 while in AP mode")
 
+# Install dnsmasq captive-portal config so all DNS resolves to the Pi,
+# triggering iOS/Android/macOS to auto-open the browser on joining the AP.
+run("sudo mkdir -p /etc/NetworkManager/dnsmasq-shared.d", "ensuring dnsmasq-shared.d exists")
+run(
+    f"sudo cp {os.path.join(REPO, 'portal', 'nm-dnsmasq', 'biga-captive.conf')} "
+    "/etc/NetworkManager/dnsmasq-shared.d/biga-captive.conf",
+    "installing captive portal DNS redirect",
+)
+
 setup_screen_src = os.path.join(REPO, "portal", "biga-setup-screen.service")
 run(
     f"sudo cp {setup_screen_src} /etc/systemd/system/biga-setup-screen.service",

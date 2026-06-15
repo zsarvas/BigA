@@ -102,20 +102,18 @@ def scan_networks() -> list[dict]:
 
 def connect_wifi(ssid: str, password: str) -> tuple[bool, str]:
     """
-    Write credentials and connect via nmcli.
+    Create an NM connection profile for the user's network and persist creds.
+    Does NOT bring down the AP or attempt to connect immediately — the Pi
+    reboots after this returns, at which point NM connects cleanly on boot.
     Returns (success, human-readable message).
     """
-    log.info("Attempting to connect to %r", ssid)
+    log.info("Saving connection profile for %r", ssid)
 
-    # Take down AP so wlan0 is free for client mode.
-    subprocess.run(["nmcli", "con", "down", "biga-ap"], capture_output=True, check=False)
-
-    # Wipe any stale profiles to avoid key-mgmt errors.
+    # Wipe stale profiles to avoid key-mgmt / duplicate errors.
     for name in (ssid, "biga-client"):
         subprocess.run(["nmcli", "connection", "delete", name], capture_output=True, check=False)
 
-    # Build an explicit profile with key-mgmt set — avoids the
-    # "key-mgmt: property is missing" error from nmcli device wifi connect.
+    # Create explicit profile with key-mgmt — avoids "property is missing" errors.
     add = subprocess.run(
         [
             "nmcli", "connection", "add",
@@ -126,31 +124,18 @@ def connect_wifi(ssid: str, password: str) -> tuple[bool, str]:
             "wifi-sec.key-mgmt", "wpa-psk",
             "wifi-sec.psk", password,
             "ipv4.method", "auto",
+            "connection.autoconnect", "yes",
+            "connection.autoconnect-priority", "10",
         ],
         capture_output=True, text=True, check=False,
     )
     if add.returncode != 0:
         detail = (add.stderr or add.stdout).strip()
         log.warning("nmcli connection add failed: %s", detail)
-        return False, detail or "Failed to create connection profile."
+        return False, detail or "Failed to save connection profile."
 
-    try:
-        result = subprocess.run(
-            ["nmcli", "connection", "up", "biga-client"],
-            capture_output=True, text=True, timeout=30, check=False,
-        )
-    except subprocess.TimeoutExpired:
-        return False, "Connection timed out — check the password and try again."
-    except Exception as exc:
-        return False, str(exc)
-
-    if result.returncode == 0:
-        _persist_creds(ssid, password)
-        return True, "Connected."
-
-    detail = (result.stderr or result.stdout).strip()
-    log.warning("nmcli connect failed (%d): %s", result.returncode, detail)
-    return False, detail or "Connection failed — wrong password?"
+    _persist_creds(ssid, password)
+    return True, "Profile saved."
 
 
 def _persist_creds(ssid: str, password: str) -> None:
@@ -182,39 +167,13 @@ def provisioned() -> bool:
 
 def _switch_to_client_mode() -> None:
     """
-    Tear down the AP, connect to user's WiFi, and hand off to biga service.
-    Runs in a background thread so the HTTP success response reaches the client first.
+    Reboot the Pi after a short delay so the success page can load.
+    On reboot, NM auto-connects the biga-client profile, biga starts cleanly.
     """
     def _run() -> None:
-        time.sleep(2)  # let the success page load before we change anything
-        log.info("Switching to client mode…")
-
-        if not CREDS_FILE.exists():
-            log.error("No credentials file — cannot switch to client mode.")
-            return
-
-        creds = json.loads(CREDS_FILE.read_text())
-        ssid = creds.get("ssid", "")
-        password = creds.get("password", "")
-
-        # Drop the AP so wlan0 is free for client mode
-        subprocess.run(["nmcli", "con", "down", "biga-ap"], check=False)
-
-        # Connect to the user's network
-        log.info("Connecting to %r…", ssid)
-        result = subprocess.run(
-            ["nmcli", "device", "wifi", "connect", ssid,
-             "password", password, "ifname", INTERFACE],
-            capture_output=True, text=True, timeout=30, check=False,
-        )
-        if result.returncode == 0:
-            log.info("Connected to %r.", ssid)
-        else:
-            log.error("nmcli connect failed: %s", (result.stderr or result.stdout).strip())
-
-        subprocess.run(["systemctl", "stop",  "biga-portal"], check=False)
-        subprocess.run(["systemctl", "start", "biga"],        check=False)
-        log.info("biga service started. Portal shutting down.")
+        time.sleep(4)
+        log.info("Rebooting to apply WiFi credentials…")
+        subprocess.run(["reboot"])
 
     threading.Thread(target=_run, daemon=True).start()
 
@@ -222,6 +181,35 @@ def _switch_to_client_mode() -> None:
 # ---------------------------------------------------------------------------
 # Routes
 # ---------------------------------------------------------------------------
+
+# ---------------------------------------------------------------------------
+# Captive portal detection — iOS, Android, Windows, macOS all probe these
+# URLs on joining a new network. Redirecting them to "/" triggers the OS to
+# auto-open a browser and prompt the user to sign in.
+# ---------------------------------------------------------------------------
+
+_CAPTIVE_PORTAL_PATHS = [
+    "/hotspot-detect.html",          # Apple (iOS / macOS)
+    "/library/test/success.html",    # Apple legacy
+    "/generate_204",                 # Android / Chrome
+    "/gen_204",                      # Android alternate
+    "/connecttest.txt",              # Microsoft Windows
+    "/ncsi.txt",                     # Windows NCSI
+    "/redirect",                     # generic
+    "/success.txt",                  # generic
+]
+
+@app.route("/hotspot-detect.html")
+@app.route("/library/test/success.html")
+@app.route("/generate_204")
+@app.route("/gen_204")
+@app.route("/connecttest.txt")
+@app.route("/ncsi.txt")
+@app.route("/redirect")
+@app.route("/success.txt")
+def captive_portal_check():
+    return redirect(url_for("index"), 302)
+
 
 @app.route("/")
 def index():

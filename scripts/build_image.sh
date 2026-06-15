@@ -106,27 +106,21 @@ capture_image() {
 
 shrink_image() {
     step "2/4" "Shrinking with pishrink"
+    if [ "$OS" = "Darwin" ]; then
+        # Docker on macOS cannot expose loop devices to containers — pishrink
+        # requires them and will always fail. Skip shrinking; xz handles empty
+        # disk space extremely well so the final .xz size is nearly identical.
+        info "Skipping pishrink on macOS (loop devices unavailable in Docker Desktop)"
+        info "xz will compress empty space — final size will be similar"
+        return
+    fi
+
     local pishrink_url="https://raw.githubusercontent.com/Drewsif/PiShrink/master/pishrink.sh"
     local pishrink_local="$OUT_DIR/pishrink.sh"
-
     info "Downloading pishrink.sh..."
     curl -fsSL "$pishrink_url" -o "$pishrink_local"
     chmod +x "$pishrink_local"
-
-    if [ "$OS" = "Darwin" ]; then
-        info "Running pishrink via Docker (debian:bookworm-slim)..."
-        docker run --privileged --rm \
-            -v "$OUT_DIR:/img" \
-            debian:bookworm-slim \
-            bash -c "
-                apt-get update -qq &&
-                apt-get install -y -qq parted e2fsprogs util-linux &&
-                bash /img/pishrink.sh -s /img/$IMG_NAME
-            "
-    else
-        sudo bash "$pishrink_local" -s "$OUT_DIR/$IMG_NAME"
-    fi
-
+    sudo bash "$pishrink_local" -s "$OUT_DIR/$IMG_NAME"
     rm -f "$pishrink_local"
     info "Shrunk: $(du -h "$OUT_DIR/$IMG_NAME" | cut -f1)"
 }
