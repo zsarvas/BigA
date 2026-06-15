@@ -370,7 +370,11 @@ run(
 )
 run("sudo systemctl daemon-reload", "reloading systemd")
 run("sudo systemctl enable biga", "enabling biga service")
-# Mask the getty on tty2 so no "BigA login:" prompt flashes before the app takes the VT.
+# Mask getty on both tty1 and tty2.
+# Plymouth exits to tty1; masking it prevents a login flash before openvt switches to tty2.
+# This Pi is a dedicated appliance — SSH is the only console access needed.
+run("sudo systemctl mask getty@tty1.service", "masking getty on tty1")
+run("sudo systemctl mask autovt@tty1.service", "masking autovt on tty1")
 run("sudo systemctl mask getty@tty2.service", "masking getty on tty2")
 run("sudo systemctl mask autovt@tty2.service", "masking autovt on tty2")
 
