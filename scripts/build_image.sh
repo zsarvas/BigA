@@ -92,7 +92,8 @@ capture_image() {
     if [ "$OS" = "Darwin" ]; then
         info "Unmounting $DEVICE..."
         diskutil unmountDisk "$DEVICE"
-        sudo dd if="$RAW_DEVICE" of="$OUT_DIR/$IMG_NAME" bs=4m
+        # "Device not configured" at end-of-card is normal on macOS — not a real error.
+        sudo dd if="$RAW_DEVICE" of="$OUT_DIR/$IMG_NAME" bs=4m || true
     else
         sudo dd if="$RAW_DEVICE" of="$OUT_DIR/$IMG_NAME" bs=4M status=progress
     fi
@@ -105,26 +106,28 @@ capture_image() {
 
 shrink_image() {
     step "2/4" "Shrinking with pishrink"
+    local pishrink_url="https://raw.githubusercontent.com/Drewsif/PiShrink/master/pishrink.sh"
+    local pishrink_local="$OUT_DIR/pishrink.sh"
+
+    info "Downloading pishrink.sh..."
+    curl -fsSL "$pishrink_url" -o "$pishrink_local"
+    chmod +x "$pishrink_local"
+
     if [ "$OS" = "Darwin" ]; then
-        info "Running pishrink via Docker..."
-        docker run --privileged \
+        info "Running pishrink via Docker (debian:bookworm-slim)..."
+        docker run --privileged --rm \
             -v "$OUT_DIR:/img" \
-            mkaczanowski/pishrink \
-            pishrink.sh -s "/img/$IMG_NAME"
+            debian:bookworm-slim \
+            bash -c "
+                apt-get update -qq &&
+                apt-get install -y -qq parted e2fsprogs util-linux &&
+                bash /img/pishrink.sh -s /img/$IMG_NAME
+            "
     else
-        local pishrink
-        if command -v pishrink.sh &>/dev/null; then
-            pishrink="pishrink.sh"
-        else
-            info "Downloading pishrink.sh..."
-            curl -fsSL \
-                https://raw.githubusercontent.com/Drewsif/PiShrink/master/pishrink.sh \
-                -o /tmp/pishrink.sh
-            chmod +x /tmp/pishrink.sh
-            pishrink="/tmp/pishrink.sh"
-        fi
-        sudo "$pishrink" -s "$OUT_DIR/$IMG_NAME"
+        sudo bash "$pishrink_local" -s "$OUT_DIR/$IMG_NAME"
     fi
+
+    rm -f "$pishrink_local"
     info "Shrunk: $(du -h "$OUT_DIR/$IMG_NAME" | cut -f1)"
 }
 
