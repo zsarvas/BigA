@@ -53,13 +53,13 @@ select_disk() {
     echo "========================================"
     step "?" "Available disks"
     if [ "$OS" = "Darwin" ]; then
-        diskutil list | grep -E "^/dev/disk|FAT|Linux|Microsoft|EXT"
+        diskutil list | grep "^/dev/disk"
     else
         lsblk -d -o NAME,SIZE,MODEL,TRAN | grep -v "loop\|NAME"
     fi
     echo ""
     if [ "$OS" = "Darwin" ]; then
-        read -rp "  Enter disk number (e.g. 4 for /dev/disk4): " DISK
+        read -rp "  Enter disk NUMBER only (e.g. 4 for /dev/disk4): " DISK
     else
         read -rp "  Enter device name (e.g. sdb for /dev/sdb): " DISK
     fi
