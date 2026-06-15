@@ -227,7 +227,7 @@ print("  BigA Angels Tracker — Setup")
 print("=" * 50)
 
 # 1. apt deps
-print("\n[1/10] Installing system packages...")
+print("\n[1/11] Installing system packages...")
 run("sudo apt update -q")
 run(
     "sudo apt install -y "
@@ -246,7 +246,7 @@ run(
 )
 
 # 2. pip deps (Pi-specific only; pygame comes from apt above, not requirements-pi.txt)
-print("\n[2/10] Installing Python packages...")
+print("\n[2/11] Installing Python packages...")
 pip_extra = _pip_break_system_flag()
 if _externally_managed_python() and not pip_extra:
     print(
@@ -259,15 +259,15 @@ run(
 )
 
 # 3. video group
-print("\n[3/10] Configuring user permissions...")
+print("\n[3/11] Configuring user permissions...")
 run("sudo usermod -a -G video pi", "adding pi to video group")
 
 # 4. timezone
-print("\n[4/10] Setting timezone...")
+print("\n[4/11] Setting timezone...")
 run("sudo timedatectl set-timezone America/Los_Angeles", "timezone → America/Los_Angeles")
 
 # 5. display drivers
-print("\n[5/10] Installing display drivers...")
+print("\n[5/11] Installing display drivers...")
 boot_dir, overlays_dir = _boot_paths()
 print(f"  → boot dir: {boot_dir}")
 overlays = os.path.join(REPO, "overlays")
@@ -277,7 +277,7 @@ else:
     print("  ⚠ No overlay files found in overlays/ — skipping (panel uses include file)")
 
 # 6. config.txt + panel include file
-print("\n[6/10] Updating boot config + panel include...")
+print("\n[6/11] Updating boot config + panel include...")
 config_path = os.path.join(boot_dir, "config.txt")
 if not os.path.exists(config_path):
     print(f"  ✗ {config_path} not found")
@@ -290,7 +290,7 @@ print(
 )
 
 # 7. start script (Bookworm KMSDRM + chvt 2 + openvt wrapper for systemd)
-print("\n[7/10] Installing start script...")
+print("\n[7/11] Installing start script...")
 start_script = f"""#!/bin/sh
 set -eu
 export PYTHONUNBUFFERED=1
@@ -317,7 +317,7 @@ run("sudo mv /tmp/biga-start.sh /usr/local/bin/biga-start.sh", "installing /usr/
 run("sudo chmod +x /usr/local/bin/biga-start.sh", "making start script executable")
 
 # 8. systemd service
-print("\n[8/10] Setting up systemd service...")
+print("\n[8/11] Setting up systemd service...")
 run(
     f"sudo cp {REPO}/biga.service.example /etc/systemd/system/biga.service",
     "copying service file",
@@ -326,13 +326,25 @@ run("sudo systemctl daemon-reload", "reloading systemd")
 run("sudo systemctl enable biga", "enabling biga service")
 
 # 9. auto-update cron
-print("\n[9/10] Installing auto-update cron job...")
+print("\n[9/11] Installing auto-update cron job...")
 _install_auto_update_cron(REPO)
 print("  → update log: /var/log/biga_update.log")
 
 # 10. boot splash (Plymouth theme + quiet cmdline)
-print("\n[10/10] Installing boot splash...")
+print("\n[10/11] Installing boot splash...")
 _install_splash(REPO, boot_dir)
+
+# 11. WiFi provisioning portal service
+print("\n[11/11] Installing WiFi provisioning portal...")
+portal_service_src = os.path.join(REPO, "portal", "biga-portal.service")
+run(
+    f"sudo cp {portal_service_src} /etc/systemd/system/biga-portal.service",
+    "copying portal service file",
+)
+run("sudo systemctl daemon-reload", "reloading systemd for portal")
+run("sudo systemctl enable biga-portal", "enabling biga-portal service")
+print("  → portal log: /var/log/biga-portal.log")
+print("  → runs on port 80 while in AP mode")
 
 print("\n" + "=" * 50)
 print("  Setup complete! Rebooting in 5 seconds...")
