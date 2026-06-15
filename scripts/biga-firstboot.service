@@ -1,0 +1,16 @@
+[Unit]
+Description=BigA First Boot — Generate AP profile for this Pi's MAC address
+After=network.target NetworkManager.service
+# Only runs once; the sentinel file prevents re-runs on subsequent boots.
+ConditionPathExists=!/etc/biga/.firstboot_done
+
+[Service]
+Type=oneshot
+RemainAfterExit=yes
+ExecStart=/bin/bash /home/pi/BigA/scripts/setup_ap.sh
+ExecStartPost=/bin/bash -c "mkdir -p /etc/biga && touch /etc/biga/.firstboot_done"
+StandardOutput=append:/var/log/biga-firstboot.log
+StandardError=append:/var/log/biga-firstboot.log
+
+[Install]
+WantedBy=multi-user.target

@@ -65,13 +65,18 @@ def factory_reset() -> None:
         log.info("No credentials file found — already in factory state.")
 
     _service("stop", "biga")
+
+    # Restore AP mode via NetworkManager
+    result = subprocess.run(
+        ["nmcli", "con", "up", "biga-ap"],
+        capture_output=True, text=True, check=False,
+    )
+    if result.returncode == 0:
+        log.info("AP mode restored (biga-ap up).")
+    else:
+        log.error("nmcli con up biga-ap failed: %s", result.stderr.strip())
+
     _service("start", "biga-portal")
-
-    # TODO Phase 2: restore AP networking here
-    #   _service("start", "hostapd")
-    #   _service("start", "dnsmasq")
-    #   subprocess.run(["ip", "addr", "add", "192.168.4.1/24", "dev", "wlan0"], check=False)
-
     log.info("Factory reset complete. Portal is active at 192.168.4.1.")
 
 

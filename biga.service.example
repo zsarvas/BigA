@@ -2,6 +2,8 @@
 Description=Big A Angels Tracker
 After=network-online.target multi-user.target
 Wants=network-online.target
+# Only start when user WiFi credentials have been provisioned via the portal.
+ConditionPathExists=/etc/biga/wifi_creds.json
 
 [Service]
 Type=simple

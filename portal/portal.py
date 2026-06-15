@@ -20,6 +20,8 @@ import logging
 import os
 import subprocess
 import sys
+import threading
+import time
 from pathlib import Path
 
 import qrcode
@@ -137,10 +139,15 @@ def _persist_creds(ssid: str, password: str) -> None:
 
 
 def wipe_creds() -> None:
-    """Remove saved credentials (called by factory-reset button, Phase 3)."""
+    """Wipe credentials and restore AP mode (also called by the reset button)."""
     if CREDS_FILE.exists():
         CREDS_FILE.unlink()
         log.info("Credentials wiped.")
+
+    subprocess.run(["systemctl", "stop",  "biga"],        check=False)
+    subprocess.run(["nmcli", "con", "up", "biga-ap"],     check=False)
+    subprocess.run(["systemctl", "start", "biga-portal"], check=False)
+    log.info("AP mode restored. Portal active at %s.", AP_IP)
 
 
 def provisioned() -> bool:
@@ -150,14 +157,41 @@ def provisioned() -> bool:
 
 def _switch_to_client_mode() -> None:
     """
-    Tear down the AP and hand control to the client network.
-    Phase 2 TODO: stop hostapd + dnsmasq, flush static IP,
-    then restart NetworkManager so it picks up the new connection.
-    For now we just restart biga so it retries the MLB API once online.
+    Tear down the AP, connect to user's WiFi, and hand off to biga service.
+    Runs in a background thread so the HTTP success response reaches the client first.
     """
-    log.info("Switching to client mode…")
-    subprocess.run(["sudo", "systemctl", "stop", "biga-portal"], check=False)
-    subprocess.run(["sudo", "systemctl", "start", "biga"], check=False)
+    def _run() -> None:
+        time.sleep(2)  # let the success page load before we change anything
+        log.info("Switching to client mode…")
+
+        if not CREDS_FILE.exists():
+            log.error("No credentials file — cannot switch to client mode.")
+            return
+
+        creds = json.loads(CREDS_FILE.read_text())
+        ssid = creds.get("ssid", "")
+        password = creds.get("password", "")
+
+        # Drop the AP so wlan0 is free for client mode
+        subprocess.run(["nmcli", "con", "down", "biga-ap"], check=False)
+
+        # Connect to the user's network
+        log.info("Connecting to %r…", ssid)
+        result = subprocess.run(
+            ["nmcli", "device", "wifi", "connect", ssid,
+             "password", password, "ifname", INTERFACE],
+            capture_output=True, text=True, timeout=30, check=False,
+        )
+        if result.returncode == 0:
+            log.info("Connected to %r.", ssid)
+        else:
+            log.error("nmcli connect failed: %s", (result.stderr or result.stdout).strip())
+
+        subprocess.run(["systemctl", "stop",  "biga-portal"], check=False)
+        subprocess.run(["systemctl", "start", "biga"],        check=False)
+        log.info("biga service started. Portal shutting down.")
+
+    threading.Thread(target=_run, daemon=True).start()
 
 
 # ---------------------------------------------------------------------------
@@ -229,7 +263,6 @@ def factory_reset():
     Phase 3: this same logic runs from the physical reset button GPIO handler.
     """
     wipe_creds()
-    # TODO Phase 3: bring AP back up (hostapd + dnsmasq + static IP)
     return redirect(url_for("index"))
 
 

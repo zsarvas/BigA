@@ -271,7 +271,7 @@ print("  BigA Angels Tracker — Setup")
 print("=" * 50)
 
 # 1. apt deps
-print("\n[1/12] Installing system packages...")
+print("\n[1/13] Installing system packages...")
 run("sudo apt update -q")
 run(
     "sudo apt install -y "
@@ -290,7 +290,7 @@ run(
 )
 
 # 2. pip deps (Pi-specific only; pygame comes from apt above, not requirements-pi.txt)
-print("\n[2/12] Installing Python packages...")
+print("\n[2/13] Installing Python packages...")
 pip_extra = _pip_break_system_flag()
 if _externally_managed_python() and not pip_extra:
     print(
@@ -303,15 +303,15 @@ run(
 )
 
 # 3. video group
-print("\n[3/12] Configuring user permissions...")
+print("\n[3/13] Configuring user permissions...")
 run("sudo usermod -a -G video pi", "adding pi to video group")
 
 # 4. timezone
-print("\n[4/12] Setting timezone...")
+print("\n[4/13] Setting timezone...")
 run("sudo timedatectl set-timezone America/Los_Angeles", "timezone → America/Los_Angeles")
 
 # 5. display drivers
-print("\n[5/12] Installing display drivers...")
+print("\n[5/13] Installing display drivers...")
 boot_dir, overlays_dir = _boot_paths()
 print(f"  → boot dir: {boot_dir}")
 overlays = os.path.join(REPO, "overlays")
@@ -321,7 +321,7 @@ else:
     print("  ⚠ No overlay files found in overlays/ — skipping (panel uses include file)")
 
 # 6. config.txt + panel include file
-print("\n[6/12] Updating boot config + panel include...")
+print("\n[6/13] Updating boot config + panel include...")
 config_path = os.path.join(boot_dir, "config.txt")
 if not os.path.exists(config_path):
     print(f"  ✗ {config_path} not found")
@@ -334,7 +334,7 @@ print(
 )
 
 # 7. start script (Bookworm KMSDRM + chvt 2 + openvt wrapper for systemd)
-print("\n[7/12] Installing start script...")
+print("\n[7/13] Installing start script...")
 start_script = f"""#!/bin/sh
 set -eu
 export PYTHONUNBUFFERED=1
@@ -363,7 +363,7 @@ run("sudo mv /tmp/biga-start.sh /usr/local/bin/biga-start.sh", "installing /usr/
 run("sudo chmod +x /usr/local/bin/biga-start.sh", "making start script executable")
 
 # 8. systemd service
-print("\n[8/12] Setting up systemd service...")
+print("\n[8/13] Setting up systemd service...")
 run(
     f"sudo cp {REPO}/biga.service.example /etc/systemd/system/biga.service",
     "copying service file",
@@ -375,17 +375,17 @@ run("sudo systemctl mask getty@tty2.service", "masking getty on tty2")
 run("sudo systemctl mask autovt@tty2.service", "masking autovt on tty2")
 
 # 9. auto-update cron + deploy key SSH config
-print("\n[9/12] Configuring auto-update (cron + deploy key)...")
+print("\n[9/13] Configuring auto-update (cron + deploy key)...")
 _configure_deploy_key(REPO)
 _install_auto_update_cron(REPO)
 print("  → update log: /var/log/biga_update.log")
 
 # 10. boot splash (Plymouth theme + quiet cmdline)
-print("\n[10/12] Installing boot splash...")
+print("\n[10/13] Installing boot splash...")
 _install_splash(REPO, boot_dir)
 
 # 11. WiFi provisioning portal service
-print("\n[11/12] Installing WiFi provisioning portal...")
+print("\n[11/13] Installing WiFi provisioning portal...")
 portal_service_src = os.path.join(REPO, "portal", "biga-portal.service")
 run(
     f"sudo cp {portal_service_src} /etc/systemd/system/biga-portal.service",
@@ -397,7 +397,7 @@ print("  → portal log: /var/log/biga-portal.log")
 print("  → runs on port 80 while in AP mode")
 
 # 12. Factory reset button monitor (GPIO 27)
-print("\n[12/12] Installing factory reset button monitor...")
+print("\n[12/13] Installing factory reset button monitor...")
 reset_script = os.path.join(REPO, "scripts", "reset_button.py")
 reset_service_src = os.path.join(REPO, "scripts", "biga-reset.service")
 run(f"chmod +x {reset_script}", "making reset_button.py executable")
@@ -409,6 +409,20 @@ run("sudo systemctl daemon-reload", "reloading systemd for reset button")
 run("sudo systemctl enable biga-reset", "enabling biga-reset service")
 print("  → GPIO BCM 26 — hold 5 s to factory reset")
 print("  → reset log: /var/log/biga-reset.log")
+
+# 13. AP mode setup (NetworkManager profile + firstboot service)
+print("\n[13/13] Setting up AP mode...")
+run(f"chmod +x {os.path.join(REPO, 'scripts', 'setup_ap.sh')}", "making setup_ap.sh executable")
+run(f"sudo bash {os.path.join(REPO, 'scripts', 'setup_ap.sh')}", "creating biga-ap NM profile")
+firstboot_src = os.path.join(REPO, "scripts", "biga-firstboot.service")
+run(
+    f"sudo cp {firstboot_src} /etc/systemd/system/biga-firstboot.service",
+    "copying firstboot service",
+)
+run("sudo systemctl daemon-reload", "reloading systemd for firstboot")
+run("sudo systemctl enable biga-firstboot", "enabling biga-firstboot service")
+print("  → AP profile created (nmcli con show biga-ap)")
+print("  → firstboot service regenerates SSID from MAC on each new Pi")
 
 print("\n" + "=" * 50)
 print("  Setup complete! Rebooting in 5 seconds...")
