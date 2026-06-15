@@ -106,17 +106,37 @@ def connect_wifi(ssid: str, password: str) -> tuple[bool, str]:
     Returns (success, human-readable message).
     """
     log.info("Attempting to connect to %r", ssid)
-    # Remove any stale NM profile for this SSID — avoids "key-mgmt missing" errors.
-    subprocess.run(
-        ["nmcli", "connection", "delete", ssid],
-        capture_output=True, check=False,
+
+    # Take down AP so wlan0 is free for client mode.
+    subprocess.run(["nmcli", "con", "down", "biga-ap"], capture_output=True, check=False)
+
+    # Wipe any stale profiles to avoid key-mgmt errors.
+    for name in (ssid, "biga-client"):
+        subprocess.run(["nmcli", "connection", "delete", name], capture_output=True, check=False)
+
+    # Build an explicit profile with key-mgmt set — avoids the
+    # "key-mgmt: property is missing" error from nmcli device wifi connect.
+    add = subprocess.run(
+        [
+            "nmcli", "connection", "add",
+            "type", "wifi",
+            "con-name", "biga-client",
+            "ifname", INTERFACE,
+            "ssid", ssid,
+            "wifi-sec.key-mgmt", "wpa-psk",
+            "wifi-sec.psk", password,
+            "ipv4.method", "auto",
+        ],
+        capture_output=True, text=True, check=False,
     )
+    if add.returncode != 0:
+        detail = (add.stderr or add.stdout).strip()
+        log.warning("nmcli connection add failed: %s", detail)
+        return False, detail or "Failed to create connection profile."
+
     try:
         result = subprocess.run(
-            [
-                "nmcli", "device", "wifi", "connect", ssid,
-                "password", password, "ifname", INTERFACE,
-            ],
+            ["nmcli", "connection", "up", "biga-client"],
             capture_output=True, text=True, timeout=30, check=False,
         )
     except subprocess.TimeoutExpired:
