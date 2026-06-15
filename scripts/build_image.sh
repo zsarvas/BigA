@@ -143,6 +143,17 @@ shrink_image() {
     fi
 
     # Linux — run pishrink directly.
+    if [ "$OS" = "Darwin" ]; then
+        # Docker on macOS cannot expose loop devices to containers — pishrink
+        # requires them and will always fail. Skip shrinking; xz handles empty
+        # disk space extremely well so the final .xz size is nearly identical.
+        info "Skipping pishrink on macOS (loop devices unavailable in Docker Desktop)"
+        info "xz will compress empty space — final size will be similar"
+        return
+    fi
+
+    local pishrink_url="https://raw.githubusercontent.com/Drewsif/PiShrink/master/pishrink.sh"
+    local pishrink_local="$OUT_DIR/pishrink.sh"
     info "Downloading pishrink.sh..."
     curl -fsSL "$pishrink_url" -o "$pishrink_local"
     chmod +x "$pishrink_local"
