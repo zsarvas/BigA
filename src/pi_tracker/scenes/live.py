@@ -7,7 +7,7 @@ from typing import Any
 import pygame
 
 from .. import config
-from ..assets import AssetManager, StreamingMp4, open_streaming_clip, scale_surface
+from ..assets import AssetManager, StreamingGif, scale_surface
 from ..drawing.diamond import draw_diamond
 from .linescore_table import compute_linescore_geometry, draw_linescore_table_centered
 
@@ -131,75 +131,105 @@ class LiveScene:
     def __init__(self) -> None:
         self._last_inning_half: str = ""
         self._played_clips: set[str] = set()
-        self._clip: Any = None          # StreamingGif | StreamingMp4
-        self._clip_playing = False
-        self._clip_frame_idx = 0
-        self._clip_cur_frame: pygame.Surface | None = None
-        self._clip_deadline_ms = 0
+        self._pending_clip: Path | None = None  # consumed by app.py → mpv
 
-    def _next_unseen_clip(self, game_pk: int, size: tuple[int, int]) -> Any:
-        """Load the next unseen game highlight clip, or None if none available."""
-        folder = config.GAME_HIGHLIGHTS_DIR / str(game_pk)
-        if not folder.is_dir():
-            return None
-        for path in sorted(folder.glob("*.mp4")):
-            if path.name not in self._played_clips:
-                clip = open_streaming_clip(path, size)
-                if clip.ok:
-                    self._played_clips.add(path.name)
-                    return clip
-        return None
+        # GIF animation state (pygame-rendered, not mpv — short canned overlays)
+        self._anim: StreamingGif | None = None
+        self._anim_frame: int = 0
+        self._anim_deadline_ms: int = 0
+        self._anim_cur: pygame.Surface | None = None
+        self._anim_done = True
 
-    def _maybe_play_clip(self, screen: pygame.Surface, state: dict[str, Any]) -> bool:
-        """Play a game highlight between innings. Returns True if a frame was drawn."""
-        now = pygame.time.get_ticks()
+    # ------------------------------------------------------------------
+    # Between-innings highlight queueing
+    # ------------------------------------------------------------------
+
+    def _maybe_queue_clip(self, state: dict[str, Any]) -> None:
+        """Queue the next unseen game highlight at each inning break."""
+        if self._pending_clip is not None:
+            return
         inning_half = str(state.get("inning_half", "")).lower()
         game_pk = int(state.get("live_game_pk") or 0)
-
-        # Trigger on transition into an inning break state.
-        if (not self._clip_playing
-                and inning_half in _INNING_BREAK_STATES
-                and inning_half != self._last_inning_half
-                and game_pk):
-            self._clip = self._next_unseen_clip(game_pk, screen.get_size())
-            if self._clip:
-                surf, dur = self._clip.decode(0)
-                if surf is not None:
-                    self._clip_playing = True
-                    self._clip_frame_idx = 0
-                    self._clip_cur_frame = surf
-                    self._clip_deadline_ms = now + dur
-
+        if inning_half in _INNING_BREAK_STATES and inning_half != self._last_inning_half and game_pk:
+            folder = config.GAME_HIGHLIGHTS_DIR / str(game_pk)
+            if folder.is_dir():
+                for path in sorted(folder.glob("*.mp4")):
+                    if path.name not in self._played_clips:
+                        self._played_clips.add(path.name)
+                        self._pending_clip = path
+                        break
         self._last_inning_half = inning_half
 
-        if not self._clip_playing:
+    # ------------------------------------------------------------------
+    # Canned GIF animations triggered by in-game events
+    # ------------------------------------------------------------------
+
+    def _start_anim(self, event: str, size: tuple[int, int]) -> None:
+        """Load and start a canned GIF for *event* (e.g. "homerun"). No-op if file missing."""
+        path = config.LIVE_ANIMATIONS_DIR / f"{event}.gif"
+        if not path.exists():
+            return
+        try:
+            anim = StreamingGif(path, size)
+            if not anim.ok:
+                return
+            surf, dur = anim.decode(0)
+            if surf is None:
+                return
+            self._anim = anim
+            self._anim_frame = 0
+            self._anim_deadline_ms = pygame.time.get_ticks() + dur
+            self._anim_cur = surf
+            self._anim_done = False
+        except Exception:
+            pass
+
+    def _tick_anim(self, screen: pygame.Surface, state: dict[str, Any]) -> bool:
+        """
+        Trigger new animations from state, advance running ones.
+        Returns True if a GIF frame was drawn (caller should still draw
+        the scoreboard on top — animations are background replacements).
+        """
+        event = str(state.get("live_event", "")).strip()
+        if event and not self._anim:
+            self._start_anim(event, screen.get_size())
+
+        if self._anim_done or self._anim is None:
             return False
 
-        if now >= self._clip_deadline_ms and self._clip is not None:
-            self._clip_frame_idx += 1
-            if self._clip_frame_idx >= self._clip.n_frames:
-                self._clip_playing = False
-                self._clip = None
-                self._clip_cur_frame = None
-                return False
-            surf, dur = self._clip.decode(self._clip_frame_idx)
-            if surf is None:
-                self._clip_playing = False
-                self._clip = None
-                self._clip_cur_frame = None
-                return False
-            self._clip_cur_frame = surf
-            self._clip_deadline_ms = now + dur
+        now = pygame.time.get_ticks()
+        if now >= self._anim_deadline_ms:
+            self._anim_frame += 1
+            if self._anim_frame >= self._anim.n_frames:
+                # Animation finished — hold for LIVE_ANIM_HOLD_MS then clear.
+                if now >= self._anim_deadline_ms + config.LIVE_ANIM_HOLD_MS:
+                    self._anim = None
+                    self._anim_cur = None
+                    self._anim_done = True
+                    return False
+            else:
+                surf, dur = self._anim.decode(self._anim_frame)
+                if surf is None:
+                    self._anim = None
+                    self._anim_cur = None
+                    self._anim_done = True
+                    return False
+                self._anim_cur = surf
+                self._anim_deadline_ms = now + dur
 
-        if self._clip_cur_frame is not None:
-            screen.blit(self._clip_cur_frame, (0, 0))
+        if self._anim_cur is not None:
+            screen.blit(self._anim_cur, (0, 0))
             return True
         return False
 
+    # ------------------------------------------------------------------
+
     def draw(self, screen: pygame.Surface, assets: AssetManager, state: dict[str, Any]) -> None:
-        if self._maybe_play_clip(screen, state):
-            return
-        assets.draw_background(screen, venue_id=int(state.get("live_venue_id") or 0))
+        self._maybe_queue_clip(state)
+
+        # Choose background: GIF animation overlay OR stadium image.
+        if not self._tick_anim(screen, state):
+            assets.draw_background(screen, venue_id=int(state.get("live_venue_id") or 0))
 
         away_id = int(state.get("away_team_id", 0))
         home_id = int(state.get("home_team_id", 0))

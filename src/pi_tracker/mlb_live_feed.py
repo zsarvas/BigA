@@ -20,6 +20,39 @@ def _team_profile(side: dict[str, Any] | None) -> dict[str, Any]:
     return side
 
 
+_EVENT_MAP: dict[str, str] = {
+    "home_run": "homerun",
+    "strikeout": "strikeout",
+    "strikeout_double_play": "strikeout",
+    "walk": "walk",
+    "intent_walk": "walk",
+    "hit_by_pitch": "walk",
+    "double": "double",
+    "triple": "triple",
+    "single": "hit",
+    "field_out": "out",
+    "grounded_into_double_play": "out",
+    "force_out": "out",
+    "double_play": "out",
+    "triple_play": "out",
+    "sac_fly": "out",
+    "sac_bunt": "out",
+    "fielders_choice": "out",
+    "fielders_choice_out": "out",
+    "caught_stealing_2b": "out",
+    "caught_stealing_3b": "out",
+    "caught_stealing_home": "out",
+    "stolen_base_2b": "stolen_base",
+    "stolen_base_3b": "stolen_base",
+    "stolen_base_home": "stolen_base",
+}
+
+
+def _normalise_event(raw: str) -> str:
+    """Map an MLB API event string to one of our canned animation names."""
+    return _EVENT_MAP.get(raw, "")
+
+
 def _safe_int(v: Any) -> int | None:
     try:
         if v is None:
@@ -231,18 +264,31 @@ def live_feed_to_state_patch(feed: dict[str, Any]) -> dict[str, Any]:
     outs = int(linescore.get("outs", 0) or 0)
 
     last_play = ""
+    live_event = ""
+    live_last_play_id = ""
+
+    # Walk allPlays in reverse to find the most recent completed play.
+    all_plays = plays.get("allPlays") or []
     cur_desc = str((current.get("result") or {}).get("description") or "").strip()
     if cur_desc:
         last_play = cur_desc
-    else:
-        all_plays = plays.get("allPlays") or []
-        for p in reversed(all_plays):
-            if not isinstance(p, dict):
-                continue
-            d = str((p.get("result") or {}).get("description") or "").strip()
-            if d:
-                last_play = d
-                break
+
+    # Find the last *completed* play to extract event type.
+    for p in reversed(all_plays):
+        if not isinstance(p, dict):
+            continue
+        result = p.get("result") or {}
+        d = str(result.get("description") or "").strip()
+        if not d:
+            continue
+        if not last_play:
+            last_play = d
+        # play_id lets us deduplicate (don't re-fire same event next poll).
+        play_id = str(p.get("playId") or p.get("atBatIndex") or "")
+        event_raw = str(result.get("event") or "").lower().replace(" ", "_")
+        live_event = _normalise_event(event_raw)
+        live_last_play_id = play_id
+        break
 
     pk = feed.get("gamePk")
     if pk is None:
@@ -280,6 +326,9 @@ def live_feed_to_state_patch(feed: dict[str, Any]) -> dict[str, Any]:
     }
     if last_play:
         patch["last_play"] = last_play
+    if live_event and live_last_play_id:
+        patch["live_event"] = live_event
+        patch["live_last_play_id"] = live_last_play_id
     if pk is not None:
         patch["live_game_pk"] = int(pk)
     return patch

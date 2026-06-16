@@ -25,8 +25,7 @@ def _game_clip_folder(state: dict) -> "Path | None":
 
 class FinalWinScene(ClipPlayerMixin):
     def draw(self, screen: pygame.Surface, assets: AssetManager, state: dict[str, Any]) -> None:
-        if self._cp_maybe_play(screen, _game_clip_folder(state)):
-            return
+        self._cp_tick(_game_clip_folder(state))
         assets.draw_gif_background(screen, "win.gif", pygame.time.get_ticks(), fallback=(12, 40, 12))
         draw_score_with_flanking_logos(
             screen, assets, state, y_center=config.layout_y(72), score_color=config.ANGELS_GOLD

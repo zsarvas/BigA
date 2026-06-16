@@ -19,6 +19,7 @@ from __future__ import annotations
 import datetime
 import logging
 import os
+import subprocess
 import sys
 import threading
 import time
@@ -298,6 +299,41 @@ def _configure_logging() -> None:
         logging.getLogger(noisy).setLevel(logging.WARNING)
 
 
+def _play_mpv(path: Path, size: tuple[int, int], flags: int) -> "pygame.Surface":
+    """
+    Hand the display to mpv for one clip, then reclaim it.
+
+    On KMS-mode Raspberry Pi, only one process can be DRM master at a time, so
+    we fully tear down the pygame display before launching mpv and reinitialise
+    it afterwards.  mpv auto-detects the best video output (drm on Pi, metal/gl
+    on Mac dev) so no platform-specific flags are needed.
+
+    Returns a fresh pygame.Surface at the same size/flags so the caller can
+    replace its ``screen`` reference.
+    """
+    pygame.display.quit()
+    try:
+        subprocess.run(
+            [
+                "mpv",
+                "--hwdec=auto",
+                "--no-audio",
+                "--really-quiet",
+                "--fs",
+                str(path),
+            ],
+            timeout=600,
+        )
+    except FileNotFoundError:
+        logging.warning("mpv not found — skipping clip %s", path.name)
+    except subprocess.TimeoutExpired:
+        logging.warning("mpv timed out on %s", path.name)
+    except Exception as exc:  # noqa: BLE001
+        logging.warning("mpv error: %s", exc)
+    pygame.display.init()
+    return pygame.display.set_mode(size, flags)
+
+
 def main() -> None:
     _configure_logging()
     # SDL video/audio driver env is applied in bootstrap_sdl.configure_sdl() before pygame import.
@@ -437,11 +473,15 @@ def main() -> None:
                 )
             pygame.display.flip()
 
-            # A streaming highlight needs a faster tick than the clip's native rate
-            # or it looks slow/choppy; everything else runs at the low base FPS.
-            tick_fps = config.FPS
-            if getattr(scene, "_playing", False):
-                tick_fps = config.HIGHLIGHT_FPS
+            # If the scene queued a clip for mpv, play it now and reclaim the display.
+            pending = getattr(scene, "_pending_clip", None)
+            if pending:
+                scene._pending_clip = None  # type: ignore[attr-defined]
+                screen = _play_mpv(pending, screen.get_size(), display_flags)
+
+            # Boost tick rate while a pygame-rendered GIF animation is running
+            # (live event overlays); normal scenes run at the low base FPS.
+            tick_fps = config.HIGHLIGHT_FPS if getattr(scene, "_anim", None) else config.FPS
             clock.tick(tick_fps)
             frame_i += 1
     finally:

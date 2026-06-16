@@ -89,9 +89,21 @@ HIGHLIGHT_MAX_GAP_MIN = _env_clamp_int("BIGA_HIGHLIGHT_MAX_MIN", 5, lo=1, hi=720
 # Game-specific highlights — downloaded during/after a live game, wiped at first
 # pitch of the next game. Organised as highlights/{game_pk}/ per game.
 GAME_HIGHLIGHTS_DIR = ASSETS_DIR / "highlights"
-# Frame rate while a highlight clip is streaming. The rest of the UI runs at FPS
-# (10) to save CPU; the clip is ~12 fps, so the loop must tick faster than that
-# during playback or it looks slow/choppy. Tune with BIGA_HIGHLIGHT_FPS.
+
+# Canned GIF animations for in-game events.  Drop GIF files here named after
+# the event type.  The live scene plays the matching GIF as a full-screen
+# background overlay when the event fires, then reverts to the stadium image.
+#
+# Supported filenames (any missing file is silently skipped):
+#   homerun.gif   strikeout.gif   walk.gif   double.gif   triple.gif
+#   hit.gif       out.gif         stolen_base.gif
+LIVE_ANIMATIONS_DIR = ASSETS_DIR / "live_animations"
+
+# How long (ms) to hold the animation on-screen after the GIF loops once.
+# Set to 0 to play exactly once and immediately cut back to the scoreboard.
+LIVE_ANIM_HOLD_MS = _env_clamp_int("BIGA_LIVE_ANIM_HOLD_MS", 0, lo=0, hi=10_000)
+
+# Frame rate while a GIF animation is playing (pygame-rendered, not mpv).
 HIGHLIGHT_FPS = _env_clamp_int("BIGA_HIGHLIGHT_FPS", 24, lo=FPS, hi=60)
 
 
