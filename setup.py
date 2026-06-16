@@ -291,6 +291,7 @@ run(
     "libcairo2-dev "
     "pkg-config "
     "python3-dev "
+    "mpv "
     "plymouth "
     "plymouth-themes",
     "apt packages",

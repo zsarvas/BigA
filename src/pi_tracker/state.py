@@ -57,6 +57,14 @@ class SharedGameState:
             "batter_hits": 0,
             "batter_rbi": 0,
             "last_play": "",
+            # Fired by the live feed when a notable play happens; consumed by
+            # LiveScene to trigger the matching GIF animation.  One of:
+            # "homerun" | "strikeout" | "walk" | "double" | "triple" |
+            # "hit" | "out" | "stolen_base" | "" (no pending event)
+            "live_event": "",
+            # play ID of the most recently processed play (prevents re-firing
+            # the same event on repeated polls)
+            "live_last_play_id": "",
             "schedule_status": "loading",
             "schedule_error": "",
             "next_game_date_display": "",

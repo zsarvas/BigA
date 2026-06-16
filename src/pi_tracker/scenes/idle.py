@@ -1,20 +1,16 @@
 from __future__ import annotations
 
-import random
 import textwrap
+from pathlib import Path
 from typing import Any
 
 import pygame
 
 from .. import config
-from ..assets import AssetManager, StreamingGif, StreamingMp4, open_streaming_clip, scale_surface
+from ..assets import AssetManager, scale_surface
 from ..mlb_http import ANGELS_TEAM_ID as TRACKED_TEAM_ID
 from ..team_config import tracked_team_abbr, tracked_team_name
-
-# Clip sources for the idle scene:
-#   1. Game highlights (config.GAME_HIGHLIGHTS_DIR subfolders) — prefer these
-#      when they exist so yesterday's recap plays the day before the next game.
-#   2. Fall back to the permanent curated reel (config.IDLE_VIDEOS_DIR).
+from ._clip_player import ClipPlayerMixin
 
 # Small logo beside "vs / @ …" on idle (hero logo is the tracked franchise).
 IDLE_OPPONENT_LOGO_SIZE = (config.layout_size(28), config.layout_size(28))
@@ -72,96 +68,28 @@ def _blit_matchup_row(
     return r.bottom + 4
 
 
-_HIGHLIGHT_EXTS = {".gif", ".mp4", ".mov", ".avi", ".mkv"}
-
-
-class IdleScene:
-    """Next-game info; occasionally streams a full-screen highlight clip.
-
-    Scans ``config.HIGHLIGHTS_DIR`` for .gif/.mp4 files and picks a random one
-    every ``config.HIGHLIGHT_MIN_GAP_MIN``–``HIGHLIGHT_MAX_GAP_MIN`` minutes.
+def _idle_clip_folder() -> Path | None:
     """
+    Game highlights take priority (yesterday's recap plays until first pitch).
+    Falls back to the permanent curated reel.
+    """
+    if config.GAME_HIGHLIGHTS_DIR.is_dir():
+        for sub in config.GAME_HIGHLIGHTS_DIR.iterdir():
+            if sub.is_dir() and any(sub.glob("*.mp4")):
+                return sub  # return the {game_pk}/ subfolder directly
+    if config.IDLE_VIDEOS_DIR.is_dir() and (
+        any(config.IDLE_VIDEOS_DIR.glob("*.mp4"))
+        or any(config.IDLE_VIDEOS_DIR.glob("*.gif"))
+    ):
+        return config.IDLE_VIDEOS_DIR
+    return None
 
-    def __init__(self) -> None:
-        self._hl: StreamingGif | StreamingMp4 | None = None
-        self._playing = False
-        self._frame_idx = 0
-        self._cur_frame: pygame.Surface | None = None
-        self._frame_deadline_ms = 0
-        self._next_play_ms: int | None = None
 
-    def _rand_gap_ms(self) -> int:
-        lo = config.HIGHLIGHT_MIN_GAP_MIN
-        hi = max(lo, config.HIGHLIGHT_MAX_GAP_MIN)
-        return random.randint(lo, hi) * 60_000
-
-    def _pick_random_clip(self, size: tuple[int, int]) -> "StreamingGif | StreamingMp4 | None":
-        """Pick a random clip: prefers game highlights, falls back to idle_videos reel."""
-        clips: list = []
-        # Collect all downloaded game highlight clips (any game subfolder).
-        if config.GAME_HIGHLIGHTS_DIR.is_dir():
-            for sub in config.GAME_HIGHLIGHTS_DIR.iterdir():
-                if sub.is_dir():
-                    clips += [p for p in sub.iterdir() if p.suffix.lower() == ".mp4"]
-        # Fall back to (or supplement with) the curated idle reel.
-        if not clips and config.IDLE_VIDEOS_DIR.is_dir():
-            clips = [p for p in config.IDLE_VIDEOS_DIR.iterdir() if p.suffix.lower() in _HIGHLIGHT_EXTS]
-        if not clips:
-            return None
-        path = random.choice(clips)
-        clip = open_streaming_clip(path, size)
-        return clip if clip.ok else None
-
-    def _maybe_play_highlight(self, screen: pygame.Surface) -> bool:
-        """Advance/stream the highlight clip. Returns True if a frame was drawn this tick."""
-        now = pygame.time.get_ticks()
-        if self._next_play_ms is None:
-            self._next_play_ms = now + self._rand_gap_ms()
-
-        if not self._playing and now >= self._next_play_ms:
-            self._hl = self._pick_random_clip(screen.get_size())
-            if self._hl and self._hl.ok:
-                surf, dur = self._hl.decode(0)
-                if surf is not None:
-                    self._playing = True
-                    self._frame_idx = 0
-                    self._cur_frame = surf
-                    self._frame_deadline_ms = now + dur
-                else:
-                    self._next_play_ms = now + self._rand_gap_ms()
-            else:
-                self._next_play_ms = now + self._rand_gap_ms()
-
-        if not self._playing:
-            return False
-
-        if now >= self._frame_deadline_ms and self._hl is not None:
-            self._frame_idx += 1
-            if self._frame_idx >= self._hl.n_frames:
-                self._playing = False
-                self._hl = None
-                self._cur_frame = None
-                self._next_play_ms = now + self._rand_gap_ms()
-                return False
-            surf, dur = self._hl.decode(self._frame_idx)
-            if surf is None:
-                self._playing = False
-                self._hl = None
-                self._cur_frame = None
-                self._next_play_ms = now + self._rand_gap_ms()
-                return False
-            self._cur_frame = surf
-            self._frame_deadline_ms = now + dur
-
-        if self._cur_frame is not None:
-            screen.blit(self._cur_frame, (0, 0))
-            return True
-        return False
+class IdleScene(ClipPlayerMixin):
+    """Next-game info; queues a full-screen highlight clip for mpv every 5 minutes."""
 
     def draw(self, screen: pygame.Surface, assets: AssetManager, state: dict[str, Any]) -> None:
-        if self._maybe_play_highlight(screen):
-            return
-
+        self._cp_tick(_idle_clip_folder())
         assets.draw_background(screen, venue_id=int(state.get("next_game_venue_id") or 0))
 
         # Idle hero: tracked franchise logo + name (not the generic "home" club from state).

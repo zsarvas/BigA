@@ -140,8 +140,8 @@ def main() -> None:
         field("Password", AP_PASSWORD, WHITE)
 
         # Bottom hint
-        for i, line in enumerate(("Scan QR to join, then open",
-                                   "192.168.4.1 in your browser")):
+        for i, line in enumerate(("Scan QR to join, then",
+                                   "open a browser to configure")):
             screen.blit(f_hint.render(line, True, MUTED),
                         (RX, H - 30 + i * 14))
 

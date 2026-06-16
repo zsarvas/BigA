@@ -1,12 +1,11 @@
 """
-Reusable highlight-clip player mixin.
+Clip-player mixin.
 
-Classes that need periodic clip playback (IdleScene, FinalWinScene,
-FinalLossScene) inherit ``ClipPlayerMixin`` and call
-``self._cp_maybe_play(screen, folder)`` from their ``draw()`` method.
-
-The caller supplies the *folder* of clips to sample each call, allowing
-scenes to switch between game highlights and the idle reel dynamically.
+Scenes that want periodic highlight playback inherit ``ClipPlayerMixin`` and
+call ``self._cp_tick(state_or_folder)`` from ``draw()``.  When the gap has
+elapsed and a clip is available, the mixin sets ``self._pending_clip`` to the
+chosen Path.  ``app.py`` picks that up after the draw call and hands it off to
+mpv, which plays the clip hardware-accelerated while pygame is suspended.
 """
 
 from __future__ import annotations
@@ -15,10 +14,7 @@ import random
 from pathlib import Path
 from typing import Any
 
-import pygame
-
 from .. import config
-from ..assets import open_streaming_clip
 
 
 def _rand_gap_ms() -> int:
@@ -27,9 +23,9 @@ def _rand_gap_ms() -> int:
     return random.randint(lo, hi)
 
 
-def _pick_clip(folder: Path, size: tuple[int, int], played: set[str]) -> Any:
-    """Choose a random un-played clip from *folder*; loop back if all played."""
-    clips = [p for p in folder.glob("*.mp4")] + [p for p in folder.glob("*.gif")]
+def _pick_clip(folder: Path, played: set[str]) -> Path | None:
+    """Choose a random clip from *folder*, cycling back after all have been played."""
+    clips = list(folder.glob("*.mp4")) + list(folder.glob("*.gif"))
     if not clips:
         return None
     unseen = [p for p in clips if p.name not in played]
@@ -38,79 +34,53 @@ def _pick_clip(folder: Path, size: tuple[int, int], played: set[str]) -> Any:
         unseen = clips
     path = random.choice(unseen)
     played.add(path.name)
-    clip = open_streaming_clip(path, size)
-    return clip if clip.ok else None
+    return path
 
 
 class ClipPlayerMixin:
     """
-    Mix-in that adds timed clip playback.
+    Mix-in for timed clip playback via mpv.
 
-    Call ``_cp_maybe_play(screen, folder)`` from ``draw()``.
-    Returns True if a clip frame was drawn this tick (caller should skip
-    drawing the normal scene content).
+    After ``_cp_tick(folder)`` sets ``self._pending_clip``, ``app.py``
+    drains it and calls ``_play_mpv()``.  The scene itself never renders
+    video frames — mpv handles that completely.
+
+    Call ``_cp_tick(folder)`` from ``draw()``; it is a no-op when ``folder``
+    is None or empty.
     """
 
     def __init_cp(self) -> None:
         if hasattr(self, "_cp_init_done"):
             return
         self._cp_init_done = True
-        self._cp_clip: Any = None
-        self._cp_playing = False
-        self._cp_frame_idx = 0
-        self._cp_cur_frame: pygame.Surface | None = None
-        self._cp_deadline_ms = 0
-        self._cp_next_play_ms = 0
+        self._cp_next_play_ms: int = 0
         self._cp_played: set[str] = set()
+        self._pending_clip: Path | None = None  # read by app.py each frame
 
-    @property
-    def _playing(self) -> bool:
-        """Exposed so app.py can detect an active clip (tick-rate selection)."""
-        return getattr(self, "_cp_playing", False)
-
-    def _cp_maybe_play(self, screen: pygame.Surface, folder: Path | None) -> bool:
+    def _cp_tick(self, folder: Path | None) -> None:
         """
-        Advance the clip if one is playing, or start a new one if the gap has elapsed.
-        Returns True if a clip frame was drawn.
+        Check if it's time to queue a clip.  Sets ``self._pending_clip`` when
+        the gap has elapsed and a clip exists in *folder*.
         """
         self.__init_cp()
+
+        # Don't queue another until the current one has been consumed by app.py.
+        if self._pending_clip is not None:
+            return
+
+        import pygame  # local import; mixin is shared across display-less contexts
         now = pygame.time.get_ticks()
 
         if self._cp_next_play_ms == 0:
             self._cp_next_play_ms = now + _rand_gap_ms()
+            return
 
-        if not self._cp_playing and now >= self._cp_next_play_ms and folder and folder.is_dir():
-            clip = _pick_clip(folder, screen.get_size(), self._cp_played)
-            if clip:
-                surf, dur = clip.decode(0)
-                if surf is not None:
-                    self._cp_clip = clip
-                    self._cp_playing = True
-                    self._cp_frame_idx = 0
-                    self._cp_cur_frame = surf
-                    self._cp_deadline_ms = now + dur
-            self._cp_next_play_ms = now + _rand_gap_ms()
+        if now < self._cp_next_play_ms:
+            return
 
-        if not self._cp_playing:
-            return False
+        if folder and folder.is_dir():
+            path = _pick_clip(folder, self._cp_played)
+            if path:
+                self._pending_clip = path
 
-        if now >= self._cp_deadline_ms and self._cp_clip is not None:
-            self._cp_frame_idx += 1
-            if self._cp_frame_idx >= self._cp_clip.n_frames:
-                self._cp_playing = False
-                self._cp_clip = None
-                self._cp_cur_frame = None
-                return False
-            surf, dur = self._cp_clip.decode(self._cp_frame_idx)
-            if surf is None:
-                self._cp_playing = False
-                self._cp_clip = None
-                self._cp_cur_frame = None
-                return False
-            self._cp_cur_frame = surf
-            self._cp_deadline_ms = now + dur
-
-        if self._cp_cur_frame is not None:
-            screen.blit(self._cp_cur_frame, (0, 0))
-            return True
-        return False
+        self._cp_next_play_ms = now + _rand_gap_ms()

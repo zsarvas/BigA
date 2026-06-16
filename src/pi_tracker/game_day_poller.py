@@ -135,6 +135,12 @@ def game_day_loop(state: SharedGameState, stop: threading.Event) -> None:
                 if pk:
                     feed = fetch_live_feed_v11(int(pk))
                     patch = live_feed_to_state_patch(feed)
+                    # Only fire live_event when the play_id is new so the
+                    # animation isn't re-triggered on every poll.
+                    new_play_id = patch.get("live_last_play_id", "")
+                    if new_play_id and new_play_id == snap.get("live_last_play_id"):
+                        patch.pop("live_event", None)
+                        patch.pop("live_last_play_id", None)
                     if game_is_final(feed):
                         won = angels_won(feed)
                         if won is True:

@@ -110,19 +110,29 @@ def fetch_highlight_clips(game_pk: int) -> list[dict]:
         resp = requests.get(url, timeout=15)
         resp.raise_for_status()
         data = resp.json()
+        if not isinstance(data, dict):
+            raise ValueError(f"unexpected response type: {type(data)}")
     except Exception as exc:
         log.warning("highlights fetch failed for game %s: %s", game_pk, exc)
         return []
 
-    items = data.get("highlights", {}).get("highlights", {}).get("items", [])
+    items = (
+        (data.get("highlights") or {})
+        .get("highlights") or {}
+    ).get("items") or []
+    if not isinstance(items, list):
+        return []
+
     results = []
     for item in items:
+        if not isinstance(item, dict):
+            continue
         if item.get("type") != "video":
             continue
-        blurb = item.get("blurb", "")
-        if not _is_play_clip(blurb):
+        blurb = str(item.get("blurb") or "")
+        if not blurb or not _is_play_clip(blurb):
             continue
-        playbacks = item.get("playbacks", [])
+        playbacks = item.get("playbacks") or []
         mp4_url = _best_mp4_url(playbacks)
         if not mp4_url:
             continue
