@@ -47,3 +47,10 @@ nmcli con modify "$CON_NAME" \
     wifi-sec.psk "$AP_PASSWORD"
 
 echo "  → AP profile '$CON_NAME' created (activate with: nmcli con up $CON_NAME)"
+
+# Guarantee SSH is enabled on every golden image boot — without this, SSH
+# is only present if Pi Imager enabled it for that specific flash, which
+# doesn't carry over to cards flashed from the golden image.
+systemctl enable ssh 2>/dev/null || true
+systemctl start  ssh 2>/dev/null || true
+echo "  → SSH enabled and started"
