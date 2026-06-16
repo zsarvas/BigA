@@ -1,8 +1,10 @@
 """
-Win-scene NeoPixel strip (default BCM 19 / PWM channel 1).
+Win-scene NeoPixel strip (default BCM 19 / PWM channel 1) and mute button
+(default BCM 16, single press toggles audio on/off).
 
 Public API kept stable for ``app.py``:
     init_gpio() / set_win_led(active) / cleanup_gpio()
+    is_muted() / set_muted(bool)
 
 When ``set_win_led(True)`` is called, a daemon thread drives a slow Angels-red
 breathing pulse on the strip. ``set_win_led(False)`` stops the animation and
@@ -25,10 +27,12 @@ No-op when ``rpi_ws281x`` is not installed (e.g. local Mac dev).
 
 from __future__ import annotations
 
+import json
 import logging
 import os
 import threading
 import time
+from pathlib import Path
 
 log = logging.getLogger(__name__)
 
@@ -90,6 +94,78 @@ _anim_thread: threading.Thread | None = None
 _anim_stop = threading.Event()
 
 
+# ---------------------------------------------------------------------------
+# Mute button (BCM 16 by default, single press toggles audio)
+# ---------------------------------------------------------------------------
+
+_MUTE_PIN = _env_int("BIGA_MUTE_PIN", 16)
+_MUTE_STATE_FILE = Path(os.environ.get("BIGA_MUTE_STATE_FILE", "/etc/biga/mute.json"))
+
+_mute_lock = threading.Lock()
+_muted: bool = False
+_mute_button = None  # gpiozero Button, set in init_gpio()
+
+
+def _load_mute_state() -> bool:
+    try:
+        data = json.loads(_MUTE_STATE_FILE.read_text())
+        return bool(data.get("muted", False))
+    except Exception:
+        return False
+
+
+def _save_mute_state(muted: bool) -> None:
+    try:
+        _MUTE_STATE_FILE.parent.mkdir(parents=True, exist_ok=True)
+        _MUTE_STATE_FILE.write_text(json.dumps({"muted": muted}))
+    except Exception as e:
+        log.debug("could not save mute state: %s", e)
+
+
+def is_muted() -> bool:
+    """Return True if audio is currently muted."""
+    with _mute_lock:
+        return _muted
+
+
+def set_muted(muted: bool) -> None:
+    """Explicitly set mute state (also persists to disk)."""
+    global _muted
+    with _mute_lock:
+        _muted = muted
+    _save_mute_state(muted)
+    log.info("audio %s", "muted" if muted else "unmuted")
+
+
+def _toggle_mute() -> None:
+    global _muted
+    with _mute_lock:
+        _muted = not _muted
+        new_state = _muted
+    _save_mute_state(new_state)
+    log.info("mute toggled → %s", "muted" if new_state else "unmuted")
+
+
+def _init_mute_button() -> None:
+    """Set up the mute GPIO button. Called from init_gpio()."""
+    global _muted, _mute_button
+    _muted = _load_mute_state()
+    log.debug("mute state loaded: %s", _muted)
+    try:
+        from gpiozero import Button  # type: ignore[import-untyped]
+        btn = Button(_MUTE_PIN, pull_up=True, bounce_time=0.05)
+        btn.when_pressed = _toggle_mute
+        _mute_button = btn
+        log.info("mute button on BCM %d (press to toggle)", _MUTE_PIN)
+    except Exception as e:
+        log.debug("mute button GPIO unavailable (BCM %d): %s", _MUTE_PIN, e)
+
+
+# ---------------------------------------------------------------------------
+# NeoPixel LED strip
+# ---------------------------------------------------------------------------
+
+
 def _import_neopixel():
     """Return (PixelStrip, Color) or (None, None) when rpi_ws281x is unavailable."""
     try:
@@ -109,8 +185,9 @@ def _color(rgb: tuple[int, int, int]):
 
 
 def init_gpio() -> None:
-    """Build the PixelStrip on first use. Safe to call repeatedly (no-op when ready)."""
+    """Build the PixelStrip and mute button on first use. Safe to call repeatedly."""
     global _strip, _initialized
+    _init_mute_button()
     with _lock:
         if _initialized:
             return
@@ -328,8 +405,8 @@ def set_win_led(active: bool) -> None:
 
 
 def cleanup_gpio() -> None:
-    """Stop animation, blank the strip, drop the strip handle."""
-    global _strip, _initialized, _win_active
+    """Stop animation, blank the strip, close mute button, drop handles."""
+    global _strip, _initialized, _win_active, _mute_button
     with _lock:
         _anim_stop.set()
     t = _anim_thread
@@ -344,3 +421,10 @@ def cleanup_gpio() -> None:
         _strip = None
         _initialized = False
         _win_active = False
+    btn = _mute_button
+    if btn is not None:
+        try:
+            btn.close()
+        except Exception:
+            pass
+        _mute_button = None

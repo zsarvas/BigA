@@ -42,7 +42,7 @@ from .mlb_http import ANGELS_TEAM_ID as TRACKED_TEAM_ID
 from .mlb_schedule import try_restore_final_scene_for_today
 from .state import SharedGameState
 from .team_config import tracked_team_abbr, tracked_team_name
-from .gpio_leds import cleanup_gpio, init_gpio, set_win_led
+from .gpio_leds import cleanup_gpio, init_gpio, is_muted, set_win_led
 from .mlb_highlights import HighlightDownloader, wipe_game_highlights
 from .scenes import FinalLossScene, FinalWinScene, IdleScene, LiveScene
 
@@ -312,18 +312,12 @@ def _play_mpv(path: Path, size: tuple[int, int], flags: int) -> "pygame.Surface"
     replace its ``screen`` reference.
     """
     pygame.display.quit()
+    cmd = ["mpv", "--hwdec=auto", "--really-quiet", "--fs"]
+    if is_muted():
+        cmd.append("--no-audio")
+    cmd.append(str(path))
     try:
-        subprocess.run(
-            [
-                "mpv",
-                "--hwdec=auto",
-                "--no-audio",
-                "--really-quiet",
-                "--fs",
-                str(path),
-            ],
-            timeout=600,
-        )
+        subprocess.run(cmd, timeout=600)
     except FileNotFoundError:
         logging.warning("mpv not found — skipping clip %s", path.name)
     except subprocess.TimeoutExpired:

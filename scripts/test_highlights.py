@@ -43,7 +43,7 @@ def main() -> None:
     for i, clip in enumerate(clips, 1):
         print(f"[{i}/{len(clips)}] {clip.name}")
         result = subprocess.run(
-            ["mpv", "--hwdec=auto", "--no-audio", "--really-quiet", "--fs", str(clip)]
+            ["mpv", "--hwdec=auto", "--really-quiet", "--fs", str(clip)]
         )
         if result.returncode not in (0, 4):  # 4 = quit by user
             print(f"  mpv exited with code {result.returncode}")
