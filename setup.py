@@ -207,6 +207,7 @@ def _install_splash(repo: str, boot_dir: str) -> None:
         "vt.global_cursor_default=0",
         "systemd.show_status=0",    # suppress "failed to start X" boot messages
         "rd.systemd.show_status=0", # same for initrd phase
+        "plymouth.use-drm=1",       # force Plymouth onto KMS/DRM so colours match
     }
     # strip any existing conflicting values then append ours
     cleaned = [t for t in tokens if t not in quiet_tokens
