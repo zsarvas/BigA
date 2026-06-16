@@ -7,7 +7,7 @@ from typing import Any
 import pygame
 
 from .. import config
-from ..assets import AssetManager, StreamingGif, scale_surface
+from ..assets import AssetManager, StreamingGif, StreamingMp4, open_streaming_clip, scale_surface
 from ..mlb_http import ANGELS_TEAM_ID as TRACKED_TEAM_ID
 from ..team_config import tracked_team_abbr, tracked_team_name
 
@@ -67,12 +67,18 @@ def _blit_matchup_row(
     return r.bottom + 4
 
 
+_HIGHLIGHT_EXTS = {".gif", ".mp4", ".mov", ".avi", ".mkv"}
+
+
 class IdleScene:
-    """Next-game info; occasionally streams a full-screen highlight clip (see config)."""
+    """Next-game info; occasionally streams a full-screen highlight clip.
+
+    Scans ``config.HIGHLIGHTS_DIR`` for .gif/.mp4 files and picks a random one
+    every ``config.HIGHLIGHT_MIN_GAP_MIN``–``HIGHLIGHT_MAX_GAP_MIN`` minutes.
+    """
 
     def __init__(self) -> None:
-        self._hl: StreamingGif | None = None
-        self._hl_loaded = False
+        self._hl: StreamingGif | StreamingMp4 | None = None
         self._playing = False
         self._frame_idx = 0
         self._cur_frame: pygame.Surface | None = None
@@ -84,13 +90,17 @@ class IdleScene:
         hi = max(lo, config.HIGHLIGHT_MAX_GAP_MIN)
         return random.randint(lo, hi) * 60_000
 
-    def _highlight(self, size: tuple[int, int]) -> StreamingGif | None:
-        if not self._hl_loaded:
-            self._hl_loaded = True
-            if config.HIGHLIGHT_GIF:
-                path = config.ASSETS_DIR / config.HIGHLIGHT_GIF
-                self._hl = StreamingGif(path, size) if path.is_file() else None
-        return self._hl
+    def _pick_random_clip(self, size: tuple[int, int]) -> "StreamingGif | StreamingMp4 | None":
+        """Scan the highlights folder and load a random clip. Returns None if empty."""
+        folder = config.HIGHLIGHTS_DIR
+        if not folder.is_dir():
+            return None
+        clips = [p for p in folder.iterdir() if p.suffix.lower() in _HIGHLIGHT_EXTS]
+        if not clips:
+            return None
+        path = random.choice(clips)
+        clip = open_streaming_clip(path, size)
+        return clip if clip.ok else None
 
     def _maybe_play_highlight(self, screen: pygame.Surface) -> bool:
         """Advance/stream the highlight clip. Returns True if a frame was drawn this tick."""
@@ -99,9 +109,9 @@ class IdleScene:
             self._next_play_ms = now + self._rand_gap_ms()
 
         if not self._playing and now >= self._next_play_ms:
-            hl = self._highlight(screen.get_size())
-            if hl and hl.ok:
-                surf, dur = hl.decode(0)
+            self._hl = self._pick_random_clip(screen.get_size())
+            if self._hl and self._hl.ok:
+                surf, dur = self._hl.decode(0)
                 if surf is not None:
                     self._playing = True
                     self._frame_idx = 0
@@ -119,12 +129,14 @@ class IdleScene:
             self._frame_idx += 1
             if self._frame_idx >= self._hl.n_frames:
                 self._playing = False
+                self._hl = None
                 self._cur_frame = None
                 self._next_play_ms = now + self._rand_gap_ms()
                 return False
             surf, dur = self._hl.decode(self._frame_idx)
             if surf is None:
                 self._playing = False
+                self._hl = None
                 self._cur_frame = None
                 self._next_play_ms = now + self._rand_gap_ms()
                 return False

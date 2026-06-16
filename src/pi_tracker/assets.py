@@ -222,6 +222,85 @@ class StreamingGif:
         return surf, dur
 
 
+class StreamingMp4:
+    """Frame-by-frame MP4/video player using OpenCV — same interface as StreamingGif.
+
+    Advances sequentially (random seeking is ignored) so the ``index`` parameter is
+    only used to detect a rewind request (index < current frame).  Resident memory
+    is ~one decoded frame.
+    """
+
+    def __init__(self, path: Path, size: tuple[int, int]) -> None:
+        self.size = size
+        self.n_frames = 0
+        self.ok = False
+        self._cap = None
+        self._fps = 24.0
+        self._cur_idx = -1
+        try:
+            import cv2  # type: ignore[import]
+        except ImportError:
+            warnings.warn(
+                f'{path.name}: MP4 highlight needs opencv ("pip install opencv-python-headless").',
+                stacklevel=1,
+            )
+            return
+        cap = cv2.VideoCapture(str(path))
+        if not cap.isOpened():
+            warnings.warn(f"{path.name}: cv2 could not open video", stacklevel=1)
+            return
+        total = int(cap.get(cv2.CAP_PROP_FRAME_COUNT))
+        fps = cap.get(cv2.CAP_PROP_FPS) or 24.0
+        if total <= 0:
+            warnings.warn(f"{path.name}: video has no frames", stacklevel=1)
+            cap.release()
+            return
+        self._cap = cap
+        self._fps = fps
+        self.n_frames = total
+        self.ok = True
+
+    def decode(self, index: int) -> tuple[pygame.Surface | None, int]:
+        """Read the next frame (sequential) → (surface, duration_ms), or (None, 0)."""
+        if not self.ok or self._cap is None:
+            return None, 0
+        import cv2  # type: ignore[import]
+        # Rewind if asked to restart from beginning
+        if index <= 0 and self._cur_idx > 0:
+            self._cap.set(cv2.CAP_PROP_POS_FRAMES, 0)
+            self._cur_idx = -1
+        ret, frame_bgr = self._cap.read()
+        if not ret:
+            return None, 0
+        self._cur_idx += 1
+        # BGR → RGB, then to pygame surface
+        import numpy as np  # type: ignore[import]
+        frame_rgb = frame_bgr[:, :, ::-1]
+        surf = pygame.surfarray.make_surface(np.transpose(frame_rgb, (1, 0, 2)))
+        if surf.get_size() != self.size:
+            surf = _cover_scale(surf, self.size)
+        try:
+            surf = surf.convert()
+        except pygame.error:
+            pass
+        dur = max(1, int(1000 / self._fps))
+        return surf, dur
+
+    def __del__(self) -> None:
+        if self._cap is not None:
+            try:
+                self._cap.release()
+            except Exception:  # noqa: BLE001
+                pass
+
+
+def open_streaming_clip(path: Path, size: tuple[int, int]) -> "StreamingGif | StreamingMp4":
+    """Factory: returns a StreamingMp4 for .mp4/.mov, StreamingGif for everything else."""
+    if path.suffix.lower() in {".mp4", ".mov", ".avi", ".mkv"}:
+        return StreamingMp4(path, size)
+    return StreamingGif(path, size)
+
+
 def _cover_scale(img: pygame.Surface, dest: tuple[int, int]) -> pygame.Surface:
     """Scale ``img`` to fully cover ``dest`` (keep aspect, crop overflow), centered."""
     img = _ensure_scalable_surface(img)

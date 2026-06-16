@@ -80,10 +80,11 @@ BG_DIM = _env_clamp_int("BIGA_BG_DIM", 130, lo=0, hi=255)
 
 # Highlight clip streamed full-screen during the idle scene at random intervals
 # (decoded frame-by-frame to keep RAM low — see assets.StreamingGif). Empty string
-# disables it. Plays roughly HIGHLIGHT_MIN..MAX minutes apart (default 20–30 → ~2–3/hr).
-HIGHLIGHT_GIF = os.environ.get("BIGA_HIGHLIGHT_GIF", "highlight.gif").strip()
-HIGHLIGHT_MIN_GAP_MIN = _env_clamp_int("BIGA_HIGHLIGHT_MIN_MIN", 20, lo=1, hi=720)
-HIGHLIGHT_MAX_GAP_MIN = _env_clamp_int("BIGA_HIGHLIGHT_MAX_MIN", 30, lo=1, hi=720)
+# Highlights folder — any .gif or .mp4 dropped here plays on the idle screen.
+# A random clip is chosen each time. Gap between plays defaults to 5 minutes.
+HIGHLIGHTS_DIR = ASSETS_DIR / "highlights"
+HIGHLIGHT_MIN_GAP_MIN = _env_clamp_int("BIGA_HIGHLIGHT_MIN_MIN", 5, lo=1, hi=720)
+HIGHLIGHT_MAX_GAP_MIN = _env_clamp_int("BIGA_HIGHLIGHT_MAX_MIN", 5, lo=1, hi=720)
 # Frame rate while a highlight clip is streaming. The rest of the UI runs at FPS
 # (10) to save CPU; the clip is ~12 fps, so the loop must tick faster than that
 # during playback or it looks slow/choppy. Tune with BIGA_HIGHLIGHT_FPS.

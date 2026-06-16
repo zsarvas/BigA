@@ -9,6 +9,10 @@ ConditionPathExists=/etc/biga/wifi_creds.json
 Type=simple
 User=root
 WorkingDirectory=/home/pi/BigA
+# Pull latest code before launching — ensures fresh images have all updates
+# on first run without waiting for the 4am cron. The leading '-' means a
+# failed update (no network yet, git error, etc.) is non-fatal; biga still starts.
+ExecStartPre=-/bin/bash /home/pi/BigA/scripts/update_biga.sh
 ExecStart=/usr/local/bin/biga-start.sh
 Restart=on-failure
 RestartSec=5
