@@ -14,7 +14,9 @@ from pathlib import Path
 REPO_ROOT = Path(__file__).resolve().parent.parent
 sys.path.insert(0, str(REPO_ROOT / "src"))
 
-HIGHLIGHTS_DIR = REPO_ROOT / "src" / "pi_tracker" / "assets" / "highlights"
+from pi_tracker import config  # noqa: E402
+
+HIGHLIGHTS_DIR = config.HIGHLIGHTS_DIR
 EXTS = {".gif", ".mp4", ".mov", ".avi", ".mkv"}
 
 
@@ -33,9 +35,10 @@ def main() -> None:
         sys.exit(1)
 
     pygame.init()
-    W, H = 960, 540
-    screen = pygame.display.set_mode((W, H))
+    W, H = config.SCREEN_WIDTH, config.SCREEN_HEIGHT
+    screen = pygame.display.set_mode((W, H), pygame.FULLSCREEN | pygame.NOFRAME)
     pygame.display.set_caption("Highlight Clip Test")
+    pygame.mouse.set_visible(False)
     clock = pygame.time.Clock()
     font = pygame.font.SysFont("DejaVu Sans", 18)
 
