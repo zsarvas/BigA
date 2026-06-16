@@ -202,10 +202,17 @@ def _install_splash(repo: str, boot_dir: str) -> None:
     tokens = proc.stdout.strip().split()
     quiet_tokens = {
         "quiet", "splash", "plymouth.ignore-serial-consoles",
-        "loglevel=3", "logo.nologo", "vt.global_cursor_default=0",
+        "loglevel=1",               # only panic-level kernel messages
+        "logo.nologo",
+        "vt.global_cursor_default=0",
+        "systemd.show_status=0",    # suppress "failed to start X" boot messages
+        "rd.systemd.show_status=0", # same for initrd phase
     }
     # strip any existing conflicting values then append ours
-    cleaned = [t for t in tokens if t not in quiet_tokens and not t.startswith("loglevel=")]
+    cleaned = [t for t in tokens if t not in quiet_tokens
+               and not t.startswith("loglevel=")
+               and not t.startswith("systemd.show_status=")
+               and not t.startswith("rd.systemd.show_status=")]
     new_cmdline = " ".join(cleaned + sorted(quiet_tokens)) + "\n"
 
     tmp = "/tmp/biga-cmdline.txt"
