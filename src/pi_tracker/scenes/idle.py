@@ -11,6 +11,11 @@ from ..assets import AssetManager, StreamingGif, StreamingMp4, open_streaming_cl
 from ..mlb_http import ANGELS_TEAM_ID as TRACKED_TEAM_ID
 from ..team_config import tracked_team_abbr, tracked_team_name
 
+# Clip sources for the idle scene:
+#   1. Game highlights (config.GAME_HIGHLIGHTS_DIR subfolders) — prefer these
+#      when they exist so yesterday's recap plays the day before the next game.
+#   2. Fall back to the permanent curated reel (config.IDLE_VIDEOS_DIR).
+
 # Small logo beside "vs / @ …" on idle (hero logo is the tracked franchise).
 IDLE_OPPONENT_LOGO_SIZE = (config.layout_size(28), config.layout_size(28))
 MATCHUP_LOGO_GAP = 8
@@ -91,11 +96,16 @@ class IdleScene:
         return random.randint(lo, hi) * 60_000
 
     def _pick_random_clip(self, size: tuple[int, int]) -> "StreamingGif | StreamingMp4 | None":
-        """Scan the highlights folder and load a random clip. Returns None if empty."""
-        folder = config.HIGHLIGHTS_DIR
-        if not folder.is_dir():
-            return None
-        clips = [p for p in folder.iterdir() if p.suffix.lower() in _HIGHLIGHT_EXTS]
+        """Pick a random clip: prefers game highlights, falls back to idle_videos reel."""
+        clips: list = []
+        # Collect all downloaded game highlight clips (any game subfolder).
+        if config.GAME_HIGHLIGHTS_DIR.is_dir():
+            for sub in config.GAME_HIGHLIGHTS_DIR.iterdir():
+                if sub.is_dir():
+                    clips += [p for p in sub.iterdir() if p.suffix.lower() == ".mp4"]
+        # Fall back to (or supplement with) the curated idle reel.
+        if not clips and config.IDLE_VIDEOS_DIR.is_dir():
+            clips = [p for p in config.IDLE_VIDEOS_DIR.iterdir() if p.suffix.lower() in _HIGHLIGHT_EXTS]
         if not clips:
             return None
         path = random.choice(clips)

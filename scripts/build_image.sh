@@ -115,26 +115,34 @@ shrink_image() {
     local pishrink_local="$OUT_DIR/pishrink.sh"
 
     if [ "$OS" = "Darwin" ]; then
-        # Docker Desktop can't expose /dev/loop devices to containers, so pishrink
-        # always fails there. Lima is a lightweight Linux VM that has proper loop
-        # device support and mounts /Users writable — use it instead.
+        # pishrink needs a Linux VM (Lima) to access loop devices.
+        # It also needs to stage a full copy of the image inside the VM, so the Mac
+        # needs ~2× image size in free disk space.  Check before attempting.
         if ! command -v limactl &>/dev/null; then
-            info "Lima not found — skipping pishrink (image will be full card size)"
-            info "Install: brew install lima && limactl start"
+            info "Lima not found — skipping pishrink (brew install lima to enable)"
+            return
+        fi
+
+        local img_bytes
+        img_bytes=$(stat -f%z "$OUT_DIR/$IMG_NAME" 2>/dev/null || echo 0)
+        local needed_bytes=$(( img_bytes * 2 ))
+        local free_bytes
+        free_bytes=$(df -k "$OUT_DIR" | awk 'NR==2{print $4 * 1024}')
+
+        if [ "$free_bytes" -lt "$needed_bytes" ]; then
+            local img_gb=$(( img_bytes / 1073741824 ))
+            local free_gb=$(( free_bytes / 1073741824 ))
+            info "Skipping pishrink — need ~$((img_gb * 2))GB free, only ${free_gb}GB available"
+            info "Use a 16GB master card (produces ~15GB image) to shrink on this Mac"
             return
         fi
 
         local lima_instance="biga-builder"
-
-        # Create the biga-builder Lima instance if it doesn't exist yet.
-        # Uses the built-in ubuntu template with /Users mounted writable so
-        # pishrink can modify the image in-place.
         if ! limactl list 2>/dev/null | grep -q "^${lima_instance}"; then
             info "Creating Lima VM '${lima_instance}' (first time ~3 min)..."
-            limactl start --name="$lima_instance" template://ubuntu \
+            limactl start --name="$lima_instance" template:ubuntu \
                 --set='.mounts[0].writable = true'
         elif ! limactl list 2>/dev/null | grep -q "^${lima_instance}.*Running"; then
-            info "Starting Lima VM '${lima_instance}'..."
             limactl start "$lima_instance"
         fi
 
@@ -142,47 +150,28 @@ shrink_image() {
         curl -fsSL "$pishrink_url" -o "$pishrink_local"
         chmod +x "$pishrink_local"
 
-        # Loop devices cannot be created over VirtioFS (the Lima /Users mount).
-        # Work around this by copying the image onto Lima's native ext4 disk,
-        # running pishrink there, then copying the shrunk result back.
-        # /tmp in Lima is a 2GB tmpfs RAM disk — use /var/tmp which is on the
-        # VM's actual disk (96GB by default, plenty for even a 64GB image).
         local lima_img="/var/tmp/biga-shrink.img"
-
-        # Ensure the image is readable by the Lima user (sudo dd makes it root-owned).
         sudo chown "$(whoami)" "$OUT_DIR/$IMG_NAME"
 
-        info "Copying image into Lima native disk (loop devices need native ext4)…"
+        info "Copying image into Lima native disk…"
         limactl shell "$lima_instance" -- cp "$OUT_DIR/$IMG_NAME" "$lima_img"
 
-        info "Running pishrink on Lima native disk…"
+        info "Running pishrink…"
         if ! limactl shell "$lima_instance" -- sudo bash "$pishrink_local" -s "$lima_img"; then
             limactl shell "$lima_instance" -- rm -f "$lima_img"
             rm -f "$pishrink_local"
-            abort "pishrink failed — original image is untouched at $OUT_DIR/$IMG_NAME"
+            abort "pishrink failed — original image untouched at $OUT_DIR/$IMG_NAME"
         fi
 
         info "Copying shrunk image back…"
         limactl shell "$lima_instance" -- cp "$lima_img" "$OUT_DIR/$IMG_NAME"
         limactl shell "$lima_instance" -- rm -f "$lima_img"
-
         rm -f "$pishrink_local"
         info "Shrunk: $(du -h "$OUT_DIR/$IMG_NAME" | cut -f1)"
         return
     fi
 
-    # Linux — run pishrink directly.
-    if [ "$OS" = "Darwin" ]; then
-        # Docker on macOS cannot expose loop devices to containers — pishrink
-        # requires them and will always fail. Skip shrinking; xz handles empty
-        # disk space extremely well so the final .xz size is nearly identical.
-        info "Skipping pishrink on macOS (loop devices unavailable in Docker Desktop)"
-        info "xz will compress empty space — final size will be similar"
-        return
-    fi
-
-    local pishrink_url="https://raw.githubusercontent.com/Drewsif/PiShrink/master/pishrink.sh"
-    local pishrink_local="$OUT_DIR/pishrink.sh"
+    # Linux — loop devices work natively, run pishrink directly.
     info "Downloading pishrink.sh..."
     curl -fsSL "$pishrink_url" -o "$pishrink_local"
     chmod +x "$pishrink_local"

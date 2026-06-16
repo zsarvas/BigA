@@ -9,10 +9,24 @@ from ..assets import AssetManager
 from ..mlb_http import ANGELS_TEAM_ID as TRACKED_TEAM_ID
 from .final_score_row import draw_score_with_flanking_logos
 from .linescore_table import draw_linescore_table_centered
+from ._clip_player import ClipPlayerMixin
 
 
-class FinalWinScene:
+def _game_clip_folder(state: dict) -> "Path | None":
+    """Return the best clip folder for a post-game scene, or None."""
+    from pathlib import Path  # noqa: PLC0415 (local import to avoid circular)
+    pk = state.get("live_game_pk")
+    if pk:
+        folder = config.GAME_HIGHLIGHTS_DIR / str(pk)
+        if folder.is_dir() and any(folder.glob("*.mp4")):
+            return folder
+    return config.IDLE_VIDEOS_DIR if config.IDLE_VIDEOS_DIR.is_dir() else None
+
+
+class FinalWinScene(ClipPlayerMixin):
     def draw(self, screen: pygame.Surface, assets: AssetManager, state: dict[str, Any]) -> None:
+        if self._cp_maybe_play(screen, _game_clip_folder(state)):
+            return
         assets.draw_gif_background(screen, "win.gif", pygame.time.get_ticks(), fallback=(12, 40, 12))
         draw_score_with_flanking_logos(
             screen, assets, state, y_center=config.layout_y(72), score_color=config.ANGELS_GOLD

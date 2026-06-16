@@ -8,10 +8,14 @@ from .. import config
 from ..assets import AssetManager
 from .final_score_row import draw_score_with_flanking_logos
 from .linescore_table import draw_linescore_table_centered
+from ._clip_player import ClipPlayerMixin
+from .final_win import _game_clip_folder
 
 
-class FinalLossScene:
+class FinalLossScene(ClipPlayerMixin):
     def draw(self, screen: pygame.Surface, assets: AssetManager, state: dict[str, Any]) -> None:
+        if self._cp_maybe_play(screen, _game_clip_folder(state)):
+            return
         screen.fill((18, 18, 22))
         draw_score_with_flanking_logos(
             screen, assets, state, y_center=config.layout_y(76), score_color=config.GRAY
