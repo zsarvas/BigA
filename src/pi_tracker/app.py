@@ -312,7 +312,7 @@ def _play_mpv(path: Path, size: tuple[int, int], flags: int) -> "pygame.Surface"
     replace its ``screen`` reference.
     """
     pygame.display.quit()
-    cmd = ["mpv", "--hwdec=auto", "--really-quiet", "--fs"]
+    cmd = ["mpv", "--hwdec=auto", "--really-quiet", "--fs", "--panscan=1.0"]
     if is_muted():
         cmd.append("--no-audio")
     cmd.append(str(path))
@@ -325,7 +325,9 @@ def _play_mpv(path: Path, size: tuple[int, int], flags: int) -> "pygame.Surface"
     except Exception as exc:  # noqa: BLE001
         logging.warning("mpv error: %s", exc)
     pygame.display.init()
-    return pygame.display.set_mode(size, flags)
+    screen = pygame.display.set_mode(size, flags)
+    pygame.mouse.set_visible(False)
+    return screen
 
 
 def main() -> None:
