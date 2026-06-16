@@ -222,6 +222,85 @@ class StreamingGif:
         return surf, dur
 
 
+class StreamingMp4:
+    """Frame-by-frame MP4/video player using OpenCV — same interface as StreamingGif.
+
+    Advances sequentially (random seeking is ignored) so the ``index`` parameter is
+    only used to detect a rewind request (index < current frame).  Resident memory
+    is ~one decoded frame.
+    """
+
+    def __init__(self, path: Path, size: tuple[int, int]) -> None:
+        self.size = size
+        self.n_frames = 0
+        self.ok = False
+        self._cap = None
+        self._fps = 24.0
+        self._cur_idx = -1
+        try:
+            import cv2  # type: ignore[import]
+        except ImportError:
+            warnings.warn(
+                f'{path.name}: MP4 highlight needs opencv ("pip install opencv-python-headless").',
+                stacklevel=1,
+            )
+            return
+        cap = cv2.VideoCapture(str(path))
+        if not cap.isOpened():
+            warnings.warn(f"{path.name}: cv2 could not open video", stacklevel=1)
+            return
+        total = int(cap.get(cv2.CAP_PROP_FRAME_COUNT))
+        fps = cap.get(cv2.CAP_PROP_FPS) or 24.0
+        if total <= 0:
+            warnings.warn(f"{path.name}: video has no frames", stacklevel=1)
+            cap.release()
+            return
+        self._cap = cap
+        self._fps = fps
+        self.n_frames = total
+        self.ok = True
+
+    def decode(self, index: int) -> tuple[pygame.Surface | None, int]:
+        """Read the next frame (sequential) → (surface, duration_ms), or (None, 0)."""
+        if not self.ok or self._cap is None:
+            return None, 0
+        import cv2  # type: ignore[import]
+        # Rewind if asked to restart from beginning
+        if index <= 0 and self._cur_idx > 0:
+            self._cap.set(cv2.CAP_PROP_POS_FRAMES, 0)
+            self._cur_idx = -1
+        ret, frame_bgr = self._cap.read()
+        if not ret:
+            return None, 0
+        self._cur_idx += 1
+        # BGR → RGB, then to pygame surface
+        import numpy as np  # type: ignore[import]
+        frame_rgb = frame_bgr[:, :, ::-1]
+        surf = pygame.surfarray.make_surface(np.transpose(frame_rgb, (1, 0, 2)))
+        if surf.get_size() != self.size:
+            surf = _cover_scale(surf, self.size)
+        try:
+            surf = surf.convert()
+        except pygame.error:
+            pass
+        dur = max(1, int(1000 / self._fps))
+        return surf, dur
+
+    def __del__(self) -> None:
+        if self._cap is not None:
+            try:
+                self._cap.release()
+            except Exception:  # noqa: BLE001
+                pass
+
+
+def open_streaming_clip(path: Path, size: tuple[int, int]) -> "StreamingGif | StreamingMp4":
+    """Factory: returns a StreamingMp4 for .mp4/.mov, StreamingGif for everything else."""
+    if path.suffix.lower() in {".mp4", ".mov", ".avi", ".mkv"}:
+        return StreamingMp4(path, size)
+    return StreamingGif(path, size)
+
+
 def _cover_scale(img: pygame.Surface, dest: tuple[int, int]) -> pygame.Surface:
     """Scale ``img`` to fully cover ``dest`` (keep aspect, crop overflow), centered."""
     img = _ensure_scalable_surface(img)
@@ -264,6 +343,7 @@ class AssetManager:
         self.logos: dict[int, pygame.Surface] = {}
         self.background_src: pygame.Surface | None = None
         self._bg_cache: dict[tuple[int, int], pygame.Surface] = {}
+        self._venue_bg_cache: dict[int, pygame.Surface | None] = {}
         self._gif_cache: dict[tuple[str, tuple[int, int]], GifAnimation | None] = {}
 
     def load(self, team_ids: set[int]) -> None:
@@ -279,6 +359,7 @@ class AssetManager:
 
         self.background_src = None
         self._bg_cache.clear()
+        self._venue_bg_cache.clear()
         if config.BG_IMAGE:
             bg_path = config.ASSETS_DIR / config.BG_IMAGE
             if bg_path.is_file():
@@ -324,11 +405,66 @@ class AssetManager:
             self._bg_cache[size] = cached
         return cached
 
+    def _load_venue_src(self, venue_id: int) -> pygame.Surface | None:
+        """Load and cache the raw surface for a venue-specific stadium image.
+        Falls back through: requested venue → Angel Stadium (1) → stadium.jpg.
+        This guarantees something always shows, even for overseas games, neutral
+        sites, temporary venues (e.g. A's at Sutter Health), or future ballparks
+        we haven't added a photo for yet.
+        """
+        if venue_id in self._venue_bg_cache:
+            return self._venue_bg_cache[venue_id]
+
+        stadiums_dir = config.ASSETS_DIR / "stadiums"
+        src: pygame.Surface | None = None
+
+        candidates = [venue_id, 1] if venue_id != 1 else [1]
+        for vid in candidates:
+            if not vid:
+                continue
+            path = stadiums_dir / f"{vid}.jpg"
+            if path.is_file():
+                try:
+                    src = pygame.image.load(str(path)).convert()
+                    break
+                except Exception as exc:  # noqa: BLE001
+                    warnings.warn(f"stadium {vid}: {exc}", stacklevel=1)
+
+        self._venue_bg_cache[venue_id] = src
+        return src
+
+    def background_for_venue(
+        self, size: tuple[int, int], venue_id: int
+    ) -> pygame.Surface | None:
+        """Cover-scaled background for a specific venue.
+        Falls back to Angel Stadium if the venue image is missing."""
+        src = self._load_venue_src(venue_id) or self.background_src
+        if src is None:
+            return None
+        # Reuse the generic cache for the fallback, keyed by venue for specifics.
+        cache_key = (venue_id or -1, *size)
+        cached = self._bg_cache.get(cache_key)  # type: ignore[call-overload]
+        if cached is None:
+            cached = _cover_scale(src, size)
+            if config.BG_DIM > 0:
+                scrim = pygame.Surface(size, pygame.SRCALPHA)
+                scrim.fill((0, 0, 0, config.BG_DIM))
+                cached.blit(scrim, (0, 0))
+            self._bg_cache[cache_key] = cached  # type: ignore[index]
+        return cached
+
     def draw_background(
-        self, screen: pygame.Surface, fallback: tuple[int, int, int] = config.BLACK
+        self,
+        screen: pygame.Surface,
+        fallback: tuple[int, int, int] = config.BLACK,
+        venue_id: int = 0,
     ) -> None:
-        """Blit the stadium background (dimmed) or fill ``fallback`` if unavailable."""
-        bg = self.background_for(screen.get_size())
+        """Blit the stadium background (dimmed) or fill ``fallback`` if unavailable.
+
+        Pass ``venue_id`` to use a venue-specific image from assets/stadiums/<id>.jpg,
+        falling back to the default stadium.jpg if that file doesn't exist yet.
+        """
+        bg = self.background_for_venue(screen.get_size(), venue_id) if venue_id else self.background_for(screen.get_size())
         if bg is None:
             screen.fill(fallback)
         else:
