@@ -127,9 +127,12 @@ def live_transition_from_schedule_game(game: dict[str, Any]) -> dict[str, Any]:
             opp_id = int(aid)
     except (TypeError, ValueError):
         opp_id = None
+    venue_obj = game.get("venue") or {}
     out: dict[str, Any] = {
         "scene": "live",
         "live_game_pk": game.get("gamePk"),
+        "live_venue_id": int(venue_obj.get("id") or 0),
+        "live_venue_name": str(venue_obj.get("name") or ""),
         "away_team_id": int(away.get("id") or 0),
         "home_team_id": int(home.get("id") or 0),
         "away_abbr": str(away.get("abbreviation") or ""),
@@ -303,7 +306,9 @@ def format_next_game_for_ui(game: dict[str, Any] | None, angels_id: int = ANGELS
     time_disp = f"{clock} {tz}" if tz else clock
 
     matchup, _opp_abbr = _opponent_line(game, angels_id)
-    venue = (game.get("venue") or {}).get("name") or ""
+    venue_obj = game.get("venue") or {}
+    venue = venue_obj.get("name") or ""
+    venue_id = int(venue_obj.get("id") or 0)
     opp_tid = opponent_team_id_for_next_game(game, angels_id)
 
     return {
@@ -313,6 +318,7 @@ def format_next_game_for_ui(game: dict[str, Any] | None, angels_id: int = ANGELS
         "next_game_time_display": time_disp,
         "next_game_matchup": matchup,
         "next_game_venue": venue,
+        "next_game_venue_id": venue_id,
         "next_game_pk": game.get("gamePk"),
         "next_opponent_team_id": opp_tid,
         "idle_subtitle": f"{date_disp}  ·  {time_disp}",

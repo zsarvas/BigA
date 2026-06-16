@@ -140,7 +140,7 @@ class IdleScene:
         if self._maybe_play_highlight(screen):
             return
 
-        assets.draw_background(screen)
+        assets.draw_background(screen, venue_id=int(state.get("next_game_venue_id") or 0))
 
         # Idle hero: tracked franchise logo + name (not the generic "home" club from state).
         logo = assets.logos.get(TRACKED_TEAM_ID)

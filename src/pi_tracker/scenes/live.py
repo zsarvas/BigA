@@ -125,7 +125,7 @@ class LiveScene:
     """Live scoreboard; vertical positions scale with ``config.SCREEN_HEIGHT``."""
 
     def draw(self, screen: pygame.Surface, assets: AssetManager, state: dict[str, Any]) -> None:
-        assets.draw_background(screen)
+        assets.draw_background(screen, venue_id=int(state.get("live_venue_id") or 0))
 
         away_id = int(state.get("away_team_id", 0))
         home_id = int(state.get("home_team_id", 0))
@@ -282,3 +282,13 @@ class LiveScene:
             config.SCREEN_HEIGHT - BATTER_ROW_FROM_BOTTOM,
             stats=b_stats,
         )
+
+        venue_name = str(state.get("live_venue_name") or "").strip()
+        if venue_name:
+            venue_surf = assets.font_small.render(venue_name, True, config.GRAY)
+            margin = config.layout_x(8)
+            screen.blit(
+                venue_surf,
+                (config.SCREEN_WIDTH - venue_surf.get_width() - margin,
+                 config.SCREEN_HEIGHT - venue_surf.get_height() - margin),
+            )
