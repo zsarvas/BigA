@@ -42,6 +42,7 @@ from .mlb_schedule import try_restore_final_scene_for_today
 from .state import SharedGameState
 from .team_config import tracked_team_abbr, tracked_team_name
 from .gpio_leds import cleanup_gpio, init_gpio, set_win_led
+from .mlb_highlights import HighlightDownloader, wipe_game_highlights
 from .scenes import FinalLossScene, FinalWinScene, IdleScene, LiveScene
 
 
@@ -358,6 +359,8 @@ def main() -> None:
     init_gpio()
     last_team_key: tuple[int, int, int, int, int] | None = None
     last_scene_key: str | None = None
+    _hl_downloader: HighlightDownloader | None = None
+    _last_live_pk: int = 0
     running = True
     loop_start = time.monotonic()
     frame_i = 0
@@ -408,6 +411,24 @@ def main() -> None:
             if scene_key != last_scene_key:
                 last_scene_key = scene_key
                 set_win_led(scene_key == "win")
+
+            # Manage highlight downloader lifecycle.
+            if not demo:
+                live_pk = int(snap.get("live_game_pk") or 0)
+                if scene_key == "live" and live_pk:
+                    if live_pk != _last_live_pk:
+                        # New game — stop old downloader, wipe old clips, start fresh.
+                        if _hl_downloader:
+                            _hl_downloader.stop()
+                        if _last_live_pk:
+                            wipe_game_highlights(_last_live_pk)
+                        _last_live_pk = live_pk
+                        _hl_downloader = HighlightDownloader(live_pk)
+                        _hl_downloader.start()
+                elif scene_key not in ("live",) and _hl_downloader:
+                    _hl_downloader.stop()
+                    _hl_downloader = None
+
             scene = scenes.get(scene_key, scenes["idle"])
             scene.draw(screen, assets, snap)
             if debug_hud:
@@ -419,7 +440,7 @@ def main() -> None:
             # A streaming highlight needs a faster tick than the clip's native rate
             # or it looks slow/choppy; everything else runs at the low base FPS.
             tick_fps = config.FPS
-            if scene_key == "idle" and getattr(scene, "_playing", False):
+            if getattr(scene, "_playing", False):
                 tick_fps = config.HIGHLIGHT_FPS
             clock.tick(tick_fps)
             frame_i += 1

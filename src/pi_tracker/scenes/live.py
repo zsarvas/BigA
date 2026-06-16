@@ -1,14 +1,18 @@
 from __future__ import annotations
 
 import textwrap
+from pathlib import Path
 from typing import Any
 
 import pygame
 
 from .. import config
-from ..assets import AssetManager, scale_surface
+from ..assets import AssetManager, StreamingMp4, open_streaming_clip, scale_surface
 from ..drawing.diamond import draw_diamond
 from .linescore_table import compute_linescore_geometry, draw_linescore_table_centered
+
+# inning_half values that indicate an inning break (after top or bottom half).
+_INNING_BREAK_STATES = {"middle", "end"}
 
 # Tiny caps beside P:/B: (fielding team pitches; batting team at plate).
 PB_LOGO_SIZE = (16, 16)
@@ -124,7 +128,77 @@ def _blit_pb_line(
 class LiveScene:
     """Live scoreboard; vertical positions scale with ``config.SCREEN_HEIGHT``."""
 
+    def __init__(self) -> None:
+        self._last_inning_half: str = ""
+        self._played_clips: set[str] = set()
+        self._clip: Any = None          # StreamingGif | StreamingMp4
+        self._clip_playing = False
+        self._clip_frame_idx = 0
+        self._clip_cur_frame: pygame.Surface | None = None
+        self._clip_deadline_ms = 0
+
+    def _next_unseen_clip(self, game_pk: int, size: tuple[int, int]) -> Any:
+        """Load the next unseen game highlight clip, or None if none available."""
+        folder = config.GAME_HIGHLIGHTS_DIR / str(game_pk)
+        if not folder.is_dir():
+            return None
+        for path in sorted(folder.glob("*.mp4")):
+            if path.name not in self._played_clips:
+                clip = open_streaming_clip(path, size)
+                if clip.ok:
+                    self._played_clips.add(path.name)
+                    return clip
+        return None
+
+    def _maybe_play_clip(self, screen: pygame.Surface, state: dict[str, Any]) -> bool:
+        """Play a game highlight between innings. Returns True if a frame was drawn."""
+        now = pygame.time.get_ticks()
+        inning_half = str(state.get("inning_half", "")).lower()
+        game_pk = int(state.get("live_game_pk") or 0)
+
+        # Trigger on transition into an inning break state.
+        if (not self._clip_playing
+                and inning_half in _INNING_BREAK_STATES
+                and inning_half != self._last_inning_half
+                and game_pk):
+            self._clip = self._next_unseen_clip(game_pk, screen.get_size())
+            if self._clip:
+                surf, dur = self._clip.decode(0)
+                if surf is not None:
+                    self._clip_playing = True
+                    self._clip_frame_idx = 0
+                    self._clip_cur_frame = surf
+                    self._clip_deadline_ms = now + dur
+
+        self._last_inning_half = inning_half
+
+        if not self._clip_playing:
+            return False
+
+        if now >= self._clip_deadline_ms and self._clip is not None:
+            self._clip_frame_idx += 1
+            if self._clip_frame_idx >= self._clip.n_frames:
+                self._clip_playing = False
+                self._clip = None
+                self._clip_cur_frame = None
+                return False
+            surf, dur = self._clip.decode(self._clip_frame_idx)
+            if surf is None:
+                self._clip_playing = False
+                self._clip = None
+                self._clip_cur_frame = None
+                return False
+            self._clip_cur_frame = surf
+            self._clip_deadline_ms = now + dur
+
+        if self._clip_cur_frame is not None:
+            screen.blit(self._clip_cur_frame, (0, 0))
+            return True
+        return False
+
     def draw(self, screen: pygame.Surface, assets: AssetManager, state: dict[str, Any]) -> None:
+        if self._maybe_play_clip(screen, state):
+            return
         assets.draw_background(screen, venue_id=int(state.get("live_venue_id") or 0))
 
         away_id = int(state.get("away_team_id", 0))
