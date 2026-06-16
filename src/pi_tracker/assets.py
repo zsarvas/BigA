@@ -301,6 +301,23 @@ def open_streaming_clip(path: Path, size: tuple[int, int]) -> "StreamingGif | St
     return StreamingGif(path, size)
 
 
+def _apply_dim(surf: pygame.Surface, size: tuple[int, int], dim: int) -> pygame.Surface:
+    """
+    Darken *surf* by overlaying a black rectangle at alpha *dim* (0–255).
+
+    Avoids ``pygame.SRCALPHA`` surfaces, which corrupt colours on KMS/DRM
+    displays where the framebuffer pixel format isn't RGBA (e.g. XRGB8888).
+    We blit onto a plain opaque surface instead so no alpha channel is involved.
+    """
+    out = pygame.Surface(size)          # opaque, matches display format after convert
+    out.blit(surf, (0, 0))
+    scrim = pygame.Surface(size)
+    scrim.fill((0, 0, 0))
+    scrim.set_alpha(dim)                # set_alpha on an opaque surface is always safe
+    out.blit(scrim, (0, 0))
+    return out
+
+
 def _cover_scale(img: pygame.Surface, dest: tuple[int, int]) -> pygame.Surface:
     """Scale ``img`` to fully cover ``dest`` (keep aspect, crop overflow), centered."""
     img = _ensure_scalable_surface(img)
@@ -399,9 +416,7 @@ class AssetManager:
         if cached is None:
             cached = _cover_scale(self.background_src, size)
             if config.BG_DIM > 0:
-                scrim = pygame.Surface(size, pygame.SRCALPHA)
-                scrim.fill((0, 0, 0, config.BG_DIM))
-                cached.blit(scrim, (0, 0))
+                cached = _apply_dim(cached, size, config.BG_DIM)
             self._bg_cache[size] = cached
         return cached
 
@@ -447,9 +462,7 @@ class AssetManager:
         if cached is None:
             cached = _cover_scale(src, size)
             if config.BG_DIM > 0:
-                scrim = pygame.Surface(size, pygame.SRCALPHA)
-                scrim.fill((0, 0, 0, config.BG_DIM))
-                cached.blit(scrim, (0, 0))
+                cached = _apply_dim(cached, size, config.BG_DIM)
             self._bg_cache[cache_key] = cached  # type: ignore[index]
         return cached
 

@@ -98,7 +98,7 @@ _anim_stop = threading.Event()
 # Mute button (BCM 16 by default, single press toggles audio)
 # ---------------------------------------------------------------------------
 
-_MUTE_PIN = _env_int("BIGA_MUTE_PIN", 16)
+_MUTE_PIN = _env_int("BIGA_MUTE_PIN", 25)
 _MUTE_STATE_FILE = Path(os.environ.get("BIGA_MUTE_STATE_FILE", "/etc/biga/mute.json"))
 
 _mute_lock = threading.Lock()
