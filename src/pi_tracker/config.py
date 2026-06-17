@@ -93,6 +93,12 @@ GAME_HIGHLIGHT_GAP_MIN = _env_clamp_int("BIGA_GAME_HIGHLIGHT_GAP_MIN", 1, lo=1, 
 # pitch of the next game. Organised as highlights/{game_pk}/ per game.
 GAME_HIGHLIGHTS_DIR = ASSETS_DIR / "highlights"
 
+# Persisted win/loss + game context so reboot restores post-game scene and
+# restarts highlight downloads without waiting on the schedule API.
+STATE_PATH = Path(
+    os.environ.get("BIGA_STATE_PATH", str(REPO_ROOT / ".biga_game_state.json"))
+)
+
 # Canned GIF animations for in-game events.  Drop GIF files here named after
 # the event type.  The live scene plays the matching GIF as a full-screen
 # background overlay when the event fires, then reverts to the stadium image.

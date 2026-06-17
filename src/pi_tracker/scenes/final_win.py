@@ -9,18 +9,38 @@ from ..assets import AssetManager
 from ..mlb_http import ANGELS_TEAM_ID as TRACKED_TEAM_ID
 from .final_score_row import draw_score_with_flanking_logos
 from .linescore_table import draw_linescore_table_centered
-from ._clip_player import ClipPlayerMixin
+from ._clip_player import ClipPlayerMixin, _playable_clip_paths
 
 
 def _game_clip_folder(state: dict) -> "Path | None":
-    """Return the best clip folder for a post-game scene, or None."""
-    from pathlib import Path  # noqa: PLC0415 (local import to avoid circular)
+    """
+    Game recap folder for win/loss scenes only — never the idle reel.
+
+    Returns None while clips are still downloading so the static win/loss
+    screen shows until highlights land.
+    """
+    from pathlib import Path  # noqa: PLC0415
+
     pk = state.get("live_game_pk")
     if pk:
         folder = config.GAME_HIGHLIGHTS_DIR / str(pk)
-        if folder.is_dir() and any(folder.glob("*.mp4")):
+        if _playable_clip_paths(folder):
             return folder
-    return config.IDLE_VIDEOS_DIR if config.IDLE_VIDEOS_DIR.is_dir() else None
+
+    # Fallback: any game subfolder with finished clips (pk mismatch edge case).
+    if config.GAME_HIGHLIGHTS_DIR.is_dir():
+        best: Path | None = None
+        best_n = 0
+        for sub in config.GAME_HIGHLIGHTS_DIR.iterdir():
+            if not sub.is_dir():
+                continue
+            n = len(_playable_clip_paths(sub))
+            if n > best_n:
+                best_n = n
+                best = sub
+        if best:
+            return best
+    return None
 
 
 class FinalWinScene(ClipPlayerMixin):

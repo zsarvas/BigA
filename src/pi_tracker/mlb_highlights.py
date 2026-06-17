@@ -34,6 +34,7 @@ log = logging.getLogger(__name__)
 
 CONTENT_URL = "https://statsapi.mlb.com/api/v1/game/{game_pk}/content"
 POLL_INTERVAL_MIN = 10  # poll every 10 minutes during a live game
+POLL_RETRY_SEC = 60  # retry sooner when the API is unreachable (e.g. boot before network)
 
 
 def _chown_for_pi(path: Path) -> None:
@@ -113,9 +114,17 @@ def _best_mp4_url(playbacks: list[dict]) -> str | None:
 
 
 def fetch_highlight_clips(game_pk: int) -> list[dict]:
+    """Fetch play clips from the MLB content API (empty list on failure)."""
+    clips, _ = fetch_highlight_clips_result(game_pk)
+    return clips
+
+
+def fetch_highlight_clips_result(game_pk: int) -> tuple[list[dict], bool]:
     """
-    Fetch the content endpoint and return a filtered list of play clip dicts:
-    ``[{"id": str, "blurb": str, "url": str}, ...]``
+    Fetch play clips from the MLB content API.
+
+    Returns ``(clips, api_ok)`` where ``api_ok`` is False when the request failed
+    (network down, timeout, bad payload) so callers can retry sooner.
     """
     url = CONTENT_URL.format(game_pk=game_pk)
     try:
@@ -126,14 +135,14 @@ def fetch_highlight_clips(game_pk: int) -> list[dict]:
             raise ValueError(f"unexpected response type: {type(data)}")
     except Exception as exc:
         log.warning("highlights fetch failed for game %s: %s", game_pk, exc)
-        return []
+        return [], False
 
     items = (
         (data.get("highlights") or {})
         .get("highlights") or {}
     ).get("items") or []
     if not isinstance(items, list):
-        return []
+        return [], False
 
     results = []
     for item in items:
@@ -153,7 +162,43 @@ def fetch_highlight_clips(game_pk: int) -> list[dict]:
             "blurb": blurb,
             "url": mp4_url,
         })
-    return results
+    return results, True
+
+
+def resolve_highlight_game_pk(snap: dict) -> int:
+    """Best game_pk for highlight downloads from current state."""
+    for key in ("live_game_pk", "next_game_pk"):
+        raw = snap.get(key)
+        if raw is not None:
+            try:
+                return int(raw)
+            except (TypeError, ValueError):
+                pass
+    if config.GAME_HIGHLIGHTS_DIR.is_dir():
+        subs = [
+            p for p in config.GAME_HIGHLIGHTS_DIR.iterdir()
+            if p.is_dir() and p.name.isdigit()
+        ]
+        if subs:
+            return int(max(subs, key=lambda p: int(p.name)).name)
+    return 0
+
+
+def should_run_highlight_downloader(snap: dict) -> bool:
+    """Whether background highlight polling should be active."""
+    from datetime import date
+
+    scene = str(snap.get("scene", "idle"))
+    if scene in ("live", "win", "loss"):
+        return True
+    if scene == "idle":
+        raw = snap.get("final_display_date")
+        if raw and isinstance(raw, str):
+            try:
+                return date.fromisoformat(raw.strip()) == date.today()
+            except ValueError:
+                pass
+    return False
 
 
 def game_highlights_dir(game_pk: int) -> Path:
@@ -303,23 +348,68 @@ class HighlightDownloader:
             if ".raw" not in p.name.lower() and ".tmp" not in p.name.lower()
         )
 
+    def _clip_dest(self, clip: dict) -> Path:
+        slug = _slug(clip.get("blurb", clip["id"]))
+        return self._dest / f"{slug}.mp4"
+
     def _run(self) -> None:
         while not self._stop.is_set():
-            self._poll()
-            self._stop.wait(POLL_INTERVAL_MIN * 60)
+            api_ok = self._poll()
+            wait_sec = POLL_RETRY_SEC if not api_ok else POLL_INTERVAL_MIN * 60
+            self._stop.wait(wait_sec)
 
-    def _poll(self) -> None:
-        clips = fetch_highlight_clips(self.game_pk)
+    def _poll(self) -> bool:
+        """Poll the API and download any new/missing clips. Returns API success."""
+        clips, api_ok = fetch_highlight_clips_result(self.game_pk)
         for clip in clips:
             cid = clip["id"]
-            if cid in self._seen_ids:
+            dest = self._clip_dest(clip)
+            if cid in self._seen_ids and dest.exists():
                 continue
+            if cid in self._seen_ids:
+                # Folder was wiped manually — re-fetch even though we saw this id.
+                self._seen_ids.discard(cid)
             # Don't start a download/transcode (CPU heavy) while a clip is playing.
             playback.wait_while_active(self._stop)
             if self._stop.is_set():
-                return
+                return api_ok
             self._seen_ids.add(cid)
             path = _download_clip(clip, self._dest)
             if path:
                 with self._lock:
                     self.new_clips.append(path)
+        return api_ok
+
+
+def sync_highlight_downloader(
+    snap: dict,
+    downloader: HighlightDownloader | None,
+    last_pk: int,
+) -> tuple[HighlightDownloader | None, int]:
+    """
+    Start, stop, or swap the highlight downloader to match scene + game context.
+
+    Called at app startup (after state restore) and each main-loop frame.
+    """
+    if not should_run_highlight_downloader(snap):
+        if downloader is not None:
+            downloader.stop()
+        return None, 0
+
+    pk = resolve_highlight_game_pk(snap)
+    if not pk:
+        if downloader is not None:
+            downloader.stop()
+        return None, 0
+
+    if pk == last_pk and downloader is not None:
+        return downloader, last_pk
+
+    if downloader is not None:
+        downloader.stop()
+    if last_pk and last_pk != pk:
+        wipe_game_highlights(last_pk)
+
+    dl = HighlightDownloader(pk)
+    dl.start()
+    return dl, pk

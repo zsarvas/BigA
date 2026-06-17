@@ -44,7 +44,7 @@ from .state import SharedGameState
 from .team_config import tracked_team_abbr, tracked_team_name
 from . import playback
 from .gpio_leds import cleanup_gpio, init_gpio, is_muted, set_win_led
-from .mlb_highlights import HighlightDownloader, wipe_game_highlights
+from .mlb_highlights import HighlightDownloader, sync_highlight_downloader
 from .scenes import FinalLossScene, FinalWinScene, IdleScene, LiveScene
 
 
@@ -419,6 +419,10 @@ def main() -> None:
     last_scene_key: str | None = None
     _hl_downloader: HighlightDownloader | None = None
     _last_live_pk: int = 0
+    if not demo:
+        _hl_downloader, _last_live_pk = sync_highlight_downloader(
+            state.snapshot(), None, 0
+        )
     running = True
     loop_start = time.monotonic()
     frame_i = 0
@@ -471,24 +475,10 @@ def main() -> None:
                 set_win_led(scene_key == "win")
 
             # Manage highlight downloader lifecycle.
-            # Keep downloading through win/loss scenes — post-game recaps and
-            # condensed-game clips upload for hours after the final out.
-            # Only stop when returning to idle (no active game context).
             if not demo:
-                live_pk = int(snap.get("live_game_pk") or 0)
-                if scene_key in ("live", "win", "loss") and live_pk:
-                    if live_pk != _last_live_pk:
-                        # New game — stop old downloader, wipe old clips, start fresh.
-                        if _hl_downloader:
-                            _hl_downloader.stop()
-                        if _last_live_pk:
-                            wipe_game_highlights(_last_live_pk)
-                        _last_live_pk = live_pk
-                        _hl_downloader = HighlightDownloader(live_pk)
-                        _hl_downloader.start()
-                elif scene_key == "idle" and _hl_downloader:
-                    _hl_downloader.stop()
-                    _hl_downloader = None
+                _hl_downloader, _last_live_pk = sync_highlight_downloader(
+                    snap, _hl_downloader, _last_live_pk
+                )
 
             scene = scenes.get(scene_key, scenes["idle"])
             scene.draw(screen, assets, snap)
