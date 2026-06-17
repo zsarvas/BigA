@@ -312,19 +312,24 @@ def _play_mpv(path: Path, size: tuple[int, int], flags: int) -> "pygame.Surface"
     replace its ``screen`` reference.
     """
     pygame.display.quit()
+    time.sleep(0.5)  # give SDL/KMS time to fully release DRM master
     import platform
     on_pi = platform.system() == "Linux"
     cmd = [
         "mpv",
         "--hwdec=v4l2m2m" if on_pi else "--hwdec=auto",
-        "--msg-level=all=warn",  # surface warnings without full verbosity
+        "--msg-level=all=warn",
         "--fs", "--panscan=1.0", "--osd-level=0",
         "--scale=bilinear", "--cscale=bilinear", "--dscale=bilinear",
         "--video-sync=display-resample",
-        "--ao=alsa",  # skip JACK/PipeWire, go straight to ALSA
+        "--no-audio" if (is_muted() or on_pi) else "--ao=alsa",
     ]
-    if is_muted():
-        cmd.append("--no-audio")
+    if on_pi:
+        cmd += [
+            "--vo=drm",
+            "--drm-device=/dev/dri/card0",
+            "--drm-connector=1",
+        ]
     cmd.append(str(path))
     try:
         result = subprocess.run(cmd, timeout=600, capture_output=True, text=True)
