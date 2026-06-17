@@ -316,7 +316,7 @@ def _play_mpv(path: Path, size: tuple[int, int], flags: int) -> "pygame.Surface"
     on_pi = platform.system() == "Linux"
     cmd = [
         "mpv",
-        "--hwdec=v4l2m2m" if on_pi else "--hwdec=auto",
+        "--hwdec=auto",
         "--really-quiet", "--fs", "--panscan=1.0", "--osd-level=0",
         "--demuxer-readahead-secs=2",
     ]
