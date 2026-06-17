@@ -86,6 +86,9 @@ IDLE_VIDEOS_DIR = ASSETS_DIR / "idle_videos"
 HIGHLIGHT_MIN_GAP_MIN = _env_clamp_int("BIGA_HIGHLIGHT_MIN_MIN", 5, lo=1, hi=720)
 HIGHLIGHT_MAX_GAP_MIN = _env_clamp_int("BIGA_HIGHLIGHT_MAX_MIN", 5, lo=1, hi=720)
 
+# Shorter gap for post-game / win-loss scene where highlights rotate faster.
+GAME_HIGHLIGHT_GAP_MIN = _env_clamp_int("BIGA_GAME_HIGHLIGHT_GAP_MIN", 1, lo=1, hi=60)
+
 # Game-specific highlights — downloaded during/after a live game, wiped at first
 # pitch of the next game. Organised as highlights/{game_pk}/ per game.
 GAME_HIGHLIGHTS_DIR = ASSETS_DIR / "highlights"

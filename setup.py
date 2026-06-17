@@ -293,6 +293,7 @@ run(
     "pkg-config "
     "python3-dev "
     "mpv "
+    "ffmpeg "
     "plymouth "
     "plymouth-themes",
     "apt packages",

@@ -312,7 +312,17 @@ def _play_mpv(path: Path, size: tuple[int, int], flags: int) -> "pygame.Surface"
     replace its ``screen`` reference.
     """
     pygame.display.quit()
-    cmd = ["mpv", "--hwdec=auto", "--really-quiet", "--fs", "--panscan=1.0"]
+    import platform
+    on_pi = platform.system() == "Linux"
+    cmd = [
+        "mpv",
+        "--hwdec=v4l2m2m" if on_pi else "--hwdec=auto",
+        "--really-quiet", "--fs", "--panscan=1.0", "--osd-level=0",
+        "--scale=bilinear", "--cscale=bilinear", "--dscale=bilinear",
+        "--video-sync=display-resample",
+    ]
+    if on_pi:
+        cmd += ["--vo=gpu", "--gpu-context=drm"]
     if is_muted():
         cmd.append("--no-audio")
     cmd.append(str(path))

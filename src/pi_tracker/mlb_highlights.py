@@ -167,9 +167,61 @@ def wipe_game_highlights(game_pk: int | None = None) -> None:
             log.info("wiped all game highlights")
 
 
+def _slug(text: str) -> str:
+    """Convert a blurb to a safe filename slug, e.g. 'Mike Trout's HR (16)' → 'mike-trout-s-hr-16'."""
+    import re
+    text = text.lower()
+    text = re.sub(r"[^a-z0-9]+", "-", text)
+    return text.strip("-")[:80]
+
+
+_TRANSCODE_WIDTH = 640   # slightly wider than 480 for pan-scan headroom
+_TRANSCODE_HEIGHT = 400  # slightly taller than 320 for pan-scan headroom
+
+
+def _transcode_for_pi(src: Path, dest: Path) -> bool:
+    """
+    Re-encode *src* to a Pi-friendly 640×400 H.264 file at *dest*.
+    Uses ffmpeg if available; returns True on success, False if ffmpeg is
+    missing or fails (caller keeps the original file in that case).
+    """
+    import shutil
+    import subprocess as sp
+    if not shutil.which("ffmpeg"):
+        return False
+    tmp = dest.with_suffix(".tc.tmp")
+    try:
+        result = sp.run(
+            [
+                "ffmpeg", "-y", "-i", str(src),
+                "-vf", f"scale={_TRANSCODE_WIDTH}:{_TRANSCODE_HEIGHT}:force_original_aspect_ratio=increase,"
+                       f"crop={_TRANSCODE_WIDTH}:{_TRANSCODE_HEIGHT}",
+                "-c:v", "libx264", "-crf", "26", "-preset", "ultrafast",
+                "-c:a", "aac", "-b:a", "96k",
+                "-movflags", "+faststart",
+                str(tmp),
+            ],
+            capture_output=True,
+            timeout=300,
+        )
+        if result.returncode != 0:
+            log.warning("ffmpeg transcode failed: %s", result.stderr[-200:])
+            tmp.unlink(missing_ok=True)
+            return False
+        tmp.rename(dest)
+        src.unlink(missing_ok=True)
+        log.info("transcoded → %s (%d KB)", dest.name, dest.stat().st_size // 1024)
+        return True
+    except Exception as exc:
+        log.warning("transcode error: %s", exc)
+        tmp.unlink(missing_ok=True)
+        return False
+
+
 def _download_clip(clip: dict, dest_dir: Path) -> Path | None:
-    """Download a single clip to dest_dir. Returns path on success, None on failure."""
-    fname = f"{clip['id']}.mp4"
+    """Download (and optionally transcode) a single clip to dest_dir."""
+    slug = _slug(clip.get("blurb", clip["id"]))
+    fname = f"{slug}.mp4"
     dest = dest_dir / fname
     if dest.exists():
         return dest  # already downloaded
@@ -177,12 +229,15 @@ def _download_clip(clip: dict, dest_dir: Path) -> Path | None:
         log.info("downloading: %s", clip["blurb"])
         r = requests.get(clip["url"], stream=True, timeout=60)
         r.raise_for_status()
-        tmp = dest.with_suffix(".tmp")
-        with open(tmp, "wb") as f:
+        raw = dest.with_suffix(".raw.mp4")
+        with open(raw, "wb") as f:
             for chunk in r.iter_content(chunk_size=1 << 20):
                 f.write(chunk)
-        tmp.rename(dest)
-        log.info("saved %s (%s)", fname, dest.stat().st_size)
+        log.info("downloaded %s (%d KB) — transcoding…", slug, raw.stat().st_size // 1024)
+        if not _transcode_for_pi(raw, dest):
+            # ffmpeg not available or failed — use original as-is
+            raw.rename(dest)
+            log.info("saved %s (original quality)", fname)
         return dest
     except Exception as exc:
         log.warning("download failed for %s: %s", clip["blurb"], exc)
