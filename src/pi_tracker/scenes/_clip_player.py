@@ -23,16 +23,30 @@ def _rand_gap_ms() -> int:
     return random.randint(lo, hi)
 
 
+def _playable_clip_paths(folder: Path) -> list[Path]:
+    """Finished .mp4 clips only — skip in-progress download/transcode temps."""
+    out: list[Path] = []
+    for p in folder.glob("*.mp4"):
+        low = p.name.lower()
+        if ".raw" in low or ".tmp" in low:
+            continue
+        out.append(p)
+    return out
+
+
 def _pick_clip(folder: Path, played: set[str]) -> Path | None:
-    """Choose a random clip from *folder*, cycling back after all have been played."""
-    clips = list(folder.glob("*.mp4")) + list(folder.glob("*.gif"))
+    """Choose a random clip from *folder*, preferring smaller (transcoded) files."""
+    clips = _playable_clip_paths(folder) + list(folder.glob("*.gif"))
     if not clips:
         return None
     unseen = [p for p in clips if p.name not in played]
     if not unseen:
         played.clear()
         unseen = clips
-    path = random.choice(unseen)
+    # Smallest files are usually our 480×320 transcodes; huge ones are full 720p API pulls.
+    unseen.sort(key=lambda p: p.stat().st_size if p.exists() else 0)
+    small_pool = unseen[:max(1, (len(unseen) + 1) // 2)]
+    path = random.choice(small_pool)
     played.add(path.name)
     return path
 

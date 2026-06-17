@@ -304,25 +304,29 @@ def _play_mpv(path: Path, size: tuple[int, int], flags: int) -> "pygame.Surface"
     """
     Hand the display to mpv for one clip, then reclaim it.
 
-    On KMS-mode Raspberry Pi, only one process can be DRM master at a time, so
-    we fully tear down the pygame display before launching mpv and reinitialise
-    it afterwards.  mpv auto-detects the best video output (drm on Pi, metal/gl
-    on Mac dev) so no platform-specific flags are needed.
-
-    Returns a fresh pygame.Surface at the same size/flags so the caller can
-    replace its ``screen`` reference.
+    On Pi: DRM output at native panel resolution + V4L2 hardware decode (smooth
+    on Zero 2W).  Mac/dev: auto hwdec + panscan fill.
     """
     pygame.display.quit()
     import platform
     on_pi = platform.system() == "Linux"
-    cmd = [
-        "mpv",
-        "--hwdec=auto",
-        "--really-quiet", "--fs", "--panscan=1.0", "--osd-level=0",
-        "--demuxer-readahead-secs=2",
-    ]
+    w, h = size
+    cmd = ["mpv", "--really-quiet", "--osd-level=0"]
+    if on_pi:
+        # Matches manual testing on the panel: native DRM mode + hw decode, no CPU scale.
+        cmd += [
+            "--vo=drm",
+            "--drm-device=/dev/dri/card0",
+            f"--drm-mode={w}x{h}",
+            "--hwdec=v4l2m2m",
+            "--vd-lavc-threads=4",
+        ]
+    else:
+        cmd += ["--hwdec=auto", "--fs", "--panscan=1.0"]
     if is_muted():
         cmd.append("--no-audio")
+    else:
+        cmd.append("--ao=alsa")
     cmd.append(str(path))
     logging.info("mpv launching: %s  cmd=%s", path.name, " ".join(cmd))
     # Pause all background polling threads so the Pi's CPU is free for decode.

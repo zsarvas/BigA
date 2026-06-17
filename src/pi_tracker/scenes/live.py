@@ -10,6 +10,7 @@ from .. import config
 from ..assets import AssetManager, StreamingGif, scale_surface
 from ..drawing.diamond import draw_diamond
 from .linescore_table import compute_linescore_geometry, draw_linescore_table_centered
+from ._clip_player import _playable_clip_paths
 
 # inning_half values that indicate an inning break (after top or bottom half).
 _INNING_BREAK_STATES = {"middle", "end"}
@@ -153,7 +154,7 @@ class LiveScene:
         if inning_half in _INNING_BREAK_STATES and inning_half != self._last_inning_half and game_pk:
             folder = config.GAME_HIGHLIGHTS_DIR / str(game_pk)
             if folder.is_dir():
-                for path in sorted(folder.glob("*.mp4")):
+                for path in sorted(_playable_clip_paths(folder)):
                     if path.name not in self._played_clips:
                         self._played_clips.add(path.name)
                         self._pending_clip = path

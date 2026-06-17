@@ -174,8 +174,8 @@ def _slug(text: str) -> str:
     return text.strip("-")[:80]
 
 
-_TRANSCODE_WIDTH = 640   # slightly wider than 480 for pan-scan headroom
-_TRANSCODE_HEIGHT = 400  # slightly taller than 320 for pan-scan headroom
+_TRANSCODE_WIDTH = config.SCREEN_WIDTH
+_TRANSCODE_HEIGHT = config.SCREEN_HEIGHT
 
 
 def _transcode_for_pi(src: Path, dest: Path) -> bool:
@@ -280,8 +280,11 @@ class HighlightDownloader:
         return clips
 
     def all_clips(self) -> list[Path]:
-        """All clips currently on disk for this game, sorted by filename (download order)."""
-        return sorted(self._dest.glob("*.mp4"))
+        """All finished clips on disk for this game."""
+        return sorted(
+            p for p in self._dest.glob("*.mp4")
+            if ".raw" not in p.name.lower() and ".tmp" not in p.name.lower()
+        )
 
     def _run(self) -> None:
         while not self._stop.is_set():
