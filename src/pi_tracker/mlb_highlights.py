@@ -86,12 +86,10 @@ def _is_play_clip(blurb: str) -> bool:
 
 
 def _best_mp4_url(playbacks: list[dict]) -> str | None:
-    """Return the mp4Avc URL from a clip's playback list, or None."""
+    """Return the best mp4 URL — prefer mp4Avc (4000K) over highBit (16000K)."""
     for pb in playbacks:
-        name = pb.get("name", "")
-        if name == "mp4Avc":
+        if pb.get("name") == "mp4Avc":
             return pb.get("url")
-    # Fallback: any mp4 that isn't the huge highBit stream
     for pb in playbacks:
         name = pb.get("name", "")
         url = pb.get("url", "")
@@ -194,11 +192,11 @@ def _transcode_for_pi(src: Path, dest: Path) -> bool:
         result = sp.run(
             [
                 "ffmpeg", "-y", "-i", str(src),
-                "-vf", f"scale={_TRANSCODE_WIDTH}:{_TRANSCODE_HEIGHT}:force_original_aspect_ratio=increase,"
-                       f"crop={_TRANSCODE_WIDTH}:{_TRANSCODE_HEIGHT}",
+                "-vf", f"scale={_TRANSCODE_WIDTH}:{_TRANSCODE_HEIGHT}",
                 "-c:v", "libx264", "-crf", "26", "-preset", "ultrafast",
                 "-c:a", "aac", "-b:a", "96k",
                 "-movflags", "+faststart",
+                "-f", "mp4",  # explicit container so ffmpeg doesn't guess from .tmp extension
                 str(tmp),
             ],
             capture_output=True,
