@@ -318,11 +318,12 @@ def _play_mpv(path: Path, size: tuple[int, int], flags: int) -> "pygame.Surface"
         "mpv",
         "--hwdec=v4l2m2m" if on_pi else "--hwdec=auto",
         "--really-quiet", "--fs", "--panscan=1.0", "--osd-level=0",
-        "--demuxer-readahead-secs=0",  # show first frame immediately, no pre-buffer delay
+        "--demuxer-readahead-secs=2",
     ]
     if is_muted():
         cmd.append("--no-audio")
     cmd.append(str(path))
+    logging.info("mpv launching: %s  cmd=%s", path.name, " ".join(cmd))
     try:
         result = subprocess.run(cmd, timeout=600, capture_output=True, text=True)
         if result.returncode not in (0, 4):  # 4 = quit by user
