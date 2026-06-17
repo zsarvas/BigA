@@ -21,6 +21,7 @@ import logging
 import os
 import subprocess
 import sys
+import textwrap
 import threading
 import time
 from pathlib import Path
@@ -37,7 +38,7 @@ configure_sdl()
 import pygame
 
 from . import config
-from .assets import AssetManager
+from .assets import AssetManager, _repo_font
 from .mlb_http import ANGELS_TEAM_ID as TRACKED_TEAM_ID
 from .mlb_schedule import try_restore_final_scene_for_today
 from .state import SharedGameState
@@ -46,6 +47,7 @@ from . import playback
 from .gpio_leds import cleanup_gpio, init_gpio, is_muted, set_win_led
 from .mlb_highlights import HighlightDownloader, sync_highlight_downloader
 from .scenes import FinalLossScene, FinalWinScene, IdleScene, LiveScene
+from .scenes._clip_player import clip_title_from_path
 
 
 def _demo_opponent() -> tuple[int, str, str]:
@@ -300,13 +302,52 @@ def _configure_logging() -> None:
         logging.getLogger(noisy).setLevel(logging.WARNING)
 
 
-def _play_mpv(path: Path, size: tuple[int, int], flags: int) -> "pygame.Surface":
+_NOW_SHOWING_COLOR = (255, 50, 50)
+_NOW_SHOWING_HOLD_SEC = 0.5
+
+
+def _draw_now_showing_transition(screen: pygame.Surface, title: str) -> None:
+    """Brief full-screen card before handing the display to mpv."""
+    w, _h = screen.get_size()
+    screen.fill(config.BLACK)
+
+    head_font = _repo_font(config.layout_size(22))
+    body_font = _repo_font(config.layout_size(13))
+
+    head = head_font.render("NOW SHOWING", True, _NOW_SHOWING_COLOR)
+    screen.blit(head, head.get_rect(center=(w // 2, config.layout_y(96))))
+
+    # ~26 chars fits two lines on 480px at this font size.
+    wrapped = textwrap.fill(title, width=26)
+    lines = wrapped.split("\n")
+    max_lines = 3
+    if len(lines) > max_lines:
+        lines = lines[:max_lines]
+        if not lines[-1].endswith("…"):
+            lines[-1] = lines[-1].rstrip() + "…"
+
+    line_h = body_font.get_height() + 2
+    block_h = len(lines) * line_h - 2
+    y = config.layout_y(132) - block_h // 2
+    for line in lines:
+        surf = body_font.render(line, True, config.WHITE)
+        screen.blit(surf, surf.get_rect(center=(w // 2, y + line_h // 2)))
+        y += line_h
+
+    pygame.display.flip()
+    time.sleep(_NOW_SHOWING_HOLD_SEC)
+
+
+def _play_mpv(path: Path, screen: pygame.Surface, flags: int) -> "pygame.Surface":
     """
     Hand the display to mpv for one clip, then reclaim it.
 
     On Pi: DRM output at native panel resolution + V4L2 hardware decode (smooth
     on Zero 2W).  Mac/dev: auto hwdec + panscan fill.
     """
+    size = screen.get_size()
+    title = clip_title_from_path(path)
+    _draw_now_showing_transition(screen, title)
     pygame.display.quit()
     import platform
     on_pi = platform.system() == "Linux"
@@ -492,7 +533,7 @@ def main() -> None:
             pending = getattr(scene, "_pending_clip", None)
             if pending:
                 scene._pending_clip = None  # type: ignore[attr-defined]
-                screen = _play_mpv(pending, screen.get_size(), display_flags)
+                screen = _play_mpv(pending, screen, display_flags)
 
             # Boost tick rate while a pygame-rendered GIF animation is running
             # (live event overlays); normal scenes run at the low base FPS.
