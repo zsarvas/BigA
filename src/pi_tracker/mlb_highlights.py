@@ -225,6 +225,19 @@ def wipe_game_highlights(game_pk: int | None = None) -> None:
             log.info("wiped all game highlights")
 
 
+def wipe_stale_highlight_folders(keep_pk: int) -> None:
+    """Remove highlight subfolders for other games (e.g. yesterday's recap)."""
+    if not config.GAME_HIGHLIGHTS_DIR.is_dir():
+        return
+    for sub in config.GAME_HIGHLIGHTS_DIR.iterdir():
+        if not sub.is_dir() or not sub.name.isdigit():
+            continue
+        if int(sub.name) == keep_pk:
+            continue
+        shutil.rmtree(sub)
+        log.info("wiped stale game highlights for %s (active pk %s)", sub.name, keep_pk)
+
+
 def _slug(text: str) -> str:
     """Convert a blurb to a safe filename slug, e.g. 'Mike Trout's HR (16)' → 'mike-trout-s-hr-16'."""
     import re
@@ -402,13 +415,13 @@ def sync_highlight_downloader(
             downloader.stop()
         return None, 0
 
+    wipe_stale_highlight_folders(pk)
+
     if pk == last_pk and downloader is not None:
         return downloader, last_pk
 
     if downloader is not None:
         downloader.stop()
-    if last_pk and last_pk != pk:
-        wipe_game_highlights(last_pk)
 
     dl = HighlightDownloader(pk)
     dl.start()

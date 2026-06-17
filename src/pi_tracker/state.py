@@ -114,6 +114,7 @@ class SharedGameState:
             "home_errors": 0,
             "inning": 1,
             "inning_half": "top",
+            "inning_state": "top",
             "outs": 0,
             "balls": 0,
             "strikes": 0,

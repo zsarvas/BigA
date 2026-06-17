@@ -260,6 +260,7 @@ def live_feed_to_state_patch(feed: dict[str, Any]) -> dict[str, Any]:
     strikes = int(count.get("strikes", 0) or 0)
 
     inning_half = str(linescore.get("inningHalf", "top")).lower()
+    inning_state = str(linescore.get("inningState", inning_half)).lower()
     inning = linescore.get("currentInning", 1)
     outs = int(linescore.get("outs", 0) or 0)
 
@@ -307,6 +308,7 @@ def live_feed_to_state_patch(feed: dict[str, Any]) -> dict[str, Any]:
         "home_runs": hr,
         "inning": inning,
         "inning_half": inning_half,
+        "inning_state": inning_state,
         "outs": outs,
         "balls": balls,
         "strikes": strikes,

@@ -77,6 +77,22 @@ def _linux_text_console() -> bool:
     )
 
 
+def _suppress_mouse(screen: pygame.Surface | None = None) -> None:
+    """Hide cursor on kiosk panels — mpv/SDL reinit can flash it until the next flip."""
+    try:
+        pygame.mouse.set_visible(False)
+        if _linux_text_console():
+            pygame.event.set_grab(True)
+    except pygame.error:
+        pass
+    if screen is not None:
+        pygame.event.pump()
+        try:
+            pygame.mouse.set_visible(False)
+        except pygame.error:
+            pass
+
+
 def _pygame_bootstrap_linux_console() -> None:
     """Full SDL init; mixer is unused (mpv for video). Helps some fbcon/SDL builds."""
     pygame.init()
@@ -393,7 +409,11 @@ def _play_mpv(path: Path, screen: pygame.Surface, flags: int) -> "pygame.Surface
         playback.end()
     pygame.display.init()
     screen = pygame.display.set_mode(size, flags)
-    pygame.mouse.set_visible(False)
+    _suppress_mouse()
+    # Flip immediately so the cursor is covered before the main loop's next draw.
+    screen.fill(config.BLACK)
+    pygame.display.flip()
+    _suppress_mouse(screen)
     return screen
 
 
@@ -409,7 +429,7 @@ def main() -> None:
     display_flags = flags
     screen = _open_pygame_window(config.SCREEN_WIDTH, config.SCREEN_HEIGHT, display_flags)
     pygame.display.set_caption("BigA Pi Tracker")
-    pygame.mouse.set_visible(False)
+    _suppress_mouse(screen)
     clock = pygame.time.Clock()
 
     state: SharedGameState
@@ -534,6 +554,7 @@ def main() -> None:
             if pending:
                 scene._pending_clip = None  # type: ignore[attr-defined]
                 screen = _play_mpv(pending, screen, display_flags)
+                _suppress_mouse(screen)
 
             # Boost tick rate while a pygame-rendered GIF animation is running
             # (live event overlays); normal scenes run at the low base FPS.
