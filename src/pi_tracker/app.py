@@ -317,17 +317,25 @@ def _play_mpv(path: Path, size: tuple[int, int], flags: int) -> "pygame.Surface"
     cmd = [
         "mpv",
         "--hwdec=v4l2m2m" if on_pi else "--hwdec=auto",
-        "--really-quiet", "--fs", "--panscan=1.0", "--osd-level=0",
+        "--msg-level=all=warn",  # surface warnings without full verbosity
+        "--fs", "--panscan=1.0", "--osd-level=0",
         "--scale=bilinear", "--cscale=bilinear", "--dscale=bilinear",
         "--video-sync=display-resample",
+        "--ao=alsa",  # skip JACK/PipeWire, go straight to ALSA
     ]
-    if on_pi:
-        cmd += ["--vo=gpu", "--gpu-context=drm"]
     if is_muted():
         cmd.append("--no-audio")
     cmd.append(str(path))
     try:
-        subprocess.run(cmd, timeout=600)
+        result = subprocess.run(cmd, timeout=600, capture_output=True, text=True)
+        if result.returncode not in (0, 4):  # 4 = quit by user
+            logging.warning(
+                "mpv exited %d for %s\nstdout: %s\nstderr: %s",
+                result.returncode, path.name,
+                result.stdout[-500:], result.stderr[-500:],
+            )
+        elif result.stderr.strip():
+            logging.debug("mpv stderr: %s", result.stderr[-300:])
     except FileNotFoundError:
         logging.warning("mpv not found — skipping clip %s", path.name)
     except subprocess.TimeoutExpired:
@@ -455,9 +463,12 @@ def main() -> None:
                 set_win_led(scene_key == "win")
 
             # Manage highlight downloader lifecycle.
+            # Keep downloading through win/loss scenes — post-game recaps and
+            # condensed-game clips upload for hours after the final out.
+            # Only stop when returning to idle (no active game context).
             if not demo:
                 live_pk = int(snap.get("live_game_pk") or 0)
-                if scene_key == "live" and live_pk:
+                if scene_key in ("live", "win", "loss") and live_pk:
                     if live_pk != _last_live_pk:
                         # New game — stop old downloader, wipe old clips, start fresh.
                         if _hl_downloader:
@@ -467,7 +478,7 @@ def main() -> None:
                         _last_live_pk = live_pk
                         _hl_downloader = HighlightDownloader(live_pk)
                         _hl_downloader.start()
-                elif scene_key not in ("live",) and _hl_downloader:
+                elif scene_key == "idle" and _hl_downloader:
                     _hl_downloader.stop()
                     _hl_downloader = None
 
