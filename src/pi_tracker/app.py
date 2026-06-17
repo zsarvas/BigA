@@ -43,6 +43,7 @@ from .mlb_http import ANGELS_TEAM_ID as TRACKED_TEAM_ID
 from .mlb_schedule import try_restore_final_scene_for_today
 from .state import SharedGameState
 from .team_config import tracked_team_abbr, tracked_team_name
+from . import mouse_hide
 from . import playback
 from .gpio_leds import cleanup_gpio, init_gpio, is_muted, set_win_led
 from .mlb_highlights import HighlightDownloader, sync_highlight_downloader
@@ -77,22 +78,6 @@ def _linux_text_console() -> bool:
     )
 
 
-def _suppress_mouse(screen: pygame.Surface | None = None) -> None:
-    """Hide cursor on kiosk panels — mpv/SDL reinit can flash it until the next flip."""
-    try:
-        pygame.mouse.set_visible(False)
-        if _linux_text_console():
-            pygame.event.set_grab(True)
-    except pygame.error:
-        pass
-    if screen is not None:
-        pygame.event.pump()
-        try:
-            pygame.mouse.set_visible(False)
-        except pygame.error:
-            pass
-
-
 def _pygame_bootstrap_linux_console() -> None:
     """Full SDL init; mixer is unused (mpv for video). Helps some fbcon/SDL builds."""
     pygame.init()
@@ -100,6 +85,7 @@ def _pygame_bootstrap_linux_console() -> None:
         pygame.mixer.quit()
     except pygame.error:
         pass
+    mouse_hide.apply()
 
 
 def _try_set_mode(
@@ -368,7 +354,7 @@ def _play_mpv(path: Path, screen: pygame.Surface, flags: int) -> "pygame.Surface
     import platform
     on_pi = platform.system() == "Linux"
     w, h = size
-    cmd = ["mpv", "--really-quiet", "--osd-level=0"]
+    cmd = ["mpv", "--really-quiet", "--osd-level=0", "--cursor-autohide=always"]
     if on_pi:
         # Native DRM mode + hw decode; panscan zooms to fill (crop edges, no stretch).
         cmd += [
@@ -409,11 +395,11 @@ def _play_mpv(path: Path, screen: pygame.Surface, flags: int) -> "pygame.Surface
         playback.end()
     pygame.display.init()
     screen = pygame.display.set_mode(size, flags)
-    _suppress_mouse()
+    mouse_hide.apply()
     # Flip immediately so the cursor is covered before the main loop's next draw.
     screen.fill(config.BLACK)
     pygame.display.flip()
-    _suppress_mouse(screen)
+    mouse_hide.apply(screen)
     return screen
 
 
@@ -429,7 +415,7 @@ def main() -> None:
     display_flags = flags
     screen = _open_pygame_window(config.SCREEN_WIDTH, config.SCREEN_HEIGHT, display_flags)
     pygame.display.set_caption("BigA Pi Tracker")
-    _suppress_mouse(screen)
+    mouse_hide.apply(screen)
     clock = pygame.time.Clock()
 
     state: SharedGameState
@@ -547,6 +533,8 @@ def main() -> None:
                 _draw_debug_hud(
                     screen, assets, frame_i=frame_i, scene_key=scene_key, loop_start=loop_start
                 )
+            if mouse_hide.kiosk_mode():
+                mouse_hide.apply(screen)
             pygame.display.flip()
 
             # If the scene queued a clip for mpv, play it now and reclaim the display.
@@ -554,7 +542,7 @@ def main() -> None:
             if pending:
                 scene._pending_clip = None  # type: ignore[attr-defined]
                 screen = _play_mpv(pending, screen, display_flags)
-                _suppress_mouse(screen)
+                mouse_hide.apply(screen)
 
             # Boost tick rate while a pygame-rendered GIF animation is running
             # (live event overlays); normal scenes run at the low base FPS.
