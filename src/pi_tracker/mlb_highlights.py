@@ -35,6 +35,19 @@ log = logging.getLogger(__name__)
 CONTENT_URL = "https://statsapi.mlb.com/api/v1/game/{game_pk}/content"
 POLL_INTERVAL_MIN = 10  # poll every 10 minutes during a live game
 
+
+def _chown_for_pi(path: Path) -> None:
+    """When biga runs as root, hand files back to pi so SSH cleanup works."""
+    import os
+    import pwd
+    if os.getuid() != 0:
+        return
+    try:
+        pi = pwd.getpwnam("pi")
+        os.chown(path, pi.pw_uid, pi.pw_gid)
+    except (KeyError, OSError):
+        pass
+
 # Blurb substrings that indicate non-play content we skip.
 _SKIP_PATTERNS = (
     "through bat tracking",
@@ -146,6 +159,7 @@ def fetch_highlight_clips(game_pk: int) -> list[dict]:
 def game_highlights_dir(game_pk: int) -> Path:
     d = config.GAME_HIGHLIGHTS_DIR / str(game_pk)
     d.mkdir(parents=True, exist_ok=True)
+    _chown_for_pi(d)
     return d
 
 
@@ -210,6 +224,7 @@ def _transcode_for_pi(src: Path, dest: Path) -> bool:
             return False
         tmp.rename(dest)
         src.unlink(missing_ok=True)
+        _chown_for_pi(dest)
         log.info("transcoded → %s (%d KB)", dest.name, dest.stat().st_size // 1024)
         return True
     except Exception as exc:
@@ -240,6 +255,7 @@ def _download_clip(clip: dict, dest_dir: Path) -> Path | None:
             # ffmpeg not available or failed — use original as-is
             raw.rename(dest)
             log.info("saved %s (original quality)", fname)
+        _chown_for_pi(dest)
         return dest
     except Exception as exc:
         log.warning("download failed for %s: %s", clip["blurb"], exc)
