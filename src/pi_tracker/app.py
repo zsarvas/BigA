@@ -326,9 +326,10 @@ def _play_mpv(path: Path, size: tuple[int, int], flags: int) -> "pygame.Surface"
     ]
     if on_pi:
         cmd += [
-            "--vo=drm",
+            "--vo=gpu",
+            "--gpu-context=drm",
             "--drm-device=/dev/dri/card0",
-            "--drm-connector=1",
+            "--opengl-es=yes",  # use GLES (available on VideoCore) instead of desktop GL
         ]
     cmd.append(str(path))
     try:
