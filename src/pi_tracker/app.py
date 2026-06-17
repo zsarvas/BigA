@@ -313,13 +313,14 @@ def _play_mpv(path: Path, size: tuple[int, int], flags: int) -> "pygame.Surface"
     w, h = size
     cmd = ["mpv", "--really-quiet", "--osd-level=0"]
     if on_pi:
-        # Matches manual testing on the panel: native DRM mode + hw decode, no CPU scale.
+        # Native DRM mode + hw decode; panscan zooms to fill (crop edges, no stretch).
         cmd += [
             "--vo=drm",
             "--drm-device=/dev/dri/card0",
             f"--drm-mode={w}x{h}",
             "--hwdec=v4l2m2m",
             "--vd-lavc-threads=4",
+            "--panscan=1.0",
         ]
     else:
         cmd += ["--hwdec=auto", "--fs", "--panscan=1.0"]

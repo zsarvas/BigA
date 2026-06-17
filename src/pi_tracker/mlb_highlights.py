@@ -180,20 +180,21 @@ _TRANSCODE_HEIGHT = config.SCREEN_HEIGHT
 
 def _transcode_for_pi(src: Path, dest: Path) -> bool:
     """
-    Re-encode *src* to a Pi-friendly 640×400 H.264 file at *dest*.
-    Uses ffmpeg if available; returns True on success, False if ffmpeg is
-    missing or fails (caller keeps the original file in that case).
+    Re-encode *src* to panel-sized H.264 with cover+crop (no letterboxing/stretch).
     """
     import shutil
     import subprocess as sp
     if not shutil.which("ffmpeg"):
         return False
+    w, h = _TRANSCODE_WIDTH, _TRANSCODE_HEIGHT
+    # Scale up to cover, then center-crop to exact panel size.
+    vf = f"scale={w}:{h}:force_original_aspect_ratio=increase,crop={w}:{h}"
     tmp = dest.with_suffix(".tc.tmp")
     try:
         result = sp.run(
             [
                 "ffmpeg", "-y", "-i", str(src),
-                "-vf", f"scale={_TRANSCODE_WIDTH}:{_TRANSCODE_HEIGHT}",
+                "-vf", vf,
                 "-c:v", "libx264", "-crf", "26", "-preset", "ultrafast",
                 "-c:a", "aac", "-b:a", "96k",
                 "-movflags", "+faststart",
