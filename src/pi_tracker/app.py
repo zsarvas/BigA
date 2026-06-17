@@ -318,6 +318,7 @@ def _play_mpv(path: Path, size: tuple[int, int], flags: int) -> "pygame.Surface"
         "mpv",
         "--hwdec=v4l2m2m" if on_pi else "--hwdec=auto",
         "--really-quiet", "--fs", "--panscan=1.0", "--osd-level=0",
+        "--demuxer-readahead-secs=0",  # show first frame immediately, no pre-buffer delay
     ]
     if is_muted():
         cmd.append("--no-audio")
