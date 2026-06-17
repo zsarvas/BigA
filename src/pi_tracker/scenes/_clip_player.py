@@ -57,10 +57,12 @@ class ClipPlayerMixin:
         self._cp_played: set[str] = set()
         self._pending_clip: Path | None = None  # read by app.py each frame
 
-    def _cp_tick(self, folder: Path | None) -> None:
+    def _cp_tick(self, folder: Path | None, gap_min: int | None = None) -> None:
         """
         Check if it's time to queue a clip.  Sets ``self._pending_clip`` when
         the gap has elapsed and a clip exists in *folder*.
+
+        *gap_min* overrides the default random gap (uses config values if None).
         """
         self.__init_cp()
 
@@ -71,8 +73,10 @@ class ClipPlayerMixin:
         import pygame  # local import; mixin is shared across display-less contexts
         now = pygame.time.get_ticks()
 
+        gap_ms = gap_min * 60_000 if gap_min is not None else _rand_gap_ms()
+
         if self._cp_next_play_ms == 0:
-            self._cp_next_play_ms = now + _rand_gap_ms()
+            self._cp_next_play_ms = now + gap_ms
             return
 
         if now < self._cp_next_play_ms:
@@ -83,4 +87,4 @@ class ClipPlayerMixin:
             if path:
                 self._pending_clip = path
 
-        self._cp_next_play_ms = now + _rand_gap_ms()
+        self._cp_next_play_ms = now + gap_ms

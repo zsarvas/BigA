@@ -14,7 +14,7 @@ from .final_win import _game_clip_folder
 
 class FinalLossScene(ClipPlayerMixin):
     def draw(self, screen: pygame.Surface, assets: AssetManager, state: dict[str, Any]) -> None:
-        self._cp_tick(_game_clip_folder(state))
+        self._cp_tick(_game_clip_folder(state), gap_min=config.GAME_HIGHLIGHT_GAP_MIN)
         screen.fill((18, 18, 22))
         draw_score_with_flanking_logos(
             screen, assets, state, y_center=config.layout_y(76), score_color=config.GRAY

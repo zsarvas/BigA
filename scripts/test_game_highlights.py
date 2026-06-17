@@ -118,7 +118,7 @@ def _play_all(paths: list[Path]) -> None:
     for i, path in enumerate(paths, 1):
         print(f"[{i}/{len(paths)}] {path.name}")
         result = subprocess.run(
-            ["mpv", "--hwdec=auto", "--really-quiet", "--fs", "--panscan=1.0", str(path)]
+            ["mpv", "--hwdec=auto", "--really-quiet", "--fs", "--panscan=1.0", "--osd-level=0", str(path)]
         )
         if result.returncode == 2:  # mpv hard-quit (e.g. window close)
             break
