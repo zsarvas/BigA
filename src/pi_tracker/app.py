@@ -42,6 +42,7 @@ from .mlb_http import ANGELS_TEAM_ID as TRACKED_TEAM_ID
 from .mlb_schedule import try_restore_final_scene_for_today
 from .state import SharedGameState
 from .team_config import tracked_team_abbr, tracked_team_name
+from . import playback
 from .gpio_leds import cleanup_gpio, init_gpio, is_muted, set_win_led
 from .mlb_highlights import HighlightDownloader, wipe_game_highlights
 from .scenes import FinalLossScene, FinalWinScene, IdleScene, LiveScene
@@ -324,6 +325,8 @@ def _play_mpv(path: Path, size: tuple[int, int], flags: int) -> "pygame.Surface"
         cmd.append("--no-audio")
     cmd.append(str(path))
     logging.info("mpv launching: %s  cmd=%s", path.name, " ".join(cmd))
+    # Pause all background polling threads so the Pi's CPU is free for decode.
+    playback.begin()
     try:
         result = subprocess.run(cmd, timeout=600, capture_output=True, text=True)
         if result.returncode not in (0, 4):  # 4 = quit by user
@@ -340,6 +343,8 @@ def _play_mpv(path: Path, size: tuple[int, int], flags: int) -> "pygame.Surface"
         logging.warning("mpv timed out on %s", path.name)
     except Exception as exc:  # noqa: BLE001
         logging.warning("mpv error: %s", exc)
+    finally:
+        playback.end()
     pygame.display.init()
     screen = pygame.display.set_mode(size, flags)
     pygame.mouse.set_visible(False)

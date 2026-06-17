@@ -7,6 +7,7 @@ import threading
 
 from .mlb_schedule import fetch_and_format_next_game
 from .state import SharedGameState
+from . import playback
 
 log = logging.getLogger(__name__)
 
@@ -36,6 +37,9 @@ def idle_schedule_loop(state: SharedGameState, stop: threading.Event) -> None:
     """Refresh next-game info only while scene is idle (no calls during live / final)."""
     refresh_idle_schedule(state)
     while not stop.is_set():
+        playback.wait_while_active(stop)
+        if stop.is_set():
+            break
         snap = state.snapshot()
         if str(snap.get("scene", "idle")) == "idle":
             if stop.wait(POLL_INTERVAL_SEC):

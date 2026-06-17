@@ -28,6 +28,7 @@ from typing import Collection
 import requests
 
 from . import config
+from . import playback
 
 log = logging.getLogger(__name__)
 
@@ -227,7 +228,9 @@ def _download_clip(clip: dict, dest_dir: Path) -> Path | None:
         log.info("downloading: %s", clip["blurb"])
         r = requests.get(clip["url"], stream=True, timeout=60)
         r.raise_for_status()
-        raw = dest.with_suffix(".raw.mp4")
+        # Use a non-.mp4 suffix for the in-progress download so scene clip
+        # pickers (which glob *.mp4) never grab a partial/untranscoded file.
+        raw = dest.with_suffix(".rawdl")
         with open(raw, "wb") as f:
             for chunk in r.iter_content(chunk_size=1 << 20):
                 f.write(chunk)
@@ -291,6 +294,10 @@ class HighlightDownloader:
             cid = clip["id"]
             if cid in self._seen_ids:
                 continue
+            # Don't start a download/transcode (CPU heavy) while a clip is playing.
+            playback.wait_while_active(self._stop)
+            if self._stop.is_set():
+                return
             self._seen_ids.add(cid)
             path = _download_clip(clip, self._dest)
             if path:
