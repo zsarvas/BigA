@@ -72,12 +72,13 @@ class FinalWinScene(ClipPlayerMixin):
         w = assets.font_title.render(headline, True, config.WHITE)
         screen.blit(w, w.get_rect(center=(config.SCREEN_WIDTH // 2, config.layout_y(128))))
 
+        table_top = config.layout_y(152) + 2 * (assets.font_linescore.get_height() + 2)
         draw_linescore_table_centered(
             screen,
             assets,
             state,
             config.SCREEN_WIDTH // 2,
-            config.layout_y(152),
+            table_top,
             fg=config.WHITE,
             hdr=(160, 200, 160),
             cell_pad=2,
