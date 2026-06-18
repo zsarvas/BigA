@@ -1,81 +1,430 @@
+"""
+Win-scene NeoPixel strip (default BCM 19 / PWM channel 1) and mute button
+(default BCM 16, single press toggles audio on/off).
+
+Public API kept stable for ``app.py``:
+    init_gpio() / set_win_led(active) / cleanup_gpio()
+    is_muted() / set_muted(bool)
+
+When ``set_win_led(True)`` is called, a daemon thread drives a slow Angels-red
+breathing pulse on the strip. ``set_win_led(False)`` stops the animation and
+clears all pixels. The thread stays inactive until the next win.
+
+The LEDs follow ``scene == "win"``; ``game_day_poller`` keeps that scene set
+until the next local calendar day (per ``date.today()``, system timezone) or
+until a doubleheader game 2 transitions back to ``live`` — both cases turn the
+LEDs off automatically because the scene leaves ``win``.
+
+Hardware notes (rpi_ws281x):
+* GPIO 19 uses PWM channel 1 (``dma=10``). Requires root (the BigA service is
+  already root). Conflicts with on-board audio when channel 1 is active.
+* Override pin via ``BIGA_WIN_LED_GPIO`` (must be a PWM/PCM-capable pin).
+* Override LED count via ``BIGA_WIN_LED_COUNT`` (default 32).
+* Override brightness via ``BIGA_WIN_LED_BRIGHTNESS`` (0–255, default 96).
+
+No-op when ``rpi_ws281x`` is not installed (e.g. local Mac dev).
+"""
+
+from __future__ import annotations
+
+import json
+import logging
+import os
+import threading
 import time
-import board
-import neopixel
+from pathlib import Path
 
-# Configuration
-LED_PIN = board.D19      # GPIO pin 19 (replaces Arduino pin 6)
-LED_COUNT = 30
-BRIGHTNESS = 10 / 255   # Arduino setBrightness(10) out of 255
-RACER_LENGTH = 3
-WAIT = 0.030             # 30ms delay
-
-# Initialize NeoPixel strip
-strip = neopixel.NeoPixel(
-    LED_PIN,
-    LED_COUNT,
-    brightness=BRIGHTNESS,
-    auto_write=False,
-    pixel_order=neopixel.GRB
-)
-
-# Colors (R, G, B)
-RED   = (255, 0, 0)
-GREEN = (0, 255, 0)
-BLUE  = (0, 0, 255)
-WHITE = (255, 255, 255)
-OFF   = (0, 0, 0)
+log = logging.getLogger(__name__)
 
 
-def racer_chase(color1, color2):
-    """A 'racer' of color1 pixels sweeps across a color2 background."""
-    for i in range(RACER_LENGTH, LED_COUNT):
-        strip[i] = color1
-        if i > RACER_LENGTH:
-            strip[i - (RACER_LENGTH + 1)] = color2
-        strip.show()
-        time.sleep(WAIT)
-
-    for i in range(LED_COUNT - RACER_LENGTH - 1, LED_COUNT):
-        strip[i] = color2
-        strip[i - LED_COUNT + RACER_LENGTH + 1] = color1
-        strip.show()
-        time.sleep(WAIT)
+def _env_bool(name: str) -> bool:
+    return os.environ.get(name, "").strip().lower() in ("1", "true", "yes", "on")
 
 
-def theater_chase(color, wait):
-    """Every third pixel lights up, cycling through offsets 0-2, repeated 10 times."""
-    for _ in range(10):
-        for b in range(3):
-            strip.fill(OFF)
-            for c in range(b, LED_COUNT, 3):
-                strip[c] = color
-            strip.show()
-            time.sleep(wait / 1000)  # wait is in ms, convert to seconds
+def _env_int(name: str, default: int, lo: int | None = None, hi: int | None = None) -> int:
+    raw = os.environ.get(name, "").strip()
+    if not raw:
+        return default
+    try:
+        v = int(raw, 10)
+    except ValueError:
+        return default
+    if lo is not None and v < lo:
+        return default
+    if hi is not None and v > hi:
+        return default
+    return v
 
 
-def main():
-    strip.fill(OFF)
-    strip.show()
+_WIN_LED_GPIO = _env_int("BIGA_WIN_LED_GPIO", 19)
+_WIN_LED_COUNT = _env_int("BIGA_WIN_LED_COUNT", 30, lo=1, hi=600)
+_WIN_LED_BRIGHTNESS = _env_int("BIGA_WIN_LED_BRIGHTNESS", 96, lo=0, hi=255)
+# Debug: light every configured LED solid white at all times (ignores scene).
+# Use to verify wiring / strip length, then unset. BIGA_LED_DEBUG=1 enables.
+_LED_DEBUG = _env_bool("BIGA_LED_DEBUG")
+_LED_DEBUG_COLOR = (255, 255, 255)
+# Debug: run the full win animation (breathing red + gold flashes) from startup,
+# regardless of scene. Use to tune the animation. BIGA_LED_WIN_DEBUG=1 enables.
+_LED_WIN_DEBUG = _env_bool("BIGA_LED_WIN_DEBUG")
+# rpi_ws281x defaults that are safe for WS2812B-style strips.
+_LED_FREQ_HZ = 800_000
+_LED_INVERT = False
+# Channel 0: GPIO 12/18/21. Channel 1: GPIO 13/19. DMA channel 10 for ch 1.
+_CHANNEL_FOR_GPIO = {12: 0, 18: 0, 21: 0, 13: 1, 19: 1}
+_DMA_FOR_CHANNEL = {0: 10, 1: 10}
+
+# Angels red / gold palette
+_HALOS_R = (190, 30, 30)
+_HALOS_GOLD = (186, 147, 62)
+
+# Animation timing (seconds)
+_PHASE_RED_DUR = 4.0      # red comet chase
+_PHASE_WHITE_DUR = 4.0    # white comet chase
+_PHASE_RAINBOW_DUR = 6.0  # rainbow scroll
+_CHASE_SPEED = 20         # pixels / second for comet phases
+_FLASH_INTERVAL = 7.0     # seconds between full-strip white flashes
+_FLASH_DUR = 0.13         # seconds a flash lasts
+
+# Reentrant: set_win_led() holds the lock and may call init_gpio(), which re-acquires it.
+_lock = threading.RLock()
+_strip = None  # type: ignore[var-annotated]
+_initialized = False
+_win_active = False
+_anim_thread: threading.Thread | None = None
+_anim_stop = threading.Event()
+
+
+# ---------------------------------------------------------------------------
+# Mute button (BCM 16 by default, single press toggles audio)
+# ---------------------------------------------------------------------------
+
+_MUTE_PIN = _env_int("BIGA_MUTE_PIN", 25)
+_MUTE_STATE_FILE = Path(os.environ.get("BIGA_MUTE_STATE_FILE", "/etc/biga/mute.json"))
+
+_mute_lock = threading.Lock()
+_muted: bool = False
+_mute_button = None  # gpiozero Button, set in init_gpio()
+
+
+def _load_mute_state() -> bool:
+    try:
+        data = json.loads(_MUTE_STATE_FILE.read_text())
+        return bool(data.get("muted", False))
+    except Exception:
+        return False
+
+
+def _save_mute_state(muted: bool) -> None:
+    try:
+        _MUTE_STATE_FILE.parent.mkdir(parents=True, exist_ok=True)
+        _MUTE_STATE_FILE.write_text(json.dumps({"muted": muted}))
+    except Exception as e:
+        log.debug("could not save mute state: %s", e)
+
+
+def is_muted() -> bool:
+    """Return True if audio is currently muted."""
+    with _mute_lock:
+        return _muted
+
+
+def set_muted(muted: bool) -> None:
+    """Explicitly set mute state (also persists to disk)."""
+    global _muted
+    with _mute_lock:
+        _muted = muted
+    _save_mute_state(muted)
+    log.info("audio %s", "muted" if muted else "unmuted")
+
+
+def _toggle_mute() -> None:
+    global _muted
+    with _mute_lock:
+        _muted = not _muted
+        new_state = _muted
+    _save_mute_state(new_state)
+    log.info("mute toggled → %s", "muted" if new_state else "unmuted")
+
+
+def _init_mute_button() -> None:
+    """Set up the mute GPIO button. Called from init_gpio()."""
+    global _muted, _mute_button
+    _muted = _load_mute_state()
+    log.debug("mute state loaded: %s", _muted)
+    try:
+        from gpiozero import Button  # type: ignore[import-untyped]
+        btn = Button(_MUTE_PIN, pull_up=True, bounce_time=0.05)
+        btn.when_pressed = _toggle_mute
+        _mute_button = btn
+        log.info("mute button on BCM %d (press to toggle)", _MUTE_PIN)
+    except Exception as e:
+        log.debug("mute button GPIO unavailable (BCM %d): %s", _MUTE_PIN, e)
+
+
+# ---------------------------------------------------------------------------
+# NeoPixel LED strip
+# ---------------------------------------------------------------------------
+
+
+def _import_neopixel():
+    """Return (PixelStrip, Color) or (None, None) when rpi_ws281x is unavailable."""
+    try:
+        from rpi_ws281x import Color, PixelStrip  # type: ignore[import-untyped]
+
+        return PixelStrip, Color
+    except ImportError:
+        return None, None
+
+
+def _color(rgb: tuple[int, int, int]):
+    _, Color = _import_neopixel()
+    if Color is None:
+        return None
+    r, g, b = rgb
+    return Color(int(r) & 0xFF, int(g) & 0xFF, int(b) & 0xFF)
+
+
+def init_gpio() -> None:
+    """Build the PixelStrip and mute button on first use. Safe to call repeatedly."""
+    global _strip, _initialized
+    _init_mute_button()
+    with _lock:
+        if _initialized:
+            return
+        PixelStrip, _ = _import_neopixel()
+        if PixelStrip is None:
+            log.debug("rpi_ws281x not installed; win LED disabled")
+            return
+        channel = _CHANNEL_FOR_GPIO.get(_WIN_LED_GPIO)
+        if channel is None:
+            log.warning(
+                "BIGA_WIN_LED_GPIO=%s is not a NeoPixel-capable pin (use 12/13/18/19/21); "
+                "LEDs disabled.",
+                _WIN_LED_GPIO,
+            )
+            return
+        dma = _DMA_FOR_CHANNEL.get(channel, 10)
+        try:
+            strip = PixelStrip(
+                _WIN_LED_COUNT,
+                _WIN_LED_GPIO,
+                _LED_FREQ_HZ,
+                dma,
+                _LED_INVERT,
+                _WIN_LED_BRIGHTNESS,
+                channel,
+            )
+            strip.begin()
+            _strip = strip
+            _initialized = True
+            if _LED_DEBUG:
+                # Solid-on diagnostic: confirms how many physical LEDs the configured
+                # count actually drives. Bump BIGA_WIN_LED_COUNT until the whole strip lights.
+                print(
+                    f"[biga] LED DEBUG: lighting {_WIN_LED_COUNT} LEDs solid on "
+                    f"GPIO {_WIN_LED_GPIO} (ch {channel}). Set BIGA_WIN_LED_COUNT to your "
+                    "strip length.",
+                    flush=True,
+                )
+                _fill_blocking(_LED_DEBUG_COLOR)
+            elif _LED_WIN_DEBUG:
+                # Win-animation debug: starts the breathing/flash animation immediately so
+                # you can tune colors and timing without waiting for an actual win.
+                print(
+                    f"[biga] LED WIN DEBUG: running win animation on {_WIN_LED_COUNT} LEDs "
+                    f"(GPIO {_WIN_LED_GPIO}). Ctrl-C or stop the service to exit.",
+                    flush=True,
+                )
+                _anim_stop.clear()
+                t = threading.Thread(
+                    target=_animate_loop,
+                    args=(_anim_stop,),
+                    name="win-leds-debug",
+                    daemon=True,
+                )
+                _anim_thread = t
+                t.start()
+            else:
+                _fill_blocking((0, 0, 0))
+        except Exception as e:  # noqa: BLE001
+            log.warning("NeoPixel init failed (pin %s ch %s): %s", _WIN_LED_GPIO, channel, e)
+
+
+def _fill_blocking(rgb: tuple[int, int, int]) -> None:
+    """Paint all pixels a solid color and ``show()``. Caller holds no lock requirement."""
+    if _strip is None:
+        return
+    c = _color(rgb)
+    if c is None:
+        return
+    try:
+        for i in range(_strip.numPixels()):
+            _strip.setPixelColor(i, c)
+        _strip.show()
+    except Exception as e:  # noqa: BLE001
+        log.debug("NeoPixel fill failed: %s", e)
+
+
+def _scale(rgb: tuple[int, int, int], factor: float) -> tuple[int, int, int]:
+    factor = max(0.0, min(1.0, factor))
+    return (
+        int(round(rgb[0] * factor)),
+        int(round(rgb[1] * factor)),
+        int(round(rgb[2] * factor)),
+    )
+
+
+def _wheel(pos: int) -> tuple[int, int, int]:
+    """Classic 256-step color wheel: red → green → blue → red."""
+    pos = pos % 256
+    if pos < 85:
+        return (255 - pos * 3, pos * 3, 0)
+    if pos < 170:
+        pos -= 85
+        return (0, 255 - pos * 3, pos * 3)
+    pos -= 170
+    return (pos * 3, 0, 255 - pos * 3)
+
+
+def _render_comet(n: int, head: int, tail_len: int, rgb: tuple[int, int, int]) -> None:
+    """Paint a comet with a fading tail; head is the brightest pixel."""
+    if _strip is None:
+        return
+    _, Color = _import_neopixel()
+    if Color is None:
+        return
+    blank = Color(0, 0, 0)
+    for i in range(n):
+        dist = (head - i) % n
+        if dist < tail_len:
+            factor = (tail_len - dist) / tail_len
+            r, g, b = rgb
+            _strip.setPixelColor(i, Color(int(r * factor), int(g * factor), int(b * factor)))
+        else:
+            _strip.setPixelColor(i, blank)
+    _strip.show()
+
+
+def _animate_loop(stop: threading.Event) -> None:
+    """
+    Scrolling chase animation: red comet → white comet → rainbow scroll, cycling
+    continuously with brief full-strip white flashes for excitement.
+    """
+    if _strip is None:
+        return
+    n = _strip.numPixels()
+    tail_len = max(4, n // 4)
+    cycle_dur = _PHASE_RED_DUR + _PHASE_WHITE_DUR + _PHASE_RAINBOW_DUR
+
+    _, Color = _import_neopixel()
+    if Color is None:
+        return
+
+    t0 = time.monotonic()
+    last_flash = t0 - _FLASH_INTERVAL  # don't flash immediately on start
 
     try:
-        while True:
-            strip.fill(RED)
-            strip.show()
+        while not stop.is_set():
+            now = time.monotonic()
 
-            racer_chase(WHITE, RED)
-            racer_chase(WHITE, RED)
-            racer_chase(WHITE, RED)
-            theater_chase(WHITE, 50)
+            # Full-strip white flash overrides everything.
+            if now - last_flash >= _FLASH_INTERVAL:
+                last_flash = now
+            if now - last_flash < _FLASH_DUR:
+                _fill_blocking((255, 255, 255))
+                if stop.wait(0.02):
+                    break
+                continue
 
-            racer_chase(RED, WHITE)
-            racer_chase(RED, WHITE)
-            racer_chase(RED, WHITE)
-            theater_chase(RED, 50)
+            t = now - t0
+            cycle_t = t % cycle_dur
 
-    except KeyboardInterrupt:
-        strip.fill(OFF)
-        strip.show()
+            if cycle_t < _PHASE_RED_DUR:
+                # Red comet chase
+                head = int(cycle_t * _CHASE_SPEED) % n
+                _render_comet(n, head, tail_len, _HALOS_R)
+
+            elif cycle_t < _PHASE_RED_DUR + _PHASE_WHITE_DUR:
+                # White comet chase
+                phase_t = cycle_t - _PHASE_RED_DUR
+                head = int(phase_t * _CHASE_SPEED) % n
+                _render_comet(n, head, tail_len, (255, 255, 255))
+
+            else:
+                # Rainbow scroll
+                phase_t = cycle_t - _PHASE_RED_DUR - _PHASE_WHITE_DUR
+                offset = int((phase_t / _PHASE_RAINBOW_DUR) * 256)
+                for i in range(n):
+                    hue = (i * 256 // n + offset) % 256
+                    r, g, b = _wheel(hue)
+                    _strip.setPixelColor(i, Color(r, g, b))
+                _strip.show()
+
+            if stop.wait(0.04):
+                break
+    except Exception as e:  # noqa: BLE001
+        log.warning("NeoPixel animation thread crashed: %s", e)
+    finally:
+        _fill_blocking((0, 0, 0))
 
 
-if __name__ == "__main__":
-    main()
+def set_win_led(active: bool) -> None:
+    """Start (active=True) or stop (active=False) the win animation."""
+    global _win_active, _anim_thread
+    if _LED_DEBUG or _LED_WIN_DEBUG:
+        # Debug modes manage the strip themselves; ignore scene-driven calls.
+        if not _initialized:
+            init_gpio()
+        return
+    with _lock:
+        if active == _win_active:
+            return
+        if not _initialized:
+            init_gpio()
+        if _strip is None:
+            _win_active = active
+            return
+        if active:
+            _anim_stop.clear()
+            t = threading.Thread(
+                target=_animate_loop,
+                args=(_anim_stop,),
+                name="win-leds",
+                daemon=True,
+            )
+            _anim_thread = t
+            t.start()
+        else:
+            _anim_stop.set()
+            t = _anim_thread
+            _anim_thread = None
+            if t is not None:
+                t.join(timeout=1.0)
+            _fill_blocking((0, 0, 0))
+        _win_active = active
+
+
+def cleanup_gpio() -> None:
+    """Stop animation, blank the strip, close mute button, drop handles."""
+    global _strip, _initialized, _win_active, _mute_button
+    with _lock:
+        _anim_stop.set()
+    t = _anim_thread
+    if t is not None:
+        t.join(timeout=1.0)
+    with _lock:
+        if _strip is not None:
+            try:
+                _fill_blocking((0, 0, 0))
+            except Exception as e:  # noqa: BLE001
+                log.debug("NeoPixel cleanup fill: %s", e)
+        _strip = None
+        _initialized = False
+        _win_active = False
+    btn = _mute_button
+    if btn is not None:
+        try:
+            btn.close()
+        except Exception:
+            pass
+        _mute_button = None
