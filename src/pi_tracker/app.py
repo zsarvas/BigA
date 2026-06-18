@@ -45,7 +45,23 @@ from .state import SharedGameState
 from .team_config import tracked_team_abbr, tracked_team_name
 from . import mouse_hide
 from . import playback
-from .gpio_leds import cleanup_gpio, init_gpio, is_muted, set_win_led
+
+
+def _load_gpio_leds():
+    """``BIGA_WIN_LED_MODULE=proposed`` (default) or ``legacy`` for old animation."""
+    mod = os.environ.get("BIGA_WIN_LED_MODULE", "proposed").strip().lower()
+    if mod in ("legacy", "old", "gpio_leds"):
+        from . import gpio_leds as g
+    else:
+        from . import gpio_leds_proposed_changes as g
+    return g
+
+
+_gpio = _load_gpio_leds()
+cleanup_gpio = _gpio.cleanup_gpio
+init_gpio = _gpio.init_gpio
+is_muted = _gpio.is_muted
+set_win_led = _gpio.set_win_led
 from .mlb_highlights import HighlightDownloader, sync_highlight_downloader
 from .scenes import FinalLossScene, FinalWinScene, IdleScene, LiveScene
 from .scenes._clip_player import clip_title_from_path

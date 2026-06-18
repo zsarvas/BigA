@@ -1,27 +1,32 @@
 """
-Proposed win-scene NeoPixel animation (Adafruit ``neopixel`` + Blinka).
+Proposed win-scene NeoPixel animation (racer + theater chase).
 
-Same public API as ``gpio_leds.py`` for ``app.py``:
+Uses ``rpi_ws281x`` (same as ``gpio_leds.py`` / ``requirements-pi.txt``) — no Adafruit
+Blinka needed on Bookworm.
+
+Public API for ``app.py``:
     init_gpio() / set_win_led(active) / cleanup_gpio()
     is_muted() / set_muted(bool)
 
-Core animation (from the other dev's Arduino port):
+Core animation (Arduino port):
     solid red → white racer ×3 → white theater → red racer ×3 → red theater → repeat
 
-Test **LEDs only** (no pygame):
+Test **LEDs only**:
 
     sudo BIGA_LED_WIN_DEBUG=1 PYTHONPATH=src python3 -m pi_tracker.gpio_leds_proposed_changes
 
-Test **wiring / strip length** (solid white):
+Test **wiring** (solid white):
 
     sudo BIGA_LED_DEBUG=1 PYTHONPATH=src python3 -m pi_tracker.gpio_leds_proposed_changes
 
-Test **win screen + LEDs** (point ``app.py`` at this module or rename to ``gpio_leds.py``):
+Test **win screen + LEDs** (``app.py`` uses this module when ``BIGA_WIN_LED_MODULE=proposed``,
+which is the default):
 
-    sudo BIGA_LED_WIN_DEBUG=1 openvt -c 2 -f -w -- python3 run_pi_ui.py --demo-final
+    sudo openvt -c 2 -f -w -- python3 run_pi_ui.py --demo-final
 
-Env tunables: ``BIGA_WIN_LED_GPIO`` (default 19), ``BIGA_WIN_LED_COUNT`` (30),
-``BIGA_WIN_LED_BRIGHTNESS`` (10, 0–255 — matches Arduino ``setBrightness(10)``).
+Revert to the old comet/rainbow animation:
+
+    BIGA_WIN_LED_MODULE=legacy python3 run_pi_ui.py --demo-final
 """
 
 from __future__ import annotations
@@ -37,7 +42,7 @@ from typing import Any
 log = logging.getLogger(__name__)
 
 # ---------------------------------------------------------------------------
-# Config (env)
+# Config
 # ---------------------------------------------------------------------------
 
 
@@ -67,8 +72,13 @@ _LED_DEBUG = _env_bool("BIGA_LED_DEBUG")
 _LED_DEBUG_COLOR = (255, 255, 255)
 _LED_WIN_DEBUG = _env_bool("BIGA_LED_WIN_DEBUG")
 
+_LED_FREQ_HZ = 800_000
+_LED_INVERT = False
+_CHANNEL_FOR_GPIO = {12: 0, 18: 0, 21: 0, 13: 1, 19: 1}
+_DMA_FOR_CHANNEL = {0: 10, 1: 10}
+
 _RACER_LENGTH = 3
-_WAIT_SEC = 0.030  # 30 ms — Arduino delay
+_WAIT_SEC = 0.030
 
 RED = (255, 0, 0)
 WHITE = (255, 255, 255)
@@ -76,6 +86,7 @@ OFF = (0, 0, 0)
 
 _lock = threading.RLock()
 _strip: Any = None
+_view: "_StripView | None" = None
 _led_count = _WIN_LED_COUNT
 _initialized = False
 _win_active = False
@@ -83,7 +94,7 @@ _anim_thread: threading.Thread | None = None
 _anim_stop = threading.Event()
 
 # ---------------------------------------------------------------------------
-# Mute button (BCM 25 by default)
+# Mute button
 # ---------------------------------------------------------------------------
 
 _MUTE_PIN = _env_int("BIGA_MUTE_PIN", 25)
@@ -147,39 +158,68 @@ def _init_mute_button() -> None:
 
 
 # ---------------------------------------------------------------------------
-# NeoPixel (Adafruit Blinka)
+# rpi_ws281x strip helpers
 # ---------------------------------------------------------------------------
 
 
-def _import_neopixel():
+def _import_ws281x():
     try:
-        import board  # type: ignore[import-untyped]
-        import neopixel  # type: ignore[import-untyped]
+        from rpi_ws281x import Color, PixelStrip  # type: ignore[import-untyped]
 
-        return board, neopixel
+        return PixelStrip, Color
     except ImportError:
         return None, None
 
 
-def _board_pin(board: Any, gpio: int) -> Any:
-    pin = getattr(board, f"D{gpio}", None)
-    if pin is None:
-        raise ValueError(f"board has no D{gpio} for BIGA_WIN_LED_GPIO={gpio}")
-    return pin
+def _color(rgb: tuple[int, int, int]):
+    _, Color = _import_ws281x()
+    if Color is None:
+        return None
+    r, g, b = rgb
+    return Color(int(r) & 0xFF, int(g) & 0xFF, int(b) & 0xFF)
+
+
+class _StripView:
+    """Thin neopixel-like wrapper over PixelStrip for the proposed animation."""
+
+    __slots__ = ("_strip", "_n")
+
+    def __init__(self, strip: Any, count: int) -> None:
+        self._strip = strip
+        self._n = count
+
+    def show(self) -> None:
+        self._strip.show()
+
+    def fill(self, rgb: tuple[int, int, int]) -> None:
+        c = _color(rgb)
+        if c is None:
+            return
+        for i in range(self._n):
+            self._strip.setPixelColor(i, c)
+
+    def __setitem__(self, index: int, rgb: tuple[int, int, int]) -> None:
+        c = _color(rgb)
+        if c is not None:
+            self._strip.setPixelColor(index, c)
 
 
 def _fill_blocking(rgb: tuple[int, int, int]) -> None:
-    if _strip is None:
+    if _view is None:
         return
     try:
-        _strip.fill(rgb)
-        _strip.show()
+        _view.fill(rgb)
+        _view.show()
     except Exception as e:  # noqa: BLE001
         log.debug("NeoPixel fill failed: %s", e)
 
 
-def _racer_chase(strip: Any, color1: tuple[int, int, int], color2: tuple[int, int, int], stop: threading.Event) -> None:
-    """A racer of color1 sweeps across a color2 background."""
+def _racer_chase(
+    strip: _StripView,
+    color1: tuple[int, int, int],
+    color2: tuple[int, int, int],
+    stop: threading.Event,
+) -> None:
     n = _led_count
     for i in range(_RACER_LENGTH, n):
         if stop.is_set():
@@ -201,8 +241,12 @@ def _racer_chase(strip: Any, color1: tuple[int, int, int], color2: tuple[int, in
             return
 
 
-def _theater_chase(strip: Any, color: tuple[int, int, int], wait_ms: int, stop: threading.Event) -> None:
-    """Every third pixel lights up, cycling offsets 0–2, ten times."""
+def _theater_chase(
+    strip: _StripView,
+    color: tuple[int, int, int],
+    wait_ms: int,
+    stop: threading.Event,
+) -> None:
     for _ in range(10):
         if stop.is_set():
             return
@@ -217,8 +261,7 @@ def _theater_chase(strip: Any, color: tuple[int, int, int], wait_ms: int, stop: 
                 return
 
 
-def _win_animation_cycle(strip: Any, stop: threading.Event) -> None:
-    """One full red/white racer + theater sequence (original Arduino loop body)."""
+def _win_animation_cycle(strip: _StripView, stop: threading.Event) -> None:
     if stop.is_set():
         return
     strip.fill(RED)
@@ -240,11 +283,11 @@ def _win_animation_cycle(strip: Any, stop: threading.Event) -> None:
 
 
 def _animate_loop(stop: threading.Event) -> None:
-    if _strip is None:
+    if _view is None:
         return
     try:
         while not stop.is_set():
-            _win_animation_cycle(_strip, stop)
+            _win_animation_cycle(_view, stop)
     except Exception as e:  # noqa: BLE001
         log.warning("NeoPixel animation thread crashed: %s", e)
     finally:
@@ -260,37 +303,49 @@ def _start_anim_thread(name: str) -> None:
 
 
 def init_gpio() -> None:
-    """Build NeoPixel strip + mute button on first use."""
-    global _strip, _initialized, _led_count
+    """Build PixelStrip + mute button on first use."""
+    global _strip, _view, _initialized, _led_count
     _init_mute_button()
     with _lock:
         if _initialized:
             return
-        board, neopixel = _import_neopixel()
-        if board is None or neopixel is None:
-            log.debug("board/neopixel not installed; win LED disabled")
+        PixelStrip, _ = _import_ws281x()
+        if PixelStrip is None:
+            log.debug("rpi_ws281x not installed; win LED disabled")
             return
+        channel = _CHANNEL_FOR_GPIO.get(_WIN_LED_GPIO)
+        if channel is None:
+            log.warning(
+                "BIGA_WIN_LED_GPIO=%s is not NeoPixel-capable (use 12/13/18/19/21)",
+                _WIN_LED_GPIO,
+            )
+            return
+        dma = _DMA_FOR_CHANNEL.get(channel, 10)
         _led_count = _WIN_LED_COUNT
         try:
-            pin = _board_pin(board, _WIN_LED_GPIO)
-            _strip = neopixel.NeoPixel(
-                pin,
+            strip = PixelStrip(
                 _led_count,
-                brightness=_WIN_LED_BRIGHTNESS / 255.0,
-                auto_write=False,
-                pixel_order=neopixel.GRB,
+                _WIN_LED_GPIO,
+                _LED_FREQ_HZ,
+                dma,
+                _LED_INVERT,
+                _WIN_LED_BRIGHTNESS,
+                channel,
             )
+            strip.begin()
+            _strip = strip
+            _view = _StripView(strip, _led_count)
             _initialized = True
             if _LED_DEBUG:
                 print(
-                    f"[biga] LED DEBUG: lighting {_led_count} LEDs solid on GPIO "
-                    f"{_WIN_LED_GPIO}. Tune BIGA_WIN_LED_COUNT to your strip length.",
+                    f"[biga] LED DEBUG: lighting {_led_count} LEDs on GPIO {_WIN_LED_GPIO}. "
+                    "Tune BIGA_WIN_LED_COUNT to strip length.",
                     flush=True,
                 )
                 _fill_blocking(_LED_DEBUG_COLOR)
             elif _LED_WIN_DEBUG:
                 print(
-                    f"[biga] LED WIN DEBUG: racer/theater animation on {_led_count} LEDs "
+                    f"[biga] LED WIN DEBUG: racer/theater on {_led_count} LEDs "
                     f"(GPIO {_WIN_LED_GPIO}). Ctrl-C to exit.",
                     flush=True,
                 )
@@ -298,23 +353,23 @@ def init_gpio() -> None:
             else:
                 _fill_blocking(OFF)
         except Exception as e:  # noqa: BLE001
-            log.warning("NeoPixel init failed (GPIO %s): %s", _WIN_LED_GPIO, e)
+            log.warning("NeoPixel init failed (GPIO %s ch %s): %s", _WIN_LED_GPIO, channel, e)
             _strip = None
+            _view = None
 
 
 def set_win_led(active: bool) -> None:
-    """Start or stop the win animation (ignored in LED debug modes)."""
-    global _win_active, _anim_thread
     if _LED_DEBUG or _LED_WIN_DEBUG:
         if not _initialized:
             init_gpio()
         return
+    global _win_active, _anim_thread
     with _lock:
         if active == _win_active:
             return
         if not _initialized:
             init_gpio()
-        if _strip is None:
+        if _view is None:
             _win_active = active
             return
         if active:
@@ -330,8 +385,7 @@ def set_win_led(active: bool) -> None:
 
 
 def cleanup_gpio() -> None:
-    """Stop animation, blank strip, release GPIO."""
-    global _strip, _initialized, _win_active, _mute_button
+    global _strip, _view, _initialized, _win_active, _mute_button
     with _lock:
         _anim_stop.set()
     t = _anim_thread
@@ -340,6 +394,7 @@ def cleanup_gpio() -> None:
     with _lock:
         _fill_blocking(OFF)
         _strip = None
+        _view = None
         _initialized = False
         _win_active = False
     btn = _mute_button
@@ -352,13 +407,17 @@ def cleanup_gpio() -> None:
 
 
 def main() -> None:
-    """Standalone entry — same as BIGA_LED_WIN_DEBUG=1."""
     os.environ.setdefault("BIGA_LED_WIN_DEBUG", "1")
     global _LED_WIN_DEBUG
     _LED_WIN_DEBUG = True
     init_gpio()
     if not _initialized:
-        print("NeoPixel unavailable (need Pi + sudo + adafruit-blinka + neopixel)", flush=True)
+        print(
+            "NeoPixel unavailable — run as root and install rpi_ws281x:\n"
+            "  sudo pip3 install rpi_ws281x --break-system-packages\n"
+            "or re-run setup.py from the repo.",
+            flush=True,
+        )
         return
     try:
         while True:
