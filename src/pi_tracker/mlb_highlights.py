@@ -298,6 +298,7 @@ def _download_clip(clip: dict, dest_dir: Path) -> Path | None:
     dest = dest_dir / fname
     if dest.exists():
         return dest  # already downloaded
+    playback.download_begin()
     try:
         log.info("downloading: %s", clip["blurb"])
         r = requests.get(clip["url"], stream=True, timeout=60)
@@ -318,6 +319,8 @@ def _download_clip(clip: dict, dest_dir: Path) -> Path | None:
     except Exception as exc:
         log.warning("download failed for %s: %s", clip["blurb"], exc)
         return None
+    finally:
+        playback.download_end()
 
 
 class HighlightDownloader:

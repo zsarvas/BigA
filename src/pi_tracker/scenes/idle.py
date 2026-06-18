@@ -10,7 +10,7 @@ from .. import config
 from ..assets import AssetManager, scale_surface
 from ..mlb_http import ANGELS_TEAM_ID as TRACKED_TEAM_ID
 from ..team_config import tracked_team_abbr, tracked_team_name
-from ._clip_player import ClipPlayerMixin, _playable_clip_paths
+from ._clip_player import ClipPlayerMixin, _playable_clip_paths, game_highlights_blocked
 
 # Small logo beside "vs / @ …" on idle (hero logo is the tracked franchise).
 IDLE_OPPONENT_LOGO_SIZE = (config.layout_size(28), config.layout_size(28))
@@ -71,11 +71,11 @@ def _blit_matchup_row(
 def _idle_clip_folder() -> Path | None:
     """
     Game highlights take priority (yesterday's recap plays until first pitch).
-    Falls back to the permanent curated reel only on the idle scene.
+    Falls back to the permanent curated reel while downloads are in flight.
     """
     if config.GAME_HIGHLIGHTS_DIR.is_dir():
         for sub in config.GAME_HIGHLIGHTS_DIR.iterdir():
-            if sub.is_dir() and _playable_clip_paths(sub):
+            if sub.is_dir() and _playable_clip_paths(sub) and not game_highlights_blocked(sub):
                 return sub
     if config.IDLE_VIDEOS_DIR.is_dir() and (
         _playable_clip_paths(config.IDLE_VIDEOS_DIR)

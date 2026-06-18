@@ -31,6 +31,31 @@ def is_active() -> bool:
     return _active.is_set()
 
 
+_download_busy_count = 0
+_download_busy_lock = threading.Lock()
+
+
+def download_begin() -> None:
+    """Highlight downloader started a clip (network + ffmpeg)."""
+    global _download_busy_count
+    with _download_busy_lock:
+        _download_busy_count += 1
+
+
+def download_end() -> None:
+    """Highlight downloader finished a clip."""
+    global _download_busy_count
+    with _download_busy_lock:
+        if _download_busy_count > 0:
+            _download_busy_count -= 1
+
+
+def is_download_busy() -> bool:
+    """True while a game highlight is being downloaded or transcoded."""
+    with _download_busy_lock:
+        return _download_busy_count > 0
+
+
 def wait_while_active(stop: threading.Event, poll: float = 0.25) -> None:
     """
     Block while playback is active, returning early if *stop* is set.

@@ -16,6 +16,33 @@ from pathlib import Path
 from typing import Any
 
 from .. import config
+from .. import playback
+
+
+def is_game_highlight_folder(folder: Path) -> bool:
+    """True for ``highlights/{game_pk}/`` — not the bundled idle reel."""
+    try:
+        folder.resolve().relative_to(config.GAME_HIGHLIGHTS_DIR.resolve())
+    except ValueError:
+        return False
+    return folder.is_dir()
+
+
+def game_highlights_blocked(folder: Path) -> bool:
+    """
+    Game clips should not play while a download/transcode is in flight.
+
+    Bundled ``idle_videos/`` clips are never blocked here.
+    """
+    if not is_game_highlight_folder(folder):
+        return False
+    if playback.is_download_busy():
+        return True
+    for p in folder.iterdir():
+        low = p.name.lower()
+        if low.endswith(".rawdl") or ".tmp" in low:
+            return True
+    return False
 
 # Filename slug tokens → display abbreviations (from MLB highlight blurbs).
 _TITLE_ABBREV = {
@@ -138,6 +165,8 @@ class ClipPlayerMixin:
             return
 
         if folder and folder.is_dir():
+            if game_highlights_blocked(folder):
+                return  # retry next frame; don't reset the play timer
             path = _pick_clip(folder, self._cp_played)
             if path:
                 self._pending_clip = path

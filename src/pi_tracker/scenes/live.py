@@ -10,7 +10,7 @@ from .. import config
 from ..assets import AssetManager, StreamingGif, scale_surface
 from ..drawing.diamond import draw_diamond
 from .linescore_table import compute_linescore_geometry, draw_linescore_table_centered
-from ._clip_player import _playable_clip_paths
+from ._clip_player import _playable_clip_paths, game_highlights_blocked
 
 # inning_state values that indicate a break (MLB feed uses Middle / Between).
 _INNING_BREAK_STATES = frozenset({"middle", "between"})
@@ -157,7 +157,7 @@ class LiveScene:
             and game_pk
         ):
             folder = config.GAME_HIGHLIGHTS_DIR / str(game_pk)
-            if folder.is_dir():
+            if folder.is_dir() and not game_highlights_blocked(folder):
                 for path in sorted(_playable_clip_paths(folder)):
                     if path.name not in self._played_clips:
                         self._played_clips.add(path.name)
