@@ -92,6 +92,7 @@ _initialized = False
 _win_active = False
 _anim_thread: threading.Thread | None = None
 _anim_stop = threading.Event()
+_last_init_error: str = ""
 
 # ---------------------------------------------------------------------------
 # Mute button
@@ -304,21 +305,24 @@ def _start_anim_thread(name: str) -> None:
 
 def init_gpio() -> None:
     """Build PixelStrip + mute button on first use."""
-    global _strip, _view, _initialized, _led_count
+    global _strip, _view, _initialized, _led_count, _last_init_error
     _init_mute_button()
     with _lock:
         if _initialized:
             return
+        _last_init_error = ""
         PixelStrip, _ = _import_ws281x()
         if PixelStrip is None:
-            log.debug("rpi_ws281x not installed; win LED disabled")
+            _last_init_error = "rpi_ws281x not installed"
+            log.debug("%s; win LED disabled", _last_init_error)
             return
         channel = _CHANNEL_FOR_GPIO.get(_WIN_LED_GPIO)
         if channel is None:
-            log.warning(
-                "BIGA_WIN_LED_GPIO=%s is not NeoPixel-capable (use 12/13/18/19/21)",
-                _WIN_LED_GPIO,
+            _last_init_error = (
+                f"BIGA_WIN_LED_GPIO={_WIN_LED_GPIO} is not NeoPixel-capable "
+                "(use 12/13/18/19/21)"
             )
+            log.warning(_last_init_error)
             return
         dma = _DMA_FOR_CHANNEL.get(channel, 10)
         _led_count = _WIN_LED_COUNT
@@ -353,7 +357,10 @@ def init_gpio() -> None:
             else:
                 _fill_blocking(OFF)
         except Exception as e:  # noqa: BLE001
-            log.warning("NeoPixel init failed (GPIO %s ch %s): %s", _WIN_LED_GPIO, channel, e)
+            _last_init_error = str(e)
+            log.warning(
+                "NeoPixel init failed (GPIO %s ch %s): %s", _WIN_LED_GPIO, channel, e
+            )
             _strip = None
             _view = None
 
@@ -407,15 +414,20 @@ def cleanup_gpio() -> None:
 
 
 def main() -> None:
-    os.environ.setdefault("BIGA_LED_WIN_DEBUG", "1")
     global _LED_WIN_DEBUG
-    _LED_WIN_DEBUG = True
+    if not _LED_DEBUG:
+        os.environ.setdefault("BIGA_LED_WIN_DEBUG", "1")
+        _LED_WIN_DEBUG = True
     init_gpio()
     if not _initialized:
+        print("NeoPixel init failed.", flush=True)
+        if _last_init_error:
+            print(f"  reason: {_last_init_error}", flush=True)
         print(
-            "NeoPixel unavailable — run as root and install rpi_ws281x:\n"
-            "  sudo pip3 install rpi_ws281x --break-system-packages\n"
-            "or re-run setup.py from the repo.",
+            "  • git pull (need rpi_ws281x version of gpio_leds_proposed_changes.py)\n"
+            "  • stop biga first — GPIO 19 is exclusive:\n"
+            "      sudo systemctl stop biga\n"
+            "  • rpi_ws281x: sudo pip3 install rpi_ws281x --break-system-packages",
             flush=True,
         )
         return
