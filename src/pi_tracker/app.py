@@ -201,7 +201,7 @@ def _demo_state() -> SharedGameState:
     aw_id, aw_abbr, aw_name = _demo_opponent()
     hb, hn = tracked_team_abbr(), tracked_team_name()
     tid = TRACKED_TEAM_ID
-    st = SharedGameState()
+    st = SharedGameState(persist=False)
     st.update(
         scene="live",
         away_team_id=aw_id,
@@ -255,7 +255,7 @@ def _demo_final_state() -> SharedGameState:
     aw_id, aw_abbr, _aw_name = _demo_opponent()
     hb = tracked_team_abbr()
     tid = TRACKED_TEAM_ID
-    st = SharedGameState()
+    st = SharedGameState(persist=False)
     st.update(
         scene="win",
         away_team_id=aw_id,
@@ -405,9 +405,15 @@ def _play_mpv(path: Path, screen: pygame.Surface, flags: int) -> "pygame.Surface
 
 def main() -> None:
     _configure_logging()
+    log = logging.getLogger(__name__)
+    log.info("argv: %s", " ".join(sys.argv))
     # SDL video/audio driver env is applied in bootstrap_sdl.configure_sdl() before pygame import.
     demo_live = "--demo" in sys.argv or "--demo-live" in sys.argv
     demo_final = "--demo-final" in sys.argv
+    if demo_final:
+        log.info("demo-final mode (sample win screen; state is not persisted)")
+    elif demo_live:
+        log.info("demo-live mode (sample scoreboard; state is not persisted)")
     no_schedule = "--no-schedule" in sys.argv
     flags = 0
     if "--fullscreen" in sys.argv:

@@ -90,11 +90,22 @@ def _persist(data: dict[str, Any]) -> None:
         log.warning("could not persist state to %s: %s", path, exc)
 
 
+def clear_persisted_state() -> None:
+    """Remove saved win/loss context (e.g. after accidental --demo-final persist)."""
+    path = config.STATE_PATH
+    try:
+        path.unlink(missing_ok=True)
+        log.info("cleared persisted state at %s", path)
+    except Exception as exc:  # noqa: BLE001
+        log.warning("could not clear persisted state: %s", exc)
+
+
 class SharedGameState:
     """Minimal dict-backed state with copy-on-read for the render thread."""
 
-    def __init__(self) -> None:
+    def __init__(self, *, persist: bool = True) -> None:
         home_id, home_abbr, home_name = _env_tracked_home()
+        self._persist = persist
         self._lock = threading.Lock()
         self._data: dict[str, Any] = {
             "scene": "idle",
@@ -155,7 +166,12 @@ class SharedGameState:
             "final_display_date": "",
             "idle_subtitle": "Loading schedule…",
         }
-        persisted = _load_persisted()
+        persisted = _load_persisted() if self._persist else {}
+        if persisted:
+            pk = persisted.get("live_game_pk")
+            if pk in (999999, "999999"):
+                log.warning("ignoring persisted demo sample state (live_game_pk=999999)")
+                persisted = {}
         if persisted:
             self._data.update(persisted)
             _expire_stale_final_scene(self._data)
@@ -174,7 +190,7 @@ class SharedGameState:
             keys = set(kwargs.keys())
             if patch:
                 keys.update(patch.keys())
-            if keys & _PERSIST_KEYS:
+            if self._persist and keys & _PERSIST_KEYS:
                 _persist(self._data)
 
     def snapshot(self) -> dict[str, Any]:
