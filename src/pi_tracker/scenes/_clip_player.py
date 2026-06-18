@@ -30,18 +30,17 @@ def is_game_highlight_folder(folder: Path) -> bool:
 
 def game_highlights_blocked(folder: Path) -> bool:
     """
-    Game clips should not play while a download/transcode is in flight.
+    Game clips should not play while a download/transcode is actively running.
 
+    Stale ``.rawdl`` / ``.tmp`` files from a crashed download are swept
+    automatically — they do not block playback after reboot.
     Bundled ``idle_videos/`` clips are never blocked here.
     """
     if not is_game_highlight_folder(folder):
         return False
     if playback.is_download_busy():
         return True
-    for p in folder.iterdir():
-        low = p.name.lower()
-        if low.endswith(".rawdl") or ".tmp" in low:
-            return True
+    sweep_incomplete_highlights(folder)
     return False
 
 # Filename slug tokens → display abbreviations (from MLB highlight blurbs).

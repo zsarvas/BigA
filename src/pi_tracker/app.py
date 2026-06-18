@@ -472,9 +472,16 @@ def main() -> None:
     last_scene_key: str | None = None
     _hl_downloader: HighlightDownloader | None = None
     _last_live_pk: int = 0
+    _last_dl_key: tuple[str, int, int] | None = None
     if not demo:
         _hl_downloader, _last_live_pk = sync_highlight_downloader(
             state.snapshot(), None, 0
+        )
+        s0 = state.snapshot()
+        _last_dl_key = (
+            str(s0.get("scene", "idle")),
+            int(s0.get("live_game_pk") or 0),
+            int(s0.get("next_game_pk") or 0),
         )
     running = True
     loop_start = time.monotonic()
@@ -527,11 +534,18 @@ def main() -> None:
                 last_scene_key = scene_key
                 set_win_led(scene_key == "win")
 
-            # Manage highlight downloader lifecycle.
+            # Manage highlight downloader lifecycle (only when scene / game pk changes).
             if not demo:
-                _hl_downloader, _last_live_pk = sync_highlight_downloader(
-                    snap, _hl_downloader, _last_live_pk
+                dl_key = (
+                    scene_key,
+                    int(snap.get("live_game_pk") or 0),
+                    int(snap.get("next_game_pk") or 0),
                 )
+                if dl_key != _last_dl_key:
+                    _last_dl_key = dl_key
+                    _hl_downloader, _last_live_pk = sync_highlight_downloader(
+                        snap, _hl_downloader, _last_live_pk
+                    )
 
             scene = scenes.get(scene_key, scenes["idle"])
             scene.draw(screen, assets, snap)
