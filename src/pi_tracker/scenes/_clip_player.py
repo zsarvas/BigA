@@ -138,12 +138,25 @@ class ClipPlayerMixin:
         self._cp_played: set[str] = set()
         self._pending_clip: Path | None = None  # read by app.py each frame
 
-    def _cp_tick(self, folder: Path | None, gap_min: int | None = None) -> None:
+    def _cp_arm_immediate(self) -> None:
+        """Queue a clip on the next tick (e.g. after win/loss → idle at midnight)."""
+        self.__init_cp()
+        self._cp_next_play_ms = 1
+
+    def _cp_tick(
+        self,
+        folder: Path | None,
+        gap_min: int | None = None,
+        *,
+        block_on_download: bool = True,
+    ) -> None:
         """
         Check if it's time to queue a clip.  Sets ``self._pending_clip`` when
         the gap has elapsed and a clip exists in *folder*.
 
         *gap_min* overrides the default random gap (uses config values if None).
+        *block_on_download* — when False, finished clips may play even while a
+        background download/transcode is running (idle recap reel).
         """
         self.__init_cp()
 
@@ -164,7 +177,8 @@ class ClipPlayerMixin:
             return
 
         if folder and folder.is_dir():
-            if game_highlights_blocked(folder):
+            blocked = block_on_download and game_highlights_blocked(folder)
+            if blocked:
                 return  # retry next frame; don't reset the play timer
             path = _pick_clip(folder, self._cp_played)
             if path:

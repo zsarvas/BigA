@@ -192,6 +192,14 @@ def should_run_highlight_downloader(snap: dict) -> bool:
     if scene in ("live", "win", "loss"):
         return True
     if scene == "idle":
+        # Finish yesterday's recap downloads until first pitch of the next game.
+        raw = snap.get("live_game_pk")
+        if raw is not None:
+            try:
+                if int(raw) > 0:
+                    return True
+            except (TypeError, ValueError):
+                pass
         raw = snap.get("final_display_date")
         if raw and isinstance(raw, str):
             try:
@@ -543,6 +551,7 @@ def sync_highlight_downloader(
         if downloader is not None:
             downloader.stop()
             downloader.join()
+            playback.reset_download_busy()
         return None, 0
 
     pk = resolve_highlight_game_pk(snap)
@@ -550,6 +559,7 @@ def sync_highlight_downloader(
         if downloader is not None:
             downloader.stop()
             downloader.join()
+            playback.reset_download_busy()
         return None, 0
 
     if pk == last_pk and downloader is not None:
@@ -558,6 +568,7 @@ def sync_highlight_downloader(
     if downloader is not None:
         downloader.stop()
         downloader.join()
+        playback.reset_download_busy()
 
     sweep_all_incomplete_highlights()
     wipe_stale_highlight_folders(pk)

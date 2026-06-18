@@ -56,6 +56,13 @@ def is_download_busy() -> bool:
         return _download_busy_count > 0
 
 
+def reset_download_busy() -> None:
+    """Clear a leaked busy counter (e.g. downloader stopped mid-clip)."""
+    global _download_busy_count
+    with _download_busy_lock:
+        _download_busy_count = 0
+
+
 def wait_while_active(stop: threading.Event, poll: float = 0.25) -> None:
     """
     Block while playback is active, returning early if *stop* is set.

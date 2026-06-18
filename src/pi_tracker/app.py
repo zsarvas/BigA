@@ -531,8 +531,11 @@ def main() -> None:
 
             scene_key = str(snap.get("scene", "idle"))
             if scene_key != last_scene_key:
+                prev_scene = last_scene_key
                 last_scene_key = scene_key
                 set_win_led(scene_key == "win")
+                if scene_key == "idle" and prev_scene in ("win", "loss"):
+                    scenes["idle"]._cp_arm_immediate()
 
             # Manage highlight downloader lifecycle (only when scene / game pk changes).
             if not demo:
