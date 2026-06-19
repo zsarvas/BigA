@@ -94,10 +94,14 @@ def _idle_clip_folder() -> Path | None:
 
 
 class IdleScene(ClipPlayerMixin):
-    """Next-game info; queues a full-screen highlight clip for mpv every 5 minutes."""
+    """Next-game info; queues a full-screen highlight clip for mpv on a fixed interval."""
 
     def draw(self, screen: pygame.Surface, assets: AssetManager, state: dict[str, Any]) -> None:
-        self._cp_tick(_idle_clip_folder(), block_on_download=False)
+        self._cp_tick(
+            _idle_clip_folder(),
+            gap_min=config.IDLE_HIGHLIGHT_GAP_MIN,
+            block_on_download=False,
+        )
         assets.draw_background(screen, venue_id=int(state.get("next_game_venue_id") or 0))
 
         # Idle hero: tracked franchise logo + name (not the generic "home" club from state).

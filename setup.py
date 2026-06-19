@@ -363,7 +363,7 @@ ls -l /dev/dri/card* /dev/fb0 2>&1 || true
 # Clear any text left on tty2 (login prompt residue) before switching to it.
 printf '\\033[2J\\033[H' > /dev/tty2 2>/dev/null || true
 # -s switches the active VT to tty2 as part of starting the process (no separate chvt needed).
-exec /usr/bin/openvt -c 2 -s -f -w -- /bin/sh -c "/usr/bin/python3 {REPO}/run_pi_ui.py --no-idle-videos >>/tmp/biga.log 2>&1; echo PYEXIT=$? >>/tmp/biga.log"
+exec /usr/bin/openvt -c 2 -s -f -w -- /bin/sh -c "/usr/bin/python3 {REPO}/run_pi_ui.py >>/tmp/biga.log 2>&1; echo PYEXIT=$? >>/tmp/biga.log"
 """
 
 with open("/tmp/biga-start.sh", "w", encoding="utf-8") as f:

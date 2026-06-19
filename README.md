@@ -261,7 +261,7 @@ Notes:
 Test the win scene + LEDs without waiting for a real game:
 
 ```bash
-sudo /usr/bin/openvt -c 2 -f -w -- python3 /home/pi/BigA/run_pi_ui.py --demo-final --no-idle-videos
+sudo /usr/bin/openvt -c 2 -f -w -- python3 /home/pi/BigA/run_pi_ui.py --demo-final
 ```
 
 ---
@@ -284,7 +284,7 @@ This sets `BIGA_TEAM_ID` / `BIGA_TEAM_ABBR` / `BIGA_TEAM_NAME` for the process. 
 also export those env vars directly instead of passing a slug.
 
 To change the team for the **service**, edit the launch line in
-`/usr/local/bin/biga-start.sh` (e.g. `run_pi_ui.py dodgers --no-idle-videos`) and
+`/usr/local/bin/biga-start.sh` (e.g. `run_pi_ui.py dodgers`) and
 `sudo systemctl restart biga`.
 
 ---
@@ -317,7 +317,6 @@ To change the team for the **service**, edit the launch line in
 | `--debug-hud` | Same as `BIGA_DEBUG_HUD=1`. |
 | `--fullscreen` | Request a fullscreen SDL window. |
 | `--no-schedule` | Don't start schedule/live pollers (offline UI testing). |
-| `--no-idle-videos` | Accepted but currently a **no-op** — idle highlight-clip (mpv) playback was removed for fbcon/KMS stability (see `src/pi_tracker/idle_mpv.py`). The service still passes it for forward compatibility. |
 
 ---
 
