@@ -17,6 +17,7 @@ from typing import Any
 
 from .. import config
 from .. import playback
+from ..mlb_highlights import sweep_incomplete_highlights
 
 
 def is_game_highlight_folder(folder: Path) -> bool:
