@@ -11,10 +11,78 @@ mpv, which plays the clip hardware-accelerated while pygame is suspended.
 from __future__ import annotations
 
 import random
+import re
 from pathlib import Path
 from typing import Any
 
 from .. import config
+from .. import playback
+from ..mlb_highlights import sweep_incomplete_highlights
+
+
+def is_game_highlight_folder(folder: Path) -> bool:
+    """True for ``highlights/{game_pk}/`` — not the bundled idle reel."""
+    try:
+        folder.resolve().relative_to(config.GAME_HIGHLIGHTS_DIR.resolve())
+    except ValueError:
+        return False
+    return folder.is_dir()
+
+
+def game_highlights_blocked(folder: Path) -> bool:
+    """
+    Game clips should not play while a download/transcode is actively running.
+
+    Stale ``.rawdl`` / ``.tmp`` files from a crashed download are swept
+    automatically — they do not block playback after reboot.
+    Bundled ``idle_videos/`` clips are never blocked here.
+    """
+    if not is_game_highlight_folder(folder):
+        return False
+    if playback.is_download_busy():
+        return True
+    sweep_incomplete_highlights(folder)
+    return False
+
+# Filename slug tokens → display abbreviations (from MLB highlight blurbs).
+_TITLE_ABBREV = {
+    "hr": "HR",
+    "rbi": "RBI",
+    "ab": "AB",
+    "so": "SO",
+    "bb": "BB",
+    "k": "K",
+    "vs": "vs",
+    "dp": "DP",
+}
+
+
+def clip_title_from_path(path: Path) -> str:
+    """
+    Humanize a highlight clip filename back into a short title.
+
+    Downloaded clips are named from MLB blurbs via slugification, e.g.
+    ``mike-trout-s-hr-16.mp4`` → ``Mike Trout's HR (16)``.
+    """
+    stem = path.stem.replace("_", "-")
+    words = [w for w in stem.split("-") if w]
+    if not words:
+        return path.name
+
+    out: list[str] = []
+    for w in words:
+        low = w.lower()
+        if low in _TITLE_ABBREV:
+            out.append(_TITLE_ABBREV[low])
+        elif low == "s" and out:
+            out[-1] = out[-1] + "'s"
+        elif w.isdigit():
+            out.append(f"({w})")
+        else:
+            out.append(w.capitalize())
+
+    title = re.sub(r"\s+", " ", " ".join(out)).strip()
+    return title or stem
 
 
 def _rand_gap_ms() -> int:
@@ -23,16 +91,30 @@ def _rand_gap_ms() -> int:
     return random.randint(lo, hi)
 
 
+def _playable_clip_paths(folder: Path) -> list[Path]:
+    """Finished .mp4 clips only — skip in-progress download/transcode temps."""
+    out: list[Path] = []
+    for p in folder.glob("*.mp4"):
+        low = p.name.lower()
+        if ".raw" in low or ".tmp" in low:
+            continue
+        out.append(p)
+    return out
+
+
 def _pick_clip(folder: Path, played: set[str]) -> Path | None:
-    """Choose a random clip from *folder*, cycling back after all have been played."""
-    clips = list(folder.glob("*.mp4")) + list(folder.glob("*.gif"))
+    """Choose a random clip from *folder*, preferring smaller (transcoded) files."""
+    clips = _playable_clip_paths(folder) + list(folder.glob("*.gif"))
     if not clips:
         return None
     unseen = [p for p in clips if p.name not in played]
     if not unseen:
         played.clear()
         unseen = clips
-    path = random.choice(unseen)
+    # Smallest files are usually our 480×320 transcodes; huge ones are full 720p API pulls.
+    unseen.sort(key=lambda p: p.stat().st_size if p.exists() else 0)
+    small_pool = unseen[:max(1, (len(unseen) + 1) // 2)]
+    path = random.choice(small_pool)
     played.add(path.name)
     return path
 
@@ -57,12 +139,25 @@ class ClipPlayerMixin:
         self._cp_played: set[str] = set()
         self._pending_clip: Path | None = None  # read by app.py each frame
 
-    def _cp_tick(self, folder: Path | None, gap_min: int | None = None) -> None:
+    def _cp_arm_immediate(self) -> None:
+        """Queue a clip on the next tick (e.g. after win/loss → idle at midnight)."""
+        self.__init_cp()
+        self._cp_next_play_ms = 1
+
+    def _cp_tick(
+        self,
+        folder: Path | None,
+        gap_min: int | None = None,
+        *,
+        block_on_download: bool = True,
+    ) -> None:
         """
         Check if it's time to queue a clip.  Sets ``self._pending_clip`` when
         the gap has elapsed and a clip exists in *folder*.
 
         *gap_min* overrides the default random gap (uses config values if None).
+        *block_on_download* — when False, finished clips may play even while a
+        background download/transcode is running (idle recap reel).
         """
         self.__init_cp()
 
@@ -83,6 +178,9 @@ class ClipPlayerMixin:
             return
 
         if folder and folder.is_dir():
+            blocked = block_on_download and game_highlights_blocked(folder)
+            if blocked:
+                return  # retry next frame; don't reset the play timer
             path = _pick_clip(folder, self._cp_played)
             if path:
                 self._pending_clip = path

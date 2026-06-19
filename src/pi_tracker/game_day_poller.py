@@ -18,6 +18,7 @@ from .mlb_schedule import (
 )
 from .schedule_poller import refresh_idle_schedule
 from .state import SharedGameState
+from . import playback
 
 log = logging.getLogger(__name__)
 
@@ -103,6 +104,10 @@ def _handle_final_scene(state: SharedGameState, snap: dict) -> float:
 
 def game_day_loop(state: SharedGameState, stop: threading.Event) -> None:
     while not stop.is_set():
+        # Hold off all polling while a clip is playing (frees CPU for decode).
+        playback.wait_while_active(stop)
+        if stop.is_set():
+            break
         snap = state.snapshot()
         scene = str(snap.get("scene", "idle"))
         wait = 5.0

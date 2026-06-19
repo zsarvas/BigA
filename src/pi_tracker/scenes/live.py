@@ -10,9 +10,10 @@ from .. import config
 from ..assets import AssetManager, StreamingGif, scale_surface
 from ..drawing.diamond import draw_diamond
 from .linescore_table import compute_linescore_geometry, draw_linescore_table_centered
+from ._clip_player import _playable_clip_paths, game_highlights_blocked
 
-# inning_half values that indicate an inning break (after top or bottom half).
-_INNING_BREAK_STATES = {"middle", "end"}
+# inning_state values that indicate a break (MLB feed uses Middle / Between).
+_INNING_BREAK_STATES = frozenset({"middle", "between"})
 
 # Tiny caps beside P:/B: (fielding team pitches; batting team at plate).
 PB_LOGO_SIZE = (16, 16)
@@ -129,7 +130,7 @@ class LiveScene:
     """Live scoreboard; vertical positions scale with ``config.SCREEN_HEIGHT``."""
 
     def __init__(self) -> None:
-        self._last_inning_half: str = ""
+        self._last_inning_state: str = ""
         self._played_clips: set[str] = set()
         self._pending_clip: Path | None = None  # consumed by app.py → mpv
 
@@ -148,17 +149,21 @@ class LiveScene:
         """Queue the next unseen game highlight at each inning break."""
         if self._pending_clip is not None:
             return
-        inning_half = str(state.get("inning_half", "")).lower()
+        inning_state = str(state.get("inning_state", "")).lower()
         game_pk = int(state.get("live_game_pk") or 0)
-        if inning_half in _INNING_BREAK_STATES and inning_half != self._last_inning_half and game_pk:
+        if (
+            inning_state in _INNING_BREAK_STATES
+            and inning_state != self._last_inning_state
+            and game_pk
+        ):
             folder = config.GAME_HIGHLIGHTS_DIR / str(game_pk)
-            if folder.is_dir():
-                for path in sorted(folder.glob("*.mp4")):
+            if folder.is_dir() and not game_highlights_blocked(folder):
+                for path in sorted(_playable_clip_paths(folder)):
                     if path.name not in self._played_clips:
                         self._played_clips.add(path.name)
                         self._pending_clip = path
                         break
-        self._last_inning_half = inning_half
+        self._last_inning_state = inning_state
 
     # ------------------------------------------------------------------
     # Canned GIF animations triggered by in-game events

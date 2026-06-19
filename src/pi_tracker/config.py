@@ -85,6 +85,8 @@ BG_DIM = _env_clamp_int("BIGA_BG_DIM", 130, lo=0, hi=255)
 IDLE_VIDEOS_DIR = ASSETS_DIR / "idle_videos"
 HIGHLIGHT_MIN_GAP_MIN = _env_clamp_int("BIGA_HIGHLIGHT_MIN_MIN", 5, lo=1, hi=720)
 HIGHLIGHT_MAX_GAP_MIN = _env_clamp_int("BIGA_HIGHLIGHT_MAX_MIN", 5, lo=1, hi=720)
+# Idle scene: fixed gap between highlight / idle-reel clips (game recap or idle_videos/).
+IDLE_HIGHLIGHT_GAP_MIN = _env_clamp_int("BIGA_IDLE_HIGHLIGHT_GAP_MIN", 1, lo=1, hi=720)
 
 # Shorter gap for post-game / win-loss scene where highlights rotate faster.
 GAME_HIGHLIGHT_GAP_MIN = _env_clamp_int("BIGA_GAME_HIGHLIGHT_GAP_MIN", 1, lo=1, hi=60)
@@ -92,6 +94,12 @@ GAME_HIGHLIGHT_GAP_MIN = _env_clamp_int("BIGA_GAME_HIGHLIGHT_GAP_MIN", 1, lo=1, 
 # Game-specific highlights — downloaded during/after a live game, wiped at first
 # pitch of the next game. Organised as highlights/{game_pk}/ per game.
 GAME_HIGHLIGHTS_DIR = ASSETS_DIR / "highlights"
+
+# Persisted win/loss + game context so reboot restores post-game scene and
+# restarts highlight downloads without waiting on the schedule API.
+STATE_PATH = Path(
+    os.environ.get("BIGA_STATE_PATH", str(REPO_ROOT / ".biga_game_state.json"))
+)
 
 # Canned GIF animations for in-game events.  Drop GIF files here named after
 # the event type.  The live scene plays the matching GIF as a full-screen

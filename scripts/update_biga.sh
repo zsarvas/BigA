@@ -21,6 +21,15 @@ log() {
 
 log "--- update check start ---"
 
+# When run as ExecStartPre the network may not be ready yet — wait for it.
+for i in 1 2 3 4 5; do
+    if ping -c 1 -W 2 github.com > /dev/null 2>&1; then
+        break
+    fi
+    log "Waiting for network (attempt $i/5)..."
+    sleep 3
+done
+
 if [ ! -d "$REPO_DIR/.git" ]; then
     log "ERROR: $REPO_DIR is not a git repo. Aborting."
     exit 1

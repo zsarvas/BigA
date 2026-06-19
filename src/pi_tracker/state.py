@@ -2,9 +2,39 @@
 
 from __future__ import annotations
 
+import json
+import logging
 import os
 import threading
+from datetime import date
 from typing import Any
+
+from . import config
+
+log = logging.getLogger(__name__)
+
+# Fields written to STATE_PATH on update — enough to restore win/loss after reboot.
+_PERSIST_KEYS = frozenset({
+    "scene",
+    "live_game_pk",
+    "final_display_date",
+    "away_team_id",
+    "home_team_id",
+    "away_abbr",
+    "home_abbr",
+    "away_name",
+    "home_name",
+    "away_runs",
+    "home_runs",
+    "linescore_away_innings",
+    "linescore_home_innings",
+    "away_hits",
+    "home_hits",
+    "away_errors",
+    "home_errors",
+    "live_venue_id",
+    "live_venue_name",
+})
 
 
 def _env_tracked_home() -> tuple[int, str, str]:
@@ -17,11 +47,65 @@ def _env_tracked_home() -> tuple[int, str, str]:
     return tid, abbr, name
 
 
+def _expire_stale_final_scene(data: dict[str, Any]) -> None:
+    """Win/loss from a prior calendar day should not survive a reboot."""
+    scene = str(data.get("scene", "idle"))
+    if scene not in ("win", "loss"):
+        return
+    raw = data.get("final_display_date")
+    if not raw or not isinstance(raw, str):
+        return
+    try:
+        locked = date.fromisoformat(raw.strip())
+    except ValueError:
+        return
+    if date.today() > locked:
+        data["scene"] = "idle"
+        data["final_display_date"] = ""
+
+
+def _load_persisted() -> dict[str, Any]:
+    path = config.STATE_PATH
+    if not path.is_file():
+        return {}
+    try:
+        raw = json.loads(path.read_text(encoding="utf-8"))
+        if not isinstance(raw, dict):
+            return {}
+        return {k: raw[k] for k in _PERSIST_KEYS if k in raw}
+    except Exception as exc:  # noqa: BLE001
+        log.warning("could not load persisted state from %s: %s", path, exc)
+        return {}
+
+
+def _persist(data: dict[str, Any]) -> None:
+    path = config.STATE_PATH
+    try:
+        path.parent.mkdir(parents=True, exist_ok=True)
+        blob = {k: data[k] for k in _PERSIST_KEYS if k in data}
+        tmp = path.with_suffix(".tmp")
+        tmp.write_text(json.dumps(blob, separators=(",", ":")), encoding="utf-8")
+        tmp.replace(path)
+    except Exception as exc:  # noqa: BLE001
+        log.warning("could not persist state to %s: %s", path, exc)
+
+
+def clear_persisted_state() -> None:
+    """Remove saved win/loss context (e.g. after accidental --demo-final persist)."""
+    path = config.STATE_PATH
+    try:
+        path.unlink(missing_ok=True)
+        log.info("cleared persisted state at %s", path)
+    except Exception as exc:  # noqa: BLE001
+        log.warning("could not clear persisted state: %s", exc)
+
+
 class SharedGameState:
     """Minimal dict-backed state with copy-on-read for the render thread."""
 
-    def __init__(self) -> None:
+    def __init__(self, *, persist: bool = True) -> None:
         home_id, home_abbr, home_name = _env_tracked_home()
+        self._persist = persist
         self._lock = threading.Lock()
         self._data: dict[str, Any] = {
             "scene": "idle",
@@ -41,6 +125,7 @@ class SharedGameState:
             "home_errors": 0,
             "inning": 1,
             "inning_half": "top",
+            "inning_state": "top",
             "outs": 0,
             "balls": 0,
             "strikes": 0,
@@ -81,6 +166,20 @@ class SharedGameState:
             "final_display_date": "",
             "idle_subtitle": "Loading schedule…",
         }
+        persisted = _load_persisted() if self._persist else {}
+        if persisted:
+            pk = persisted.get("live_game_pk")
+            if pk in (999999, "999999"):
+                log.warning("ignoring persisted demo sample state (live_game_pk=999999)")
+                persisted = {}
+        if persisted:
+            self._data.update(persisted)
+            _expire_stale_final_scene(self._data)
+            log.info(
+                "restored persisted state: scene=%s live_game_pk=%s",
+                self._data.get("scene"),
+                self._data.get("live_game_pk"),
+            )
 
     def update(self, patch: dict[str, Any] | None = None, **kwargs: Any) -> None:
         with self._lock:
@@ -88,6 +187,11 @@ class SharedGameState:
                 self._data.update(patch)
             if kwargs:
                 self._data.update(kwargs)
+            keys = set(kwargs.keys())
+            if patch:
+                keys.update(patch.keys())
+            if self._persist and keys & _PERSIST_KEYS:
+                _persist(self._data)
 
     def snapshot(self) -> dict[str, Any]:
         with self._lock:

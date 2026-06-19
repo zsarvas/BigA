@@ -238,8 +238,8 @@ sudo tail -f /tmp/biga.log          # app stdout/stderr + PYEXIT
 WS2812B strips need a continuous data signal (not a static GPIO level), so BigA drives
 them with `rpi_ws281x` (`src/pi_tracker/gpio_leds.py`).
 
-- On the **win** scene, a daemon thread runs an Angels-red **breathing pulse** with
-  periodic gold flashes.
+- On the **win** scene, a daemon thread runs a red/white **racer + theater chase**
+  (Arduino-style animation).
 - It turns **off** automatically when the scene leaves `win` (day rollover or a
   second game starting).
 - Default pin **GPIO 19 → PWM channel 1** (DMA 10). Valid NeoPixel pins: 12, 13, 18, 19, 21.
@@ -249,8 +249,8 @@ Tunables (set in the service `Environment=` or your shell):
 | Variable | Default | Meaning |
 |----------|---------|---------|
 | `BIGA_WIN_LED_GPIO` | `19` | Data pin (BCM). Must be PWM/PCM-capable. |
-| `BIGA_WIN_LED_COUNT` | `32` | Number of LEDs. |
-| `BIGA_WIN_LED_BRIGHTNESS` | `96` | 0–255. |
+| `BIGA_WIN_LED_COUNT` | `30` | Number of LEDs. |
+| `BIGA_WIN_LED_BRIGHTNESS` | `10` | 0–255. |
 
 Notes:
 - Requires **root** (the service already runs as root).
@@ -261,7 +261,7 @@ Notes:
 Test the win scene + LEDs without waiting for a real game:
 
 ```bash
-sudo /usr/bin/openvt -c 2 -f -w -- python3 /home/pi/BigA/run_pi_ui.py --demo-final --no-idle-videos
+sudo /usr/bin/openvt -c 2 -f -w -- python3 /home/pi/BigA/run_pi_ui.py --demo-final
 ```
 
 ---
@@ -284,7 +284,7 @@ This sets `BIGA_TEAM_ID` / `BIGA_TEAM_ABBR` / `BIGA_TEAM_NAME` for the process. 
 also export those env vars directly instead of passing a slug.
 
 To change the team for the **service**, edit the launch line in
-`/usr/local/bin/biga-start.sh` (e.g. `run_pi_ui.py dodgers --no-idle-videos`) and
+`/usr/local/bin/biga-start.sh` (e.g. `run_pi_ui.py dodgers`) and
 `sudo systemctl restart biga`.
 
 ---
@@ -302,8 +302,8 @@ To change the team for the **service**, edit the launch line in
 | `BIGA_UI_SCALE` | `1.15` | Readability multiplier for all fonts, logos, and the linescore table. `1.0` = original size; higher = bigger. Clamped 0.6–2.0. |
 | `BIGA_LINESCORE_SCALE` | `1.3` | Extra size multiplier for the linescore/score table only (on top of `BIGA_UI_SCALE`). Clamped 0.6–2.5. |
 | `BIGA_WIN_LED_GPIO` | `19` | NeoPixel data pin (BCM). |
-| `BIGA_WIN_LED_COUNT` | `32` | NeoPixel count. |
-| `BIGA_WIN_LED_BRIGHTNESS` | `96` | NeoPixel brightness (0–255). |
+| `BIGA_WIN_LED_COUNT` | `30` | NeoPixel count. |
+| `BIGA_WIN_LED_BRIGHTNESS` | `10` | NeoPixel brightness (0–255). |
 | `BIGA_PANEL_INCLUDE` | `mzp351hv00tr-new.txt` | Panel file `setup.py` installs/includes. |
 | `BIGA_FONT_PATH` | (auto) | Override the TTF used for all text. |
 | `BIGA_DEBUG_HUD` | (off) | `1` to draw a clock/frame-counter HUD (confirms the loop is alive). |
@@ -317,7 +317,6 @@ To change the team for the **service**, edit the launch line in
 | `--debug-hud` | Same as `BIGA_DEBUG_HUD=1`. |
 | `--fullscreen` | Request a fullscreen SDL window. |
 | `--no-schedule` | Don't start schedule/live pollers (offline UI testing). |
-| `--no-idle-videos` | Accepted but currently a **no-op** — idle highlight-clip (mpv) playback was removed for fbcon/KMS stability (see `src/pi_tracker/idle_mpv.py`). The service still passes it for forward compatibility. |
 
 ---
 

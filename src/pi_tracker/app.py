@@ -21,6 +21,7 @@ import logging
 import os
 import subprocess
 import sys
+import textwrap
 import threading
 import time
 from pathlib import Path
@@ -37,14 +38,17 @@ configure_sdl()
 import pygame
 
 from . import config
-from .assets import AssetManager
+from .assets import AssetManager, _repo_font
 from .mlb_http import ANGELS_TEAM_ID as TRACKED_TEAM_ID
 from .mlb_schedule import try_restore_final_scene_for_today
 from .state import SharedGameState
 from .team_config import tracked_team_abbr, tracked_team_name
+from . import mouse_hide
+from . import playback
 from .gpio_leds import cleanup_gpio, init_gpio, is_muted, set_win_led
-from .mlb_highlights import HighlightDownloader, wipe_game_highlights
+from .mlb_highlights import HighlightDownloader, sync_highlight_downloader
 from .scenes import FinalLossScene, FinalWinScene, IdleScene, LiveScene
+from .scenes._clip_player import clip_title_from_path
 
 
 def _demo_opponent() -> tuple[int, str, str]:
@@ -81,6 +85,7 @@ def _pygame_bootstrap_linux_console() -> None:
         pygame.mixer.quit()
     except pygame.error:
         pass
+    mouse_hide.apply()
 
 
 def _try_set_mode(
@@ -196,7 +201,7 @@ def _demo_state() -> SharedGameState:
     aw_id, aw_abbr, aw_name = _demo_opponent()
     hb, hn = tracked_team_abbr(), tracked_team_name()
     tid = TRACKED_TEAM_ID
-    st = SharedGameState()
+    st = SharedGameState(persist=False)
     st.update(
         scene="live",
         away_team_id=aw_id,
@@ -250,7 +255,7 @@ def _demo_final_state() -> SharedGameState:
     aw_id, aw_abbr, _aw_name = _demo_opponent()
     hb = tracked_team_abbr()
     tid = TRACKED_TEAM_ID
-    st = SharedGameState()
+    st = SharedGameState(persist=False)
     st.update(
         scene="win",
         away_team_id=aw_id,
@@ -299,33 +304,77 @@ def _configure_logging() -> None:
         logging.getLogger(noisy).setLevel(logging.WARNING)
 
 
-def _play_mpv(path: Path, size: tuple[int, int], flags: int) -> "pygame.Surface":
+_NOW_SHOWING_COLOR = (255, 50, 50)
+_NOW_SHOWING_HOLD_SEC = 0.5
+
+
+def _draw_now_showing_transition(screen: pygame.Surface, title: str) -> None:
+    """Brief full-screen card before handing the display to mpv."""
+    w, _h = screen.get_size()
+    screen.fill(config.BLACK)
+
+    head_font = _repo_font(config.layout_size(22))
+    body_font = _repo_font(config.layout_size(13))
+
+    head = head_font.render("NOW SHOWING", True, _NOW_SHOWING_COLOR)
+    screen.blit(head, head.get_rect(center=(w // 2, config.layout_y(96))))
+
+    # ~26 chars fits two lines on 480px at this font size.
+    wrapped = textwrap.fill(title, width=26)
+    lines = wrapped.split("\n")
+    max_lines = 3
+    if len(lines) > max_lines:
+        lines = lines[:max_lines]
+        if not lines[-1].endswith("…"):
+            lines[-1] = lines[-1].rstrip() + "…"
+
+    line_h = body_font.get_height() + 2
+    block_h = len(lines) * line_h - 2
+    y = config.layout_y(132) - block_h // 2
+    for line in lines:
+        surf = body_font.render(line, True, config.WHITE)
+        screen.blit(surf, surf.get_rect(center=(w // 2, y + line_h // 2)))
+        y += line_h
+
+    pygame.display.flip()
+    time.sleep(_NOW_SHOWING_HOLD_SEC)
+
+
+def _play_mpv(path: Path, screen: pygame.Surface, flags: int) -> "pygame.Surface":
     """
     Hand the display to mpv for one clip, then reclaim it.
 
-    On KMS-mode Raspberry Pi, only one process can be DRM master at a time, so
-    we fully tear down the pygame display before launching mpv and reinitialise
-    it afterwards.  mpv auto-detects the best video output (drm on Pi, metal/gl
-    on Mac dev) so no platform-specific flags are needed.
-
-    Returns a fresh pygame.Surface at the same size/flags so the caller can
-    replace its ``screen`` reference.
+    On Pi: DRM output at native panel resolution + V4L2 hardware decode (smooth
+    on Zero 2W).  Mac/dev: auto hwdec + panscan fill.
     """
+    size = screen.get_size()
+    title = clip_title_from_path(path)
+    _draw_now_showing_transition(screen, title)
     pygame.display.quit()
     import platform
     on_pi = platform.system() == "Linux"
-    cmd = [
-        "mpv",
-        "--hwdec=v4l2m2m" if on_pi else "--hwdec=auto",
-        "--msg-level=all=warn",  # surface warnings without full verbosity
-        "--fs", "--panscan=1.0", "--osd-level=0",
-        "--scale=bilinear", "--cscale=bilinear", "--dscale=bilinear",
-        "--video-sync=display-resample",
-        "--ao=alsa",  # skip JACK/PipeWire, go straight to ALSA
-    ]
+    w, h = size
+    cmd = ["mpv", "--really-quiet", "--osd-level=0", "--cursor-autohide=always"]
+    if on_pi:
+        # Native DRM mode + hw decode; panscan zooms to fill (crop edges, no stretch).
+        cmd += [
+            "--vo=drm",
+            "--drm-device=/dev/dri/card0",
+            f"--drm-mode={w}x{h}",
+            "--hwdec=v4l2m2m",
+            "--vd-lavc-threads=4",
+            "--panscan=1.0",
+        ]
+    else:
+        cmd += ["--hwdec=auto", "--fs", "--panscan=1.0"]
     if is_muted():
         cmd.append("--no-audio")
+    else:
+        cmd.append("--ao=alsa")
     cmd.append(str(path))
+    logging.info("mpv launching: %s  cmd=%s", path.name, " ".join(cmd))
+    # Pause all background polling threads so the Pi's CPU is free for decode.
+    playback.begin()
     try:
         result = subprocess.run(cmd, timeout=600, capture_output=True, text=True)
         if result.returncode not in (0, 4):  # 4 = quit by user
@@ -342,17 +391,29 @@ def _play_mpv(path: Path, size: tuple[int, int], flags: int) -> "pygame.Surface"
         logging.warning("mpv timed out on %s", path.name)
     except Exception as exc:  # noqa: BLE001
         logging.warning("mpv error: %s", exc)
+    finally:
+        playback.end()
     pygame.display.init()
     screen = pygame.display.set_mode(size, flags)
-    pygame.mouse.set_visible(False)
+    mouse_hide.apply()
+    # Flip immediately so the cursor is covered before the main loop's next draw.
+    screen.fill(config.BLACK)
+    pygame.display.flip()
+    mouse_hide.apply(screen)
     return screen
 
 
 def main() -> None:
     _configure_logging()
+    log = logging.getLogger(__name__)
+    log.info("argv: %s", " ".join(sys.argv))
     # SDL video/audio driver env is applied in bootstrap_sdl.configure_sdl() before pygame import.
     demo_live = "--demo" in sys.argv or "--demo-live" in sys.argv
     demo_final = "--demo-final" in sys.argv
+    if demo_final:
+        log.info("demo-final mode (sample win screen; state is not persisted)")
+    elif demo_live:
+        log.info("demo-live mode (sample scoreboard; state is not persisted)")
     no_schedule = "--no-schedule" in sys.argv
     flags = 0
     if "--fullscreen" in sys.argv:
@@ -360,7 +421,7 @@ def main() -> None:
     display_flags = flags
     screen = _open_pygame_window(config.SCREEN_WIDTH, config.SCREEN_HEIGHT, display_flags)
     pygame.display.set_caption("BigA Pi Tracker")
-    pygame.mouse.set_visible(False)
+    mouse_hide.apply(screen)
     clock = pygame.time.Clock()
 
     state: SharedGameState
@@ -411,6 +472,17 @@ def main() -> None:
     last_scene_key: str | None = None
     _hl_downloader: HighlightDownloader | None = None
     _last_live_pk: int = 0
+    _last_dl_key: tuple[str, int, int] | None = None
+    if not demo:
+        _hl_downloader, _last_live_pk = sync_highlight_downloader(
+            state.snapshot(), None, 0
+        )
+        s0 = state.snapshot()
+        _last_dl_key = (
+            str(s0.get("scene", "idle")),
+            int(s0.get("live_game_pk") or 0),
+            int(s0.get("next_game_pk") or 0),
+        )
     running = True
     loop_start = time.monotonic()
     frame_i = 0
@@ -459,28 +531,24 @@ def main() -> None:
 
             scene_key = str(snap.get("scene", "idle"))
             if scene_key != last_scene_key:
+                prev_scene = last_scene_key
                 last_scene_key = scene_key
                 set_win_led(scene_key == "win")
+                if scene_key == "idle" and prev_scene in ("win", "loss"):
+                    scenes["idle"]._cp_arm_immediate()
 
-            # Manage highlight downloader lifecycle.
-            # Keep downloading through win/loss scenes — post-game recaps and
-            # condensed-game clips upload for hours after the final out.
-            # Only stop when returning to idle (no active game context).
+            # Manage highlight downloader lifecycle (only when scene / game pk changes).
             if not demo:
-                live_pk = int(snap.get("live_game_pk") or 0)
-                if scene_key in ("live", "win", "loss") and live_pk:
-                    if live_pk != _last_live_pk:
-                        # New game — stop old downloader, wipe old clips, start fresh.
-                        if _hl_downloader:
-                            _hl_downloader.stop()
-                        if _last_live_pk:
-                            wipe_game_highlights(_last_live_pk)
-                        _last_live_pk = live_pk
-                        _hl_downloader = HighlightDownloader(live_pk)
-                        _hl_downloader.start()
-                elif scene_key == "idle" and _hl_downloader:
-                    _hl_downloader.stop()
-                    _hl_downloader = None
+                dl_key = (
+                    scene_key,
+                    int(snap.get("live_game_pk") or 0),
+                    int(snap.get("next_game_pk") or 0),
+                )
+                if dl_key != _last_dl_key:
+                    _last_dl_key = dl_key
+                    _hl_downloader, _last_live_pk = sync_highlight_downloader(
+                        snap, _hl_downloader, _last_live_pk
+                    )
 
             scene = scenes.get(scene_key, scenes["idle"])
             scene.draw(screen, assets, snap)
@@ -488,13 +556,16 @@ def main() -> None:
                 _draw_debug_hud(
                     screen, assets, frame_i=frame_i, scene_key=scene_key, loop_start=loop_start
                 )
+            if mouse_hide.kiosk_mode():
+                mouse_hide.apply(screen)
             pygame.display.flip()
 
             # If the scene queued a clip for mpv, play it now and reclaim the display.
             pending = getattr(scene, "_pending_clip", None)
             if pending:
                 scene._pending_clip = None  # type: ignore[attr-defined]
-                screen = _play_mpv(pending, screen.get_size(), display_flags)
+                screen = _play_mpv(pending, screen, display_flags)
+                mouse_hide.apply(screen)
 
             # Boost tick rate while a pygame-rendered GIF animation is running
             # (live event overlays); normal scenes run at the low base FPS.

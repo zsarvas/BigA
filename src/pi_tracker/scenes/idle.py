@@ -10,7 +10,7 @@ from .. import config
 from ..assets import AssetManager, scale_surface
 from ..mlb_http import ANGELS_TEAM_ID as TRACKED_TEAM_ID
 from ..team_config import tracked_team_abbr, tracked_team_name
-from ._clip_player import ClipPlayerMixin
+from ._clip_player import ClipPlayerMixin, _playable_clip_paths
 
 # Small logo beside "vs / @ …" on idle (hero logo is the tracked franchise).
 IDLE_OPPONENT_LOGO_SIZE = (config.layout_size(28), config.layout_size(28))
@@ -71,25 +71,37 @@ def _blit_matchup_row(
 def _idle_clip_folder() -> Path | None:
     """
     Game highlights take priority (yesterday's recap plays until first pitch).
-    Falls back to the permanent curated reel.
+    Falls back to the permanent curated reel when no game clips exist yet.
     """
+    best: Path | None = None
+    best_n = 0
     if config.GAME_HIGHLIGHTS_DIR.is_dir():
         for sub in config.GAME_HIGHLIGHTS_DIR.iterdir():
-            if sub.is_dir() and any(sub.glob("*.mp4")):
-                return sub  # return the {game_pk}/ subfolder directly
+            if not sub.is_dir() or not sub.name.isdigit():
+                continue
+            n = len(_playable_clip_paths(sub))
+            if n > best_n:
+                best_n = n
+                best = sub
+    if best is not None:
+        return best
     if config.IDLE_VIDEOS_DIR.is_dir() and (
-        any(config.IDLE_VIDEOS_DIR.glob("*.mp4"))
-        or any(config.IDLE_VIDEOS_DIR.glob("*.gif"))
+        _playable_clip_paths(config.IDLE_VIDEOS_DIR)
+        or list(config.IDLE_VIDEOS_DIR.glob("*.gif"))
     ):
         return config.IDLE_VIDEOS_DIR
     return None
 
 
 class IdleScene(ClipPlayerMixin):
-    """Next-game info; queues a full-screen highlight clip for mpv every 5 minutes."""
+    """Next-game info; queues a full-screen highlight clip for mpv on a fixed interval."""
 
     def draw(self, screen: pygame.Surface, assets: AssetManager, state: dict[str, Any]) -> None:
-        self._cp_tick(_idle_clip_folder())
+        self._cp_tick(
+            _idle_clip_folder(),
+            gap_min=config.IDLE_HIGHLIGHT_GAP_MIN,
+            block_on_download=False,
+        )
         assets.draw_background(screen, venue_id=int(state.get("next_game_venue_id") or 0))
 
         # Idle hero: tracked franchise logo + name (not the generic "home" club from state).
