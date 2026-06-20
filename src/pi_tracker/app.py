@@ -350,11 +350,14 @@ def _play_mpv(path: Path, screen: pygame.Surface, flags: int) -> "pygame.Surface
     size = screen.get_size()
     title = clip_title_from_path(path)
     _draw_now_showing_transition(screen, title)
+    mouse_hide.apply(screen)
+    pygame.display.flip()
+    mouse_hide.apply(screen)
     pygame.display.quit()
     import platform
     on_pi = platform.system() == "Linux"
     w, h = size
-    cmd = ["mpv", "--really-quiet", "--osd-level=0", "--cursor-autohide=always"]
+    cmd = ["mpv", "--really-quiet", "--osd-level=0", "--cursor-autohide=always", "--input-cursor=no"]
     if on_pi:
         # Native DRM mode + hw decode; panscan zooms to fill (crop edges, no stretch).
         cmd += [
@@ -395,11 +398,7 @@ def _play_mpv(path: Path, screen: pygame.Surface, flags: int) -> "pygame.Surface
         playback.end()
     pygame.display.init()
     screen = pygame.display.set_mode(size, flags)
-    mouse_hide.apply()
-    # Flip immediately so the cursor is covered before the main loop's next draw.
-    screen.fill(config.BLACK)
-    pygame.display.flip()
-    mouse_hide.apply(screen)
+    mouse_hide.handoff_from_mpv(screen, fill=config.BLACK)
     return screen
 
 
@@ -559,13 +558,14 @@ def main() -> None:
             if mouse_hide.kiosk_mode():
                 mouse_hide.apply(screen)
             pygame.display.flip()
+            if mouse_hide.kiosk_mode():
+                mouse_hide.apply(screen)
 
             # If the scene queued a clip for mpv, play it now and reclaim the display.
             pending = getattr(scene, "_pending_clip", None)
             if pending:
                 scene._pending_clip = None  # type: ignore[attr-defined]
                 screen = _play_mpv(pending, screen, display_flags)
-                mouse_hide.apply(screen)
 
             # Boost tick rate while a pygame-rendered GIF animation is running
             # (live event overlays); normal scenes run at the low base FPS.
