@@ -4,14 +4,19 @@
 from __future__ import annotations
 
 import json
+import os
 import re
+import shutil
 import time
 from datetime import date, datetime, timezone
+from pathlib import Path
 
 import requests
 
 ANGELS_TEAM_ID = 108
-LOG_PATH = "/tmp/replay_latency.json"
+REPO_ROOT = Path(__file__).resolve().parent
+LOG_DIR = Path(os.environ.get("REPLAY_LOG_DIR", str(REPO_ROOT / "logs" / "replay_tracker")))
+LOG_PATH = LOG_DIR / "replay_latency.json"
 POLL_SEC = 60
 
 HEADERS = {
@@ -125,6 +130,22 @@ def reset_game_state() -> None:
     seen_plays = {}
     seen_videos = {}
     matched_pairs = []
+
+
+def _ensure_log_dir() -> None:
+    LOG_DIR.mkdir(parents=True, exist_ok=True)
+
+
+def _archive_game_log(game_pk: int) -> None:
+    """Keep a per-game snapshot before resetting (survives pk rollover)."""
+    if not game_pk:
+        return
+    save_log()
+    if not LOG_PATH.is_file():
+        return
+    archive = LOG_DIR / f"game_{game_pk}.json"
+    shutil.copy2(LOG_PATH, archive)
+    print(f"[{ts()}] Archived → {archive}")
 
 
 def score_match(blurb_norm: str, play: dict) -> int:
@@ -281,6 +302,8 @@ def save_log() -> None:
     p90 = latencies_sorted[int(n * 0.9)] if n else None
     summary = {
         "match_count": n,
+        "plays_seen": len(seen_plays),
+        "videos_seen": len(seen_videos),
         "avg_latency_minutes": avg,
         "median_latency_minutes": med,
         "p90_latency_minutes": p90,
@@ -289,29 +312,32 @@ def save_log() -> None:
         "over_8_min": sum(1 for x in latencies if x > 8),
         "updated_at": datetime.now(timezone.utc).isoformat(),
     }
-    with open(LOG_PATH, "w", encoding="utf-8") as f:
-        json.dump(
-            {
-                "current_game_pk": current_pk,
-                "latency_note": "latency_minutes = video api_date − play about.endTime",
-                "summary": summary,
-                "plays": seen_plays,
-                "videos": seen_videos,
-                "matched_pairs": matched_pairs,
-                "avg_latency_minutes": avg,
-                "match_count": n,
-            },
-            f,
-            indent=2,
-        )
+    blob = {
+        "current_game_pk": current_pk,
+        "log_path": str(LOG_PATH),
+        "latency_note": "latency_minutes = video api_date − play about.endTime",
+        "summary": summary,
+        "plays": seen_plays,
+        "videos": seen_videos,
+        "matched_pairs": matched_pairs,
+        "avg_latency_minutes": avg,
+        "match_count": n,
+    }
+    _ensure_log_dir()
+    tmp = LOG_PATH.with_suffix(".tmp")
+    tmp.write_text(json.dumps(blob, indent=2), encoding="utf-8")
+    tmp.replace(LOG_PATH)
 
 
 def main() -> None:
     global current_pk
 
     print("Starting Angels replay latency tracker...")
-    print(f"Logs: {LOG_PATH}")
+    print(f"Log dir:  {LOG_DIR}")
+    print(f"Live log: {LOG_PATH}")
+    print("Per-game archives: game_<pk>.json in the same directory")
     print("Latency = highlight publish time − play end time (MLB API timestamps)\n")
+    _ensure_log_dir()
     save_log()  # create file immediately so off-days / fresh starts still have a log
 
     while True:
@@ -320,11 +346,14 @@ def main() -> None:
 
             if todays_pk is None:
                 if current_pk is not None:
-                    print(f"[{ts()}] No game today — clearing state (was pk {current_pk})")
+                    print(f"[{ts()}] No game today — archiving pk {current_pk}")
+                    _archive_game_log(current_pk)
                     current_pk = None
                     reset_game_state()
                 save_log()
             elif todays_pk != current_pk:
+                if current_pk is not None:
+                    _archive_game_log(current_pk)
                 current_pk = todays_pk
                 reset_game_state()
                 print(f"[{ts()}] New game detected: {current_pk}\n")
