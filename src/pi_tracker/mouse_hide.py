@@ -1,9 +1,12 @@
 """
 Kiosk mouse suppression — the panel never needs a pointer.
 
-Uses SDL_ShowCursor(SDL_DISABLE), relative mouse mode, and a blank cursor pixmap
-at the libSDL level (survives some pygame re-inits better than pygame.mouse alone).
-Call ``apply()`` every frame on the Pi; use ``handoff_from_mpv()`` after mpv exits.
+Uses SDL_ShowCursor(SDL_DISABLE) at the libSDL level (survives some pygame
+re-inits better than pygame.mouse alone), plus pygame hide/grab on headless Linux.
+Call ``apply()`` every frame on the Pi so mpv/SDL DRM handoffs cannot flash it.
+
+Note: SDL_SetRelativeMouseMode and set_cursor before a window exists segfault on
+Pi KMSDRM — only run pygame mouse calls when the display surface is ready.
 """
 
 from __future__ import annotations
@@ -14,8 +17,6 @@ import sys
 import pygame
 
 SDL_DISABLE = 0
-SDL_ENABLE = 1
-_blank_cursor_set = False
 
 
 def kiosk_mode() -> bool:
@@ -40,6 +41,13 @@ def _sdl2():
         return None
 
 
+def _display_ready() -> bool:
+    try:
+        return pygame.display.get_init() and pygame.display.get_surface() is not None
+    except pygame.error:
+        return False
+
+
 def _sdl_hide_cursor() -> bool:
     """SDL_ShowCursor(SDL_DISABLE) on the loaded SDL2 library."""
     lib = _sdl2()
@@ -50,30 +58,6 @@ def _sdl_hide_cursor() -> bool:
         return True
     except (AttributeError, OSError, ValueError):
         return False
-
-
-def _sdl_relative_mouse(on: bool) -> bool:
-    """SDL_SetRelativeMouseMode — hides the system pointer while active."""
-    lib = _sdl2()
-    if lib is None:
-        return False
-    try:
-        lib.SDL_SetRelativeMouseMode(SDL_ENABLE if on else SDL_DISABLE)
-        return True
-    except (AttributeError, OSError, ValueError):
-        return False
-
-
-def _set_blank_cursor() -> None:
-    """Replace the visible cursor bitmap with a fully transparent 8×8 sprite."""
-    global _blank_cursor_set
-    try:
-        surf = pygame.Surface((8, 8), pygame.SRCALPHA, 32)
-        surf.fill((0, 0, 0, 0))
-        pygame.mouse.set_cursor(pygame.cursors.Cursor((0, 0), surf))
-        _blank_cursor_set = True
-    except (pygame.error, TypeError, ValueError):
-        pass
 
 
 def _hide_linux_vt_cursor() -> None:
@@ -89,14 +73,10 @@ def _hide_linux_vt_cursor() -> None:
             continue
 
 
-def apply(screen: pygame.Surface | None = None) -> None:
-    """Hide the pointer at SDL + pygame level; grab input on kiosk."""
-    if kiosk_mode():
-        _hide_linux_vt_cursor()
-        _sdl_relative_mouse(True)
-
-    _sdl_hide_cursor()
-    _set_blank_cursor()
+def _pygame_hide_mouse() -> None:
+    """Pygame-level hide — only when a display surface exists."""
+    if not _display_ready():
+        return
     try:
         pygame.mouse.set_visible(False)
         if kiosk_mode():
@@ -104,27 +84,30 @@ def apply(screen: pygame.Surface | None = None) -> None:
     except pygame.error:
         pass
 
+
+def apply(screen: pygame.Surface | None = None) -> None:
+    """Hide the pointer at SDL + pygame level; grab input on kiosk."""
+    if kiosk_mode():
+        _hide_linux_vt_cursor()
+
+    _sdl_hide_cursor()
+    if screen is not None or _display_ready():
+        _pygame_hide_mouse()
+
     if screen is not None:
         try:
             pygame.event.pump()
         except pygame.error:
             pass
         _sdl_hide_cursor()
-        _set_blank_cursor()
-        try:
-            pygame.mouse.set_visible(False)
-        except pygame.error:
-            pass
+        _pygame_hide_mouse()
 
 
 def handoff_from_mpv(screen: pygame.Surface, *, fill: tuple[int, int, int] = (0, 0, 0)) -> None:
     """
-    Aggressive hide after mpv releases DRM/KMS.
-
-    mpv often restores the hardware cursor for one frame when pygame reclaims the
-    display — pump several black flips with repeated SDL hide calls.
+    Re-hide after mpv releases DRM/KMS — a few black flips without unsafe SDL calls.
     """
-    for _ in range(6):
+    for _ in range(3):
         apply(screen)
         try:
             screen.fill(fill)
