@@ -94,6 +94,33 @@ def find_todays_final_angels_game(
     angels_id: int = ANGELS_TEAM_ID,
 ) -> dict[str, Any] | None:
     """Latest (by first pitch) Angels game on this schedule date that is final."""
+    return _latest_final_angels_game(schedule_json, angels_id=angels_id)
+
+
+def fetch_angels_schedule_lookback(
+    days: int = 7,
+    team_id: int = ANGELS_TEAM_ID,
+) -> dict[str, Any]:
+    """Schedule from ``days`` calendar days ago through today (inclusive)."""
+    end = date.today()
+    start = end - timedelta(days=max(days - 1, 0))
+    return _get(
+        "/api/v1/schedule",
+        {
+            "sportId": 1,
+            "teamId": team_id,
+            "startDate": start.isoformat(),
+            "endDate": end.isoformat(),
+            "hydrate": "team,venue",
+        },
+    )
+
+
+def _latest_final_angels_game(
+    schedule_json: dict[str, Any],
+    angels_id: int = ANGELS_TEAM_ID,
+) -> dict[str, Any] | None:
+    """Most recent final Angels game in a schedule payload (by first pitch)."""
     finals: list[tuple[datetime, dict[str, Any]]] = []
     for g in _iter_games(schedule_json):
         aid = g.get("teams", {}).get("away", {}).get("team", {}).get("id")
@@ -112,6 +139,14 @@ def find_todays_final_angels_game(
         return None
     finals.sort(key=lambda x: x[0])
     return finals[-1][1]
+
+
+def find_most_recent_final_angels_game(
+    schedule_json: dict[str, Any],
+    angels_id: int = ANGELS_TEAM_ID,
+) -> dict[str, Any] | None:
+    """Latest final Angels game in a multi-day schedule window."""
+    return _latest_final_angels_game(schedule_json, angels_id=angels_id)
 
 
 def live_transition_from_schedule_game(game: dict[str, Any]) -> dict[str, Any]:

@@ -10,3 +10,6 @@ src/pi_tracker/assets/*.mp4
 *.img
 *.img.xz
 pishrink.sh
+
+# Replay tracker runtime logs (Pi experiment data)
+logs/replay_tracker/

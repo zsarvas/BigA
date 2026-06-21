@@ -19,10 +19,12 @@ called at first pitch of a new game.
 from __future__ import annotations
 
 import logging
+import os
 import shutil
 import threading
 import time
 from pathlib import Path
+from typing import Any
 
 import requests
 
@@ -35,6 +37,11 @@ CONTENT_URL = "https://statsapi.mlb.com/api/v1/game/{game_pk}/content"
 POLL_INTERVAL_MIN = 10  # poll API every 10 minutes when caught up
 POLL_RETRY_SEC = 60  # retry sooner when the API is unreachable (e.g. boot before network)
 CLIP_GAP_SEC = 15  # pause between back-to-back clip downloads (let CPU cool down)
+# Fresh install / empty highlights: look back this many days for a final game to recap.
+try:
+    RECAP_LOOKBACK_DAYS = max(1, min(21, int(os.environ.get("BIGA_RECAP_LOOKBACK_DAYS", "7"))))
+except ValueError:
+    RECAP_LOOKBACK_DAYS = 7
 
 
 def _chown_for_pi(path: Path) -> None:
@@ -161,6 +168,7 @@ def fetch_highlight_clips_result(game_pk: int) -> tuple[list[dict], bool]:
             "id": str(item.get("id", "")),
             "blurb": blurb,
             "url": mp4_url,
+            "cclocation_vtt": str(item.get("cclocationVtt") or ""),
         })
     return results, True
 
@@ -182,6 +190,81 @@ def resolve_highlight_game_pk(snap: dict) -> int:
         if subs:
             return int(max(subs, key=lambda p: int(p.name)).name)
     return 0
+
+
+def count_playable_game_highlights() -> int:
+    """Finished ``.mp4`` clips under ``highlights/{game_pk}/`` (any game)."""
+    if not config.GAME_HIGHLIGHTS_DIR.is_dir():
+        return 0
+    n = 0
+    for sub in config.GAME_HIGHLIGHTS_DIR.iterdir():
+        if not sub.is_dir() or not sub.name.isdigit():
+            continue
+        for p in sub.glob("*.mp4"):
+            low = p.name.lower()
+            if ".raw" in low or ".tmp" in low:
+                continue
+            n += 1
+    return n
+
+
+def seed_idle_recap_from_schedule(state: Any) -> bool:
+    """
+    Fresh install / wiped highlights: stay on idle but download the most recent
+    final game recap (last RECAP_LOOKBACK_DAYS days). Does not switch to win/loss.
+    """
+    from datetime import date
+
+    from .mlb_schedule import (
+        fetch_angels_schedule_for_date,
+        fetch_angels_schedule_lookback,
+        find_most_recent_final_angels_game,
+        find_todays_scoreboard_angels_game,
+    )
+
+    snap = state.snapshot()
+    if str(snap.get("scene", "idle")) != "idle":
+        return False
+    if count_playable_game_highlights() > 0:
+        return False
+    try:
+        if int(snap.get("live_game_pk") or 0) > 0:
+            return False
+    except (TypeError, ValueError):
+        pass
+
+    try:
+        today_sched = fetch_angels_schedule_for_date(date.today())
+        if find_todays_scoreboard_angels_game(today_sched):
+            log.debug("idle recap seed: skip — today's game is live")
+            return False
+    except Exception as exc:  # noqa: BLE001
+        log.debug("idle recap seed: today schedule check failed: %s", exc)
+
+    try:
+        sched = fetch_angels_schedule_lookback(RECAP_LOOKBACK_DAYS)
+        game = find_most_recent_final_angels_game(sched)
+    except Exception as exc:  # noqa: BLE001
+        log.warning("idle recap seed: schedule lookup failed: %s", exc)
+        return False
+
+    if not game:
+        log.info("idle recap seed: no final Angels game in last %s days", RECAP_LOOKBACK_DAYS)
+        return False
+
+    try:
+        game_pk = int(game.get("gamePk") or 0)
+    except (TypeError, ValueError):
+        return False
+    if game_pk <= 0:
+        return False
+
+    state.update(live_game_pk=game_pk)
+    log.info(
+        "idle recap seed: live_game_pk=%s (most recent final, no highlights on disk)",
+        game_pk,
+    )
+    return True
 
 
 def should_run_highlight_downloader(snap: dict) -> bool:
@@ -391,7 +474,13 @@ def _transcode_for_pi(src: Path, dest: Path) -> bool:
     return False
 
 
-def _download_clip(clip: dict, dest_dir: Path, http: requests.Session | None = None) -> Path | None:
+def _download_clip(
+    clip: dict,
+    dest_dir: Path,
+    http: requests.Session | None = None,
+    *,
+    game_pk: int | None = None,
+) -> Path | None:
     """Download (and optionally transcode) a single clip to dest_dir."""
     slug = _slug(clip.get("blurb", clip["id"]))
     fname = f"{slug}.mp4"
@@ -422,6 +511,12 @@ def _download_clip(clip: dict, dest_dir: Path, http: requests.Session | None = N
             raw.rename(dest)
             log.info("saved %s (original quality)", fname)
         _chown_for_pi(dest)
+        if game_pk:
+            from .highlight_meta import build_clip_meta, write_clip_meta
+
+            meta = build_clip_meta(game_pk, clip, None)
+            if meta:
+                write_clip_meta(dest, meta)
         return dest
     except Exception as exc:
         log.warning("download failed for %s: %s", clip["blurb"], exc)
@@ -529,7 +624,7 @@ class HighlightDownloader:
             self._seen_ids.add(cid)
             if url:
                 self._seen_urls.add(url)
-            path = _download_clip(clip, self._dest, self._http)
+            path = _download_clip(clip, self._dest, self._http, game_pk=self.game_pk)
             if path:
                 with self._lock:
                     self.new_clips.append(path)

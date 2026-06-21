@@ -46,7 +46,7 @@ from .team_config import tracked_team_abbr, tracked_team_name
 from . import mouse_hide
 from . import playback
 from .gpio_leds import cleanup_gpio, init_gpio, is_muted, set_win_led
-from .mlb_highlights import HighlightDownloader, sync_highlight_downloader
+from .mlb_highlights import HighlightDownloader, seed_idle_recap_from_schedule, sync_highlight_downloader
 from .scenes import FinalLossScene, FinalWinScene, IdleScene, LiveScene
 from .scenes._clip_player import clip_title_from_path
 
@@ -350,11 +350,14 @@ def _play_mpv(path: Path, screen: pygame.Surface, flags: int) -> "pygame.Surface
     size = screen.get_size()
     title = clip_title_from_path(path)
     _draw_now_showing_transition(screen, title)
+    mouse_hide.apply(screen)
+    pygame.display.flip()
+    mouse_hide.apply(screen)
     pygame.display.quit()
     import platform
     on_pi = platform.system() == "Linux"
     w, h = size
-    cmd = ["mpv", "--really-quiet", "--osd-level=0", "--cursor-autohide=always"]
+    cmd = ["mpv", "--really-quiet", "--osd-level=0", "--cursor-autohide=always", "--input-cursor=no"]
     if on_pi:
         # Native DRM mode + hw decode; panscan zooms to fill (crop edges, no stretch).
         cmd += [
@@ -395,11 +398,7 @@ def _play_mpv(path: Path, screen: pygame.Surface, flags: int) -> "pygame.Surface
         playback.end()
     pygame.display.init()
     screen = pygame.display.set_mode(size, flags)
-    mouse_hide.apply()
-    # Flip immediately so the cursor is covered before the main loop's next draw.
-    screen.fill(config.BLACK)
-    pygame.display.flip()
-    mouse_hide.apply(screen)
+    mouse_hide.handoff_from_mpv(screen, fill=config.BLACK)
     return screen
 
 
@@ -473,6 +472,8 @@ def main() -> None:
     _hl_downloader: HighlightDownloader | None = None
     _last_live_pk: int = 0
     _last_dl_key: tuple[str, int, int] | None = None
+    if not demo and not no_schedule:
+        seed_idle_recap_from_schedule(state)
     if not demo:
         _hl_downloader, _last_live_pk = sync_highlight_downloader(
             state.snapshot(), None, 0
@@ -559,13 +560,14 @@ def main() -> None:
             if mouse_hide.kiosk_mode():
                 mouse_hide.apply(screen)
             pygame.display.flip()
+            if mouse_hide.kiosk_mode():
+                mouse_hide.apply(screen)
 
             # If the scene queued a clip for mpv, play it now and reclaim the display.
             pending = getattr(scene, "_pending_clip", None)
             if pending:
                 scene._pending_clip = None  # type: ignore[attr-defined]
                 screen = _play_mpv(pending, screen, display_flags)
-                mouse_hide.apply(screen)
 
             # Boost tick rate while a pygame-rendered GIF animation is running
             # (live event overlays); normal scenes run at the low base FPS.

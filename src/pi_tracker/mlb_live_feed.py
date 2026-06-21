@@ -140,7 +140,7 @@ def _inning_runs_cell(value: Any) -> str:
 
 
 def linescore_grid_from_feed(feed: dict[str, Any]) -> dict[str, Any]:
-    """Innings 1–9 runs per side plus R/H/E hits & errors from live feed linescore."""
+    """All innings' runs per side plus R/H/E hits & errors from live feed linescore."""
     linescore = (feed.get("liveData") or {}).get("linescore") or {}
     innings = linescore.get("innings") or []
     by_num: dict[int, dict[str, Any]] = {}
@@ -152,9 +152,10 @@ def linescore_grid_from_feed(feed: dict[str, Any]) -> dict[str, Any]:
             continue
         by_num[n] = inn
 
+    max_inning = max(by_num.keys()) if by_num else 9
     away_cells: list[str] = []
     home_cells: list[str] = []
-    for col in range(1, 10):
+    for col in range(1, max_inning + 1):
         inn = by_num.get(col)
         if inn is None:
             away_cells.append("-")
