@@ -13,7 +13,7 @@ from ..assets import AssetManager, StreamingGif, scale_surface
 from ..drawing.diamond import draw_diamond
 from .linescore_table import compute_linescore_geometry, draw_linescore_table_centered
 from ._clip_player import _playable_clip_paths, game_highlights_blocked
-from ..highlight_meta import pick_break_highlight
+from ..highlight_meta import ended_half_before_break, pick_break_highlight
 
 log = logging.getLogger(__name__)
 
@@ -229,6 +229,17 @@ class LiveScene:
                 key[1][:1].upper(),
                 st,
             )
+        elif st in _INNING_BREAK_STATES and not self._break_reel_active:
+            # Feed jumped to middle/between without a visible half-key step (common).
+            self._break_reel_active = True
+            self._break_prefer_tiered = True
+            self._ended_half_key = ended_half_before_break(st, state)
+            log.info(
+                "inning break state=%s (ended %s%s)",
+                st,
+                self._ended_half_key[0],
+                self._ended_half_key[1][:1].upper() if self._ended_half_key[1] else "?",
+            )
         self._last_half_key = key
 
         if _at_bat_underway(state) and st not in _INNING_BREAK_STATES:
@@ -242,8 +253,10 @@ class LiveScene:
             if game_pk:
                 folder = config.GAME_HIGHLIGHTS_DIR / str(game_pk)
                 if folder.is_dir():
-                    if game_highlights_blocked(folder, block_download=False):
-                        log.debug("half-inning break: waiting for transcode")
+                    if game_highlights_blocked(
+                        folder, block_download=False, block_transcode=False
+                    ):
+                        log.debug("half-inning break: waiting for highlight folder")
                     else:
                         playable = _playable_clip_paths(folder)
                         if playable:

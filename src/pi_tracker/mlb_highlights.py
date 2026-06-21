@@ -575,7 +575,7 @@ def _resume_orphan_transcodes(dest_dir: Path, stop: threading.Event) -> Path | N
 
     Returns the finished ``.mp4`` path, or None if nothing to resume.
     """
-    if playback.is_active() or stop.is_set():
+    if playback.is_active() or playback.is_live_break_priority() or stop.is_set():
         return None
     for raw in sorted(dest_dir.glob("*.rawdl")):
         dest = dest_dir / f"{raw.stem}.mp4"
@@ -598,7 +598,7 @@ def _resume_orphan_transcodes(dest_dir: Path, stop: threading.Event) -> Path | N
         except OSError:
             continue
         log.info("resuming transcode for %s (%d KB on disk)", raw.name, kb)
-        playback.wait_for_clip_idle()
+        playback.wait_for_transcode_slot(stop)
         if stop.is_set():
             return None
         playback.transcode_begin()
@@ -673,7 +673,7 @@ def _download_clip(
         playback.download_end()
 
     log.info("downloaded %s (%d KB) — transcoding…", slug, raw.stat().st_size // 1024)
-    playback.wait_for_clip_idle()
+    playback.wait_for_transcode_slot(wait_stop)
     if wait_stop.is_set():
         return None  # leave .rawdl for _resume_orphan_transcodes
 

@@ -344,10 +344,14 @@ def _draw_now_showing_transition(screen: pygame.Surface, title: str) -> None:
     time.sleep(_NOW_SHOWING_HOLD_SEC)
 
 
-def _filter_valid_clip_paths(paths: list[Path]) -> list[Path]:
+def _filter_valid_clip_paths(paths: list[Path], *, validate: bool = True) -> list[Path]:
     good: list[Path] = []
     for path in paths:
-        if path.suffix.lower() == ".mp4" and not is_valid_highlight_mp4(path):
+        if (
+            validate
+            and path.suffix.lower() == ".mp4"
+            and not is_valid_highlight_mp4(path)
+        ):
             logging.warning("skipping corrupt highlight clip: %s", path.name)
             path.unlink(missing_ok=True)
         else:
@@ -420,6 +424,7 @@ def _play_mpv_sequence(
     flags: int,
     *,
     show_transition: bool = False,
+    validate: bool = True,
 ) -> "pygame.Surface":
     """
     Play one or more clips in a single mpv process (one DRM handoff).
@@ -427,8 +432,10 @@ def _play_mpv_sequence(
     mpv plays multiple files back-to-back without exiting — avoids ~15s black
     gaps from pygame quit/init between each clip on the Pi panel.
     """
-    paths = _filter_valid_clip_paths(paths)
+    raw_count = len(paths)
+    paths = _filter_valid_clip_paths(paths, validate=validate)
     if not paths:
+        logging.warning("mpv: no valid clips in batch (skipped %d path(s))", raw_count)
         return screen
 
     size = screen.get_size()
@@ -472,22 +479,6 @@ def _play_mpv(
     return _play_mpv_sequence([path], screen, flags, show_transition=show_transition)
 
 
-def _collect_break_clip_batch(scene: object, state: SharedGameState, first: Path) -> list[Path]:
-    """Gather every clip already on disk for one mpv run (gapless within batch)."""
-    batch = [first]
-    while True:
-        snap = state.snapshot()
-        if not scene.in_inning_break(snap):  # type: ignore[attr-defined]
-            break
-        scene._maybe_queue_clip(snap)  # type: ignore[attr-defined]
-        nxt = scene._pending_clip  # type: ignore[attr-defined]
-        if nxt is None:
-            break
-        batch.append(nxt)
-        scene._pending_clip = None  # type: ignore[attr-defined]
-    return batch
-
-
 def _play_live_break_reel(
     scene: object,
     state: SharedGameState,
@@ -495,21 +486,37 @@ def _play_live_break_reel(
     flags: int,
     first_path: Path,
 ) -> "pygame.Surface":
-    """Chain highlight batches until the half-inning break ends or clips run out."""
+    """Play ready highlight clips one at a time until the half-inning break ends."""
+    playback.set_live_break_priority(True)
+    scene._pending_clip = None  # type: ignore[attr-defined]
     pending: Path | None = first_path
-    while scene.in_inning_break(state.snapshot()):  # type: ignore[attr-defined]
-        if pending is None:
-            scene._maybe_queue_clip(state.snapshot())  # type: ignore[attr-defined]
-            pending = scene._pending_clip  # type: ignore[attr-defined]
+
+    try:
+        while True:
             if pending is None:
-                if playback.is_transcode_busy():
-                    time.sleep(0.25)
-                    continue
+                snap = state.snapshot()
+                if not scene.in_inning_break(snap):  # type: ignore[attr-defined]
+                    break
+                scene._maybe_queue_clip(snap)  # type: ignore[attr-defined]
+                pending = scene._pending_clip  # type: ignore[attr-defined]
+                scene._pending_clip = None  # type: ignore[attr-defined]
+                if pending is None:
+                    break
+
+            # One clip per mpv run — ready .mp4 on disk, skip ffprobe re-check.
+            batch = _filter_valid_clip_paths([pending], validate=False)
+            pending = None
+            if not batch:
+                logging.warning("break reel: clip missing on disk")
+                continue
+
+            screen = _play_mpv_sequence(batch, screen, flags, validate=False)
+
+            if not scene.in_inning_break(state.snapshot()):  # type: ignore[attr-defined]
                 break
-        scene._pending_clip = None  # type: ignore[attr-defined]
-        batch = _collect_break_clip_batch(scene, state, pending)
-        pending = None
-        screen = _play_mpv_sequence(batch, screen, flags)
+    finally:
+        playback.set_live_break_priority(False)
+
     return screen
 
 
@@ -695,18 +702,36 @@ def main() -> None:
             if mouse_hide.kiosk_mode():
                 mouse_hide.apply(screen)
 
-            # Queued clip(s): live breaks batch into one mpv run to avoid DRM black gaps.
+            # Hold background ffmpeg until ready break clips have played.
+            if scene_key == "live":
+                br_snap = state.snapshot()
+                in_br = getattr(scene, "in_inning_break", lambda _s: False)(br_snap) or getattr(
+                    scene, "_break_reel_active", False
+                )
+                playback.set_live_break_priority(
+                    in_br and getattr(scene, "_pending_clip", None) is not None
+                )
+            elif not playback.is_active():
+                playback.set_live_break_priority(False)
+
+            # Queued clip(s): live breaks play one ready clip at a time.
             pending = getattr(scene, "_pending_clip", None)
-            if pending and not playback.is_transcode_busy():
+            if pending:
                 snap = state.snapshot()
-                in_break = scene_key == "live" and getattr(
-                    scene, "in_inning_break", lambda _s: False
-                )(snap)
-                if in_break:
-                    screen = _play_live_break_reel(scene, state, screen, display_flags, pending)
-                else:
-                    scene._pending_clip = None  # type: ignore[attr-defined]
-                    screen = _play_mpv(pending, screen, display_flags)
+                live_scene = scene_key == "live"
+                in_break = live_scene and (
+                    getattr(scene, "in_inning_break", lambda _s: False)(snap)
+                    or getattr(scene, "_break_reel_active", False)
+                )
+                # Clips on disk are ready — don't defer live breaks for background ffmpeg.
+                if in_break or not playback.is_transcode_busy():
+                    if in_break:
+                        screen = _play_live_break_reel(
+                            scene, state, screen, display_flags, pending
+                        )
+                    else:
+                        scene._pending_clip = None  # type: ignore[attr-defined]
+                        screen = _play_mpv(pending, screen, display_flags)
 
             # Boost tick rate while a pygame-rendered GIF animation is running
             # (live event overlays); normal scenes run at the low base FPS.
