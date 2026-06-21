@@ -343,7 +343,13 @@ def _draw_now_showing_transition(screen: pygame.Surface, title: str) -> None:
     time.sleep(_NOW_SHOWING_HOLD_SEC)
 
 
-def _play_mpv(path: Path, screen: pygame.Surface, flags: int) -> "pygame.Surface":
+def _play_mpv(
+    path: Path,
+    screen: pygame.Surface,
+    flags: int,
+    *,
+    show_transition: bool = True,
+) -> "pygame.Surface":
     """
     Hand the display to mpv for one clip, then reclaim it.
 
@@ -356,8 +362,9 @@ def _play_mpv(path: Path, screen: pygame.Surface, flags: int) -> "pygame.Surface
         return screen
 
     size = screen.get_size()
-    title = clip_title_from_path(path)
-    _draw_now_showing_transition(screen, title)
+    if show_transition:
+        title = clip_title_from_path(path)
+        _draw_now_showing_transition(screen, title)
     mouse_hide.apply(screen)
     pygame.display.flip()
     mouse_hide.apply(screen)
@@ -592,11 +599,25 @@ def main() -> None:
             if mouse_hide.kiosk_mode():
                 mouse_hide.apply(screen)
 
-            # If the scene queued a clip for mpv, play it now and reclaim the display.
+            # Queued clip(s): chain back-to-back during live inning breaks.
             pending = getattr(scene, "_pending_clip", None)
             if pending and not playback.is_transcode_busy():
-                scene._pending_clip = None  # type: ignore[attr-defined]
-                screen = _play_mpv(pending, screen, display_flags)
+                while pending and not playback.is_transcode_busy():
+                    scene._pending_clip = None  # type: ignore[attr-defined]
+                    snap = state.snapshot()
+                    in_break = scene_key == "live" and getattr(
+                        scene, "in_inning_break", lambda _s: False
+                    )(snap)
+                    screen = _play_mpv(
+                        pending,
+                        screen,
+                        display_flags,
+                        show_transition=not in_break,
+                    )
+                    if scene_key != "live" or not in_break:
+                        break
+                    scene._maybe_queue_clip(snap)  # type: ignore[attr-defined]
+                    pending = getattr(scene, "_pending_clip", None)
 
             # Boost tick rate while a pygame-rendered GIF animation is running
             # (live event overlays); normal scenes run at the low base FPS.

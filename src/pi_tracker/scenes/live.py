@@ -136,7 +136,7 @@ class LiveScene:
 
     def __init__(self) -> None:
         self._last_inning_state: str = ""
-        self._break_clip_done: bool = False
+        self._break_prefer_tiered: bool = True
         self._played_clips: set[str] = set()
         self._pending_clip: Path | None = None  # consumed by app.py → mpv
 
@@ -148,61 +148,79 @@ class LiveScene:
         self._anim_done = True
 
     # ------------------------------------------------------------------
-    # Between-innings highlight queueing
+    # Between-innings highlight reel (continuous until play resumes)
     # ------------------------------------------------------------------
 
-    def _maybe_queue_clip(self, state: dict[str, Any]) -> None:
-        """Queue a highlight at each inning break (prefer clips from the half that just ended)."""
-        if self._pending_clip is not None:
-            self._last_inning_state = str(state.get("inning_state", "")).lower()
-            return
+    @staticmethod
+    def in_inning_break(state: dict[str, Any]) -> bool:
+        return str(state.get("inning_state", "")).lower() in _INNING_BREAK_STATES
 
+    def _pick_next_break_clip(
+        self,
+        state: dict[str, Any],
+        playable: list[Path],
+        *,
+        tiered: bool,
+    ) -> Path | None:
+        """Next clip for the break reel; first pick prefers the half that just ended."""
         inning_state = str(state.get("inning_state", "")).lower()
-        game_pk = int(state.get("live_game_pk") or 0)
+        path: Path | None = None
+        if tiered:
+            ended_inn, ended_half = ended_half_before_break(inning_state, state)
+            path = pick_break_highlight(
+                self._played_clips,
+                ended_inn,
+                ended_half,
+                playable_paths=playable,
+            )
+        if path is None:
+            unseen = [p for p in sorted(playable) if p.name not in self._played_clips]
+            if not unseen:
+                self._played_clips.clear()
+                unseen = sorted(playable)
+            if unseen:
+                path = unseen[0]
+        return path
 
-        if inning_state in _INNING_BREAK_STATES:
-            if inning_state != self._last_inning_state:
-                self._break_clip_done = False
-            if not self._break_clip_done and game_pk:
-                folder = config.GAME_HIGHLIGHTS_DIR / str(game_pk)
-                if folder.is_dir():
-                    if game_highlights_blocked(folder, block_download=False):
-                        log.debug(
-                            "inning break (%s): waiting for transcode before highlight",
-                            inning_state,
-                        )
-                    else:
-                        playable = _playable_clip_paths(folder)
-                        ended_inn, ended_half = ended_half_before_break(inning_state, state)
-                        path = pick_break_highlight(
-                            self._played_clips,
-                            ended_inn,
-                            ended_half,
-                            playable_paths=playable,
-                        )
-                        if path is None:
-                            for candidate in sorted(playable):
-                                if candidate.name not in self._played_clips:
-                                    path = candidate
-                                    break
-                        if path is not None:
-                            self._played_clips.add(path.name)
-                            self._pending_clip = path
-                            log.info(
-                                "inning break (%s): queued %s (%d clips on disk)",
+    def _maybe_queue_clip(self, state: dict[str, Any]) -> None:
+        """Queue highlights during inning breaks; app.py chains mpv until play resumes."""
+        inning_state = str(state.get("inning_state", "")).lower()
+
+        if self.in_inning_break(state):
+            if self._last_inning_state not in _INNING_BREAK_STATES:
+                self._break_prefer_tiered = True
+            if self._pending_clip is None:
+                game_pk = int(state.get("live_game_pk") or 0)
+                if game_pk:
+                    folder = config.GAME_HIGHLIGHTS_DIR / str(game_pk)
+                    if folder.is_dir():
+                        if game_highlights_blocked(folder, block_download=False):
+                            log.debug(
+                                "inning break (%s): waiting for transcode",
                                 inning_state,
-                                path.name,
-                                len(playable),
                             )
                         else:
-                            log.info(
-                                "inning break (%s): no unplayed clips (%d on disk)",
-                                inning_state,
-                                len(playable),
-                            )
-                        self._break_clip_done = True
+                            playable = _playable_clip_paths(folder)
+                            if playable:
+                                path = self._pick_next_break_clip(
+                                    state,
+                                    playable,
+                                    tiered=self._break_prefer_tiered,
+                                )
+                                if self._break_prefer_tiered:
+                                    self._break_prefer_tiered = False
+                                if path is not None:
+                                    self._played_clips.add(path.name)
+                                    self._pending_clip = path
+                                    log.info(
+                                        "inning break (%s): queued %s",
+                                        inning_state,
+                                        path.name,
+                                    )
         else:
-            self._break_clip_done = False
+            if self._last_inning_state in _INNING_BREAK_STATES:
+                log.debug("inning break ended (%s → %s)", self._last_inning_state, inning_state)
+            self._break_prefer_tiered = True
 
         self._last_inning_state = inning_state
 
