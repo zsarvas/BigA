@@ -31,15 +31,15 @@ def is_game_highlight_folder(folder: Path) -> bool:
 
 def game_highlights_blocked(folder: Path) -> bool:
     """
-    Game clips should not play while a download/transcode is actively running.
+    Game clips should not play while a download or transcode is actively running.
 
-    Stale ``.rawdl`` / ``.tmp`` files from a crashed download are swept
-    automatically — they do not block playback after reboot.
-    Bundled ``idle_videos/`` clips are never blocked here.
+    Stale ``.rawdl`` / ``.tmp`` files from a crashed job are swept automatically —
+    they do not block playback after reboot.  Bundled ``idle_videos/`` clips are
+    never blocked here (but mpv is still deferred while ffmpeg transcodes).
     """
     if not is_game_highlight_folder(folder):
         return False
-    if playback.is_download_busy():
+    if playback.is_download_busy() or playback.is_transcode_busy():
         return True
     sweep_incomplete_highlights(folder)
     return False
@@ -178,6 +178,9 @@ class ClipPlayerMixin:
             return
 
         if folder and folder.is_dir():
+            # ffmpeg and mpv both hammer the Zero 2W — never overlap transcode + playback.
+            if playback.is_transcode_busy():
+                return
             blocked = block_on_download and game_highlights_blocked(folder)
             if blocked:
                 return  # retry next frame; don't reset the play timer

@@ -306,6 +306,9 @@ def _configure_logging() -> None:
 
 _NOW_SHOWING_COLOR = (255, 50, 50)
 _NOW_SHOWING_HOLD_SEC = 0.5
+_MPV_LOG = Path("/tmp/biga-mpv.log")
+# Brief pause after mpv exits so vo=drm releases KMS master before pygame KMSDRM init.
+_MPV_DRM_HANDOFF_SEC = 0.2
 
 
 def _draw_now_showing_transition(screen: pygame.Surface, title: str) -> None:
@@ -357,7 +360,16 @@ def _play_mpv(path: Path, screen: pygame.Surface, flags: int) -> "pygame.Surface
     import platform
     on_pi = platform.system() == "Linux"
     w, h = size
-    cmd = ["mpv", "--really-quiet", "--osd-level=0", "--cursor-autohide=always", "--input-cursor=no"]
+    cmd = [
+        "mpv",
+        "--quiet",
+        "--osd-level=0",
+        "--cursor-autohide=always",
+        "--input-cursor=no",
+        f"--log-file={_MPV_LOG}",
+        # Bookworm mpv lacks --log-file-level; --msg-level works on older builds too.
+        "--msg-level=cplayer=warn,vo=warn,vd=warn,ao=warn,ffmpeg=warn",
+    ]
     if on_pi:
         # Native DRM mode + hw decode; panscan zooms to fill (crop edges, no stretch).
         cmd += [
@@ -365,6 +377,7 @@ def _play_mpv(path: Path, screen: pygame.Surface, flags: int) -> "pygame.Surface
             "--drm-device=/dev/dri/card0",
             f"--drm-mode={w}x{h}",
             "--hwdec=v4l2m2m",
+            "--hwdec-software-fallback=yes",
             "--vd-lavc-threads=4",
             "--panscan=1.0",
         ]
@@ -373,7 +386,8 @@ def _play_mpv(path: Path, screen: pygame.Surface, flags: int) -> "pygame.Surface
     if is_muted():
         cmd.append("--no-audio")
     else:
-        cmd.append("--ao=alsa")
+        # null fallback avoids ALSA teardown glitches that can yield mpv exit code 2.
+        cmd.append("--ao=alsa,null")
     cmd.append(str(path))
     logging.info("mpv launching: %s  cmd=%s", path.name, " ".join(cmd))
     # Pause all background polling threads so the Pi's CPU is free for decode.
@@ -381,10 +395,18 @@ def _play_mpv(path: Path, screen: pygame.Surface, flags: int) -> "pygame.Surface
     try:
         result = subprocess.run(cmd, timeout=600, capture_output=True, text=True)
         if result.returncode not in (0, 4):  # 4 = quit by user
+            log_tail = ""
+            try:
+                log_tail = _MPV_LOG.read_text(errors="replace")[-2000:]
+            except OSError:
+                pass
             logging.warning(
-                "mpv exited %d for %s\nstdout: %s\nstderr: %s",
-                result.returncode, path.name,
-                result.stdout[-500:], result.stderr[-500:],
+                "mpv exited %d for %s\nstdout: %s\nstderr: %s\nmpv log: %s",
+                result.returncode,
+                path.name,
+                result.stdout[-500:],
+                result.stderr[-500:],
+                log_tail[-1000:] or "(empty)",
             )
         elif result.stderr.strip():
             logging.debug("mpv stderr: %s", result.stderr[-300:])
@@ -396,6 +418,8 @@ def _play_mpv(path: Path, screen: pygame.Surface, flags: int) -> "pygame.Surface
         logging.warning("mpv error: %s", exc)
     finally:
         playback.end()
+    if on_pi:
+        time.sleep(_MPV_DRM_HANDOFF_SEC)
     pygame.display.init()
     screen = pygame.display.set_mode(size, flags)
     mouse_hide.handoff_from_mpv(screen, fill=config.BLACK)
@@ -565,7 +589,7 @@ def main() -> None:
 
             # If the scene queued a clip for mpv, play it now and reclaim the display.
             pending = getattr(scene, "_pending_clip", None)
-            if pending:
+            if pending and not playback.is_transcode_busy():
                 scene._pending_clip = None  # type: ignore[attr-defined]
                 screen = _play_mpv(pending, screen, display_flags)
 
