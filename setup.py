@@ -207,13 +207,18 @@ def _install_splash(repo: str, boot_dir: str) -> None:
         "vt.global_cursor_default=0",
         "systemd.show_status=0",    # suppress "failed to start X" boot messages
         "rd.systemd.show_status=0", # same for initrd phase
-        "plymouth.use-drm=1",       # force Plymouth onto KMS/DRM so colours match
+        # NOTE: plymouth.use-drm=1 breaks script themes on vc4-kms-dpi-generic
+        # (shows three dots / black instead of the Angels logo). Do not add it.
     }
     # strip any existing conflicting values then append ours
-    cleaned = [t for t in tokens if t not in quiet_tokens
-               and not t.startswith("loglevel=")
-               and not t.startswith("systemd.show_status=")
-               and not t.startswith("rd.systemd.show_status=")]
+    cleaned = [
+        t for t in tokens
+        if t not in quiet_tokens
+        and not t.startswith("loglevel=")
+        and not t.startswith("systemd.show_status=")
+        and not t.startswith("rd.systemd.show_status=")
+        and not t.startswith("plymouth.use-drm=")
+    ]
     new_cmdline = " ".join(cleaned + sorted(quiet_tokens)) + "\n"
 
     tmp = "/tmp/biga-cmdline.txt"
@@ -360,8 +365,10 @@ while [ ! -e /dev/dri/card0 ] && [ ! -e /dev/dri/card1 ] && [ "$i" -lt 20 ]; do
   sleep 1
 done
 ls -l /dev/dri/card* /dev/fb0 2>&1 || true
-# Clear any text left on tty2 (login prompt residue) before switching to it.
-printf '\\033[2J\\033[H' > /dev/tty2 2>/dev/null || true
+# Hand off Plymouth splash to the app (boot only — no-op on systemctl restart).
+if [ -e /run/plymouth/pid ]; then
+  /usr/bin/plymouth quit --retain-splash 2>/dev/null || true
+fi
 # -s switches the active VT to tty2 as part of starting the process (no separate chvt needed).
 exec /usr/bin/openvt -c 2 -s -f -w -- /bin/sh -c "/usr/bin/python3 {REPO}/run_pi_ui.py >>/tmp/biga.log 2>&1; echo PYEXIT=$? >>/tmp/biga.log"
 """

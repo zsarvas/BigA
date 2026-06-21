@@ -100,3 +100,34 @@ def wait_while_active(stop: threading.Event, poll: float = 0.25) -> None:
 def wait_for_clip_idle(poll: float = 0.25) -> None:
     """Block until mpv clip playback finishes (used before heavy ffmpeg work)."""
     wait_while_active(threading.Event(), poll)
+
+
+_live_break_priority = False
+_live_break_lock = threading.Lock()
+
+
+def set_live_break_priority(active: bool) -> None:
+    """True while live half-inning break clips should play before background ffmpeg."""
+    global _live_break_priority
+    with _live_break_lock:
+        _live_break_priority = active
+
+
+def is_live_break_priority() -> bool:
+    with _live_break_lock:
+        return _live_break_priority
+
+
+def wait_for_transcode_slot(stop: threading.Event | None = None, poll: float = 0.25) -> None:
+    """
+    Block until mpv is idle and no live break reel is waiting to play.
+
+    Background ffmpeg should not compete with ready-to-play highlight clips.
+    """
+    wait = stop or threading.Event()
+    while not wait.is_set():
+        with _live_break_lock:
+            blocked = _active.is_set() or _live_break_priority
+        if not blocked:
+            return
+        wait.wait(poll)
