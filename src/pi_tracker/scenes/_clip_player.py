@@ -29,17 +29,22 @@ def is_game_highlight_folder(folder: Path) -> bool:
     return folder.is_dir()
 
 
-def game_highlights_blocked(folder: Path) -> bool:
+def game_highlights_blocked(folder: Path, *, block_download: bool = True) -> bool:
     """
     Game clips should not play while a download or transcode is actively running.
 
     Stale ``.rawdl`` / ``.tmp`` files from a crashed job are swept automatically —
     they do not block playback after reboot.  Bundled ``idle_videos/`` clips are
     never blocked here (but mpv is still deferred while ffmpeg transcodes).
+
+    *block_download* — when False (live inning breaks), finished clips may queue
+    during a background network fetch; ffmpeg transcode still blocks.
     """
     if not is_game_highlight_folder(folder):
         return False
-    if playback.is_download_busy() or playback.is_transcode_busy():
+    if playback.is_transcode_busy():
+        return True
+    if block_download and playback.is_download_busy():
         return True
     sweep_incomplete_highlights(folder)
     return False

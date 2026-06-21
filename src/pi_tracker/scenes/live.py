@@ -6,12 +6,16 @@ from typing import Any
 
 import pygame
 
+import logging
+
 from .. import config
 from ..assets import AssetManager, StreamingGif, scale_surface
 from ..drawing.diamond import draw_diamond
 from .linescore_table import compute_linescore_geometry, draw_linescore_table_centered
 from ._clip_player import _playable_clip_paths, game_highlights_blocked
 from ..highlight_meta import ended_half_before_break, pick_break_highlight
+
+log = logging.getLogger(__name__)
 
 # inning_state values that indicate a break (MLB feed uses Middle / Between).
 _INNING_BREAK_STATES = frozenset({"middle", "between"})
@@ -132,6 +136,7 @@ class LiveScene:
 
     def __init__(self) -> None:
         self._last_inning_state: str = ""
+        self._break_clip_done: bool = False
         self._played_clips: set[str] = set()
         self._pending_clip: Path | None = None  # consumed by app.py → mpv
 
@@ -149,32 +154,56 @@ class LiveScene:
     def _maybe_queue_clip(self, state: dict[str, Any]) -> None:
         """Queue a highlight at each inning break (prefer clips from the half that just ended)."""
         if self._pending_clip is not None:
+            self._last_inning_state = str(state.get("inning_state", "")).lower()
             return
+
         inning_state = str(state.get("inning_state", "")).lower()
         game_pk = int(state.get("live_game_pk") or 0)
-        if (
-            inning_state in _INNING_BREAK_STATES
-            and inning_state != self._last_inning_state
-            and game_pk
-        ):
-            folder = config.GAME_HIGHLIGHTS_DIR / str(game_pk)
-            if folder.is_dir() and not game_highlights_blocked(folder):
-                playable = _playable_clip_paths(folder)
-                ended_inn, ended_half = ended_half_before_break(inning_state, state)
-                path = pick_break_highlight(
-                    self._played_clips,
-                    ended_inn,
-                    ended_half,
-                    playable_paths=playable,
-                )
-                if path is None:
-                    for candidate in sorted(playable):
-                        if candidate.name not in self._played_clips:
-                            path = candidate
-                            break
-                if path is not None:
-                    self._played_clips.add(path.name)
-                    self._pending_clip = path
+
+        if inning_state in _INNING_BREAK_STATES:
+            if inning_state != self._last_inning_state:
+                self._break_clip_done = False
+            if not self._break_clip_done and game_pk:
+                folder = config.GAME_HIGHLIGHTS_DIR / str(game_pk)
+                if folder.is_dir():
+                    if game_highlights_blocked(folder, block_download=False):
+                        log.debug(
+                            "inning break (%s): waiting for transcode before highlight",
+                            inning_state,
+                        )
+                    else:
+                        playable = _playable_clip_paths(folder)
+                        ended_inn, ended_half = ended_half_before_break(inning_state, state)
+                        path = pick_break_highlight(
+                            self._played_clips,
+                            ended_inn,
+                            ended_half,
+                            playable_paths=playable,
+                        )
+                        if path is None:
+                            for candidate in sorted(playable):
+                                if candidate.name not in self._played_clips:
+                                    path = candidate
+                                    break
+                        if path is not None:
+                            self._played_clips.add(path.name)
+                            self._pending_clip = path
+                            log.info(
+                                "inning break (%s): queued %s (%d clips on disk)",
+                                inning_state,
+                                path.name,
+                                len(playable),
+                            )
+                        else:
+                            log.info(
+                                "inning break (%s): no unplayed clips (%d on disk)",
+                                inning_state,
+                                len(playable),
+                            )
+                        self._break_clip_done = True
+        else:
+            self._break_clip_done = False
+
         self._last_inning_state = inning_state
 
     # ------------------------------------------------------------------
