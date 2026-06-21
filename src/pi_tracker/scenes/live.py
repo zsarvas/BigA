@@ -13,12 +13,30 @@ from ..assets import AssetManager, StreamingGif, scale_surface
 from ..drawing.diamond import draw_diamond
 from .linescore_table import compute_linescore_geometry, draw_linescore_table_centered
 from ._clip_player import _playable_clip_paths, game_highlights_blocked
-from ..highlight_meta import ended_half_before_break, pick_break_highlight
+from ..highlight_meta import pick_break_highlight
 
 log = logging.getLogger(__name__)
 
-# inning_state values that indicate a break (MLB feed uses Middle / Between).
+# MLB linescore.inningState during commercial breaks (may be brief or skipped).
 _INNING_BREAK_STATES = frozenset({"middle", "between"})
+_UNSET_HALF_KEY: tuple[int, str] | None = None
+
+
+def _half_key(state: dict[str, Any]) -> tuple[int, str]:
+    """Current (inning number, top|bottom) from the live feed."""
+    try:
+        inn = int(state.get("inning") or 0)
+    except (TypeError, ValueError):
+        inn = 0
+    half = str(state.get("inning_half", "top")).lower()
+    if half not in ("top", "bottom"):
+        half = "top"
+    return inn, half
+
+
+def _at_bat_underway(state: dict[str, Any]) -> bool:
+    """True once the new half has an active plate appearance (first pitch thrown)."""
+    return int(state.get("balls") or 0) + int(state.get("strikes") or 0) > 0
 
 # Tiny caps beside P:/B: (fielding team pitches; batting team at plate).
 PB_LOGO_SIZE = (16, 16)
@@ -135,7 +153,9 @@ class LiveScene:
     """Live scoreboard; vertical positions scale with ``config.SCREEN_HEIGHT``."""
 
     def __init__(self) -> None:
-        self._last_inning_state: str = ""
+        self._last_half_key: tuple[int, str] | None = _UNSET_HALF_KEY
+        self._break_reel_active: bool = False
+        self._ended_half_key: tuple[int, str] = (0, "")
         self._break_prefer_tiered: bool = True
         self._played_clips: set[str] = set()
         self._pending_clip: Path | None = None  # consumed by app.py → mpv
@@ -148,28 +168,38 @@ class LiveScene:
         self._anim_done = True
 
     # ------------------------------------------------------------------
-    # Between-innings highlight reel (continuous until play resumes)
+    # Half-inning break reel (continuous until the next half starts)
     # ------------------------------------------------------------------
 
-    @staticmethod
-    def in_inning_break(state: dict[str, Any]) -> bool:
-        return str(state.get("inning_state", "")).lower() in _INNING_BREAK_STATES
+    def in_inning_break(self, state: dict[str, Any]) -> bool:
+        """
+        True during commercial time after any half-inning ends.
+
+        Triggered on (inning, half) changes — e.g. top 4th → bottom 4th — not
+        only on full-inning ``between`` states.  Keeps rolling until the first
+        pitch of the new half.
+        """
+        st = str(state.get("inning_state", "")).lower()
+        if st in _INNING_BREAK_STATES:
+            return True
+        if self._break_reel_active and not _at_bat_underway(state):
+            return True
+        return False
 
     def _pick_next_break_clip(
         self,
-        state: dict[str, Any],
         playable: list[Path],
         *,
         tiered: bool,
+        ended_inning: int,
+        ended_half: str,
     ) -> Path | None:
-        """Next clip for the break reel; first pick prefers the half that just ended."""
-        inning_state = str(state.get("inning_state", "")).lower()
+        """Next clip; first pick of each break prefers the half that just ended."""
         path: Path | None = None
-        if tiered:
-            ended_inn, ended_half = ended_half_before_break(inning_state, state)
+        if tiered and ended_inning >= 1 and ended_half:
             path = pick_break_highlight(
                 self._played_clips,
-                ended_inn,
+                ended_inning,
                 ended_half,
                 playable_paths=playable,
             )
@@ -183,46 +213,58 @@ class LiveScene:
         return path
 
     def _maybe_queue_clip(self, state: dict[str, Any]) -> None:
-        """Queue highlights during inning breaks; app.py chains mpv until play resumes."""
-        inning_state = str(state.get("inning_state", "")).lower()
+        """Queue highlights on every half-inning change; app.py chains until first pitch."""
+        key = _half_key(state)
+        st = str(state.get("inning_state", "")).lower()
 
-        if self.in_inning_break(state):
-            if self._last_inning_state not in _INNING_BREAK_STATES:
-                self._break_prefer_tiered = True
-            if self._pending_clip is None:
-                game_pk = int(state.get("live_game_pk") or 0)
-                if game_pk:
-                    folder = config.GAME_HIGHLIGHTS_DIR / str(game_pk)
-                    if folder.is_dir():
-                        if game_highlights_blocked(folder, block_download=False):
-                            log.debug(
-                                "inning break (%s): waiting for transcode",
-                                inning_state,
-                            )
-                        else:
-                            playable = _playable_clip_paths(folder)
-                            if playable:
-                                path = self._pick_next_break_clip(
-                                    state,
-                                    playable,
-                                    tiered=self._break_prefer_tiered,
-                                )
-                                if self._break_prefer_tiered:
-                                    self._break_prefer_tiered = False
-                                if path is not None:
-                                    self._played_clips.add(path.name)
-                                    self._pending_clip = path
-                                    log.info(
-                                        "inning break (%s): queued %s",
-                                        inning_state,
-                                        path.name,
-                                    )
-        else:
-            if self._last_inning_state in _INNING_BREAK_STATES:
-                log.debug("inning break ended (%s → %s)", self._last_inning_state, inning_state)
+        if self._last_half_key is not None and key != self._last_half_key and key[0] > 0:
+            self._break_reel_active = True
+            self._break_prefer_tiered = True
+            self._ended_half_key = self._last_half_key
+            log.info(
+                "half-inning change: %s%s → %s%s (state=%s)",
+                self._last_half_key[0],
+                self._last_half_key[1][:1].upper(),
+                key[0],
+                key[1][:1].upper(),
+                st,
+            )
+        self._last_half_key = key
+
+        if _at_bat_underway(state) and st not in _INNING_BREAK_STATES:
+            if self._break_reel_active:
+                log.debug("break reel ended — at-bat underway (%s%s)", key[0], key[1][:1].upper())
+            self._break_reel_active = False
             self._break_prefer_tiered = True
 
-        self._last_inning_state = inning_state
+        if self.in_inning_break(state) and self._pending_clip is None:
+            game_pk = int(state.get("live_game_pk") or 0)
+            if game_pk:
+                folder = config.GAME_HIGHLIGHTS_DIR / str(game_pk)
+                if folder.is_dir():
+                    if game_highlights_blocked(folder, block_download=False):
+                        log.debug("half-inning break: waiting for transcode")
+                    else:
+                        playable = _playable_clip_paths(folder)
+                        if playable:
+                            ended_inn, ended_half = self._ended_half_key
+                            path = self._pick_next_break_clip(
+                                playable,
+                                tiered=self._break_prefer_tiered,
+                                ended_inning=ended_inn,
+                                ended_half=ended_half,
+                            )
+                            if self._break_prefer_tiered:
+                                self._break_prefer_tiered = False
+                            if path is not None:
+                                self._played_clips.add(path.name)
+                                self._pending_clip = path
+                                log.info(
+                                    "half-inning break: queued %s (ended %s%s)",
+                                    path.name,
+                                    ended_inn,
+                                    ended_half[:1].upper() if ended_half else "?",
+                                )
 
     # ------------------------------------------------------------------
     # Canned GIF animations triggered by in-game events
