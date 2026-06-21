@@ -19,6 +19,7 @@ from __future__ import annotations
 import datetime
 import logging
 import os
+import platform
 import subprocess
 import sys
 import textwrap
@@ -343,35 +344,18 @@ def _draw_now_showing_transition(screen: pygame.Surface, title: str) -> None:
     time.sleep(_NOW_SHOWING_HOLD_SEC)
 
 
-def _play_mpv(
-    path: Path,
-    screen: pygame.Surface,
-    flags: int,
-    *,
-    show_transition: bool = True,
-) -> "pygame.Surface":
-    """
-    Hand the display to mpv for one clip, then reclaim it.
+def _filter_valid_clip_paths(paths: list[Path]) -> list[Path]:
+    good: list[Path] = []
+    for path in paths:
+        if path.suffix.lower() == ".mp4" and not is_valid_highlight_mp4(path):
+            logging.warning("skipping corrupt highlight clip: %s", path.name)
+            path.unlink(missing_ok=True)
+        else:
+            good.append(path)
+    return good
 
-    On Pi: DRM output at native panel resolution + V4L2 hardware decode (smooth
-    on Zero 2W).  Mac/dev: auto hwdec + panscan fill.
-    """
-    if path.suffix.lower() == ".mp4" and not is_valid_highlight_mp4(path):
-        logging.warning("skipping corrupt highlight clip: %s", path.name)
-        path.unlink(missing_ok=True)
-        return screen
 
-    size = screen.get_size()
-    if show_transition:
-        title = clip_title_from_path(path)
-        _draw_now_showing_transition(screen, title)
-    mouse_hide.apply(screen)
-    pygame.display.flip()
-    mouse_hide.apply(screen)
-    pygame.display.quit()
-    import platform
-    on_pi = platform.system() == "Linux"
-    w, h = size
+def _mpv_cmd(w: int, h: int, *, on_pi: bool) -> list[str]:
     cmd = [
         "mpv",
         "--quiet",
@@ -379,11 +363,9 @@ def _play_mpv(
         "--cursor-autohide=always",
         "--input-cursor=no",
         f"--log-file={_MPV_LOG}",
-        # Bookworm mpv lacks --log-file-level; --msg-level works on older builds too.
         "--msg-level=cplayer=warn,vo=warn,vd=warn,ao=warn,ffmpeg=warn",
     ]
     if on_pi:
-        # Native DRM mode + hw decode; panscan zooms to fill (crop edges, no stretch).
         cmd += [
             "--vo=drm",
             "--drm-device=/dev/dri/card0",
@@ -398,15 +380,15 @@ def _play_mpv(
     if is_muted():
         cmd.append("--no-audio")
     else:
-        # null fallback avoids ALSA teardown glitches that can yield mpv exit code 2.
         cmd.append("--ao=alsa,null")
-    cmd.append(str(path))
-    logging.info("mpv launching: %s  cmd=%s", path.name, " ".join(cmd))
-    # Pause all background polling threads so the Pi's CPU is free for decode.
+    return cmd
+
+
+def _run_mpv_subprocess(cmd: list[str], label: str) -> None:
     playback.begin()
     try:
-        result = subprocess.run(cmd, timeout=600, capture_output=True, text=True)
-        if result.returncode not in (0, 4):  # 4 = quit by user
+        result = subprocess.run(cmd, timeout=3600, capture_output=True, text=True)
+        if result.returncode not in (0, 4):
             log_tail = ""
             try:
                 log_tail = _MPV_LOG.read_text(errors="replace")[-2000:]
@@ -415,7 +397,7 @@ def _play_mpv(
             logging.warning(
                 "mpv exited %d for %s\nstdout: %s\nstderr: %s\nmpv log: %s",
                 result.returncode,
-                path.name,
+                label,
                 result.stdout[-500:],
                 result.stderr[-500:],
                 log_tail[-1000:] or "(empty)",
@@ -423,18 +405,111 @@ def _play_mpv(
         elif result.stderr.strip():
             logging.debug("mpv stderr: %s", result.stderr[-300:])
     except FileNotFoundError:
-        logging.warning("mpv not found — skipping clip %s", path.name)
+        logging.warning("mpv not found — skipping %s", label)
     except subprocess.TimeoutExpired:
-        logging.warning("mpv timed out on %s", path.name)
+        logging.warning("mpv timed out on %s", label)
     except Exception as exc:  # noqa: BLE001
         logging.warning("mpv error: %s", exc)
     finally:
         playback.end()
+
+
+def _play_mpv_sequence(
+    paths: list[Path],
+    screen: pygame.Surface,
+    flags: int,
+    *,
+    show_transition: bool = False,
+) -> "pygame.Surface":
+    """
+    Play one or more clips in a single mpv process (one DRM handoff).
+
+    mpv plays multiple files back-to-back without exiting — avoids ~15s black
+    gaps from pygame quit/init between each clip on the Pi panel.
+    """
+    paths = _filter_valid_clip_paths(paths)
+    if not paths:
+        return screen
+
+    size = screen.get_size()
+    if show_transition:
+        _draw_now_showing_transition(screen, clip_title_from_path(paths[0]))
+    mouse_hide.apply(screen)
+    pygame.display.flip()
+    mouse_hide.apply(screen)
+    pygame.display.quit()
+
+    on_pi = platform.system() == "Linux"
+    w, h = size
+    cmd = _mpv_cmd(w, h, on_pi=on_pi) + [str(p) for p in paths]
+    if len(paths) == 1:
+        logging.info("mpv launching: %s", paths[0].name)
+    else:
+        logging.info(
+            "mpv launching %d-clip sequence: %s",
+            len(paths),
+            ", ".join(p.name for p in paths[:4]) + ("…" if len(paths) > 4 else ""),
+        )
+
+    _run_mpv_subprocess(cmd, paths[0].name if len(paths) == 1 else f"{len(paths)} clips")
+
     if on_pi:
         time.sleep(_MPV_DRM_HANDOFF_SEC)
     pygame.display.init()
     screen = pygame.display.set_mode(size, flags)
     mouse_hide.handoff_from_mpv(screen, fill=config.BLACK)
+    return screen
+
+
+def _play_mpv(
+    path: Path,
+    screen: pygame.Surface,
+    flags: int,
+    *,
+    show_transition: bool = True,
+) -> "pygame.Surface":
+    """Hand the display to mpv for one clip, then reclaim it."""
+    return _play_mpv_sequence([path], screen, flags, show_transition=show_transition)
+
+
+def _collect_break_clip_batch(scene: object, state: SharedGameState, first: Path) -> list[Path]:
+    """Gather every clip already on disk for one mpv run (gapless within batch)."""
+    batch = [first]
+    while True:
+        snap = state.snapshot()
+        if not scene.in_inning_break(snap):  # type: ignore[attr-defined]
+            break
+        scene._maybe_queue_clip(snap)  # type: ignore[attr-defined]
+        nxt = scene._pending_clip  # type: ignore[attr-defined]
+        if nxt is None:
+            break
+        batch.append(nxt)
+        scene._pending_clip = None  # type: ignore[attr-defined]
+    return batch
+
+
+def _play_live_break_reel(
+    scene: object,
+    state: SharedGameState,
+    screen: pygame.Surface,
+    flags: int,
+    first_path: Path,
+) -> "pygame.Surface":
+    """Chain highlight batches until the half-inning break ends or clips run out."""
+    pending: Path | None = first_path
+    while scene.in_inning_break(state.snapshot()):  # type: ignore[attr-defined]
+        if pending is None:
+            scene._maybe_queue_clip(state.snapshot())  # type: ignore[attr-defined]
+            pending = scene._pending_clip  # type: ignore[attr-defined]
+            if pending is None:
+                if playback.is_transcode_busy():
+                    time.sleep(0.25)
+                    continue
+                break
+        scene._pending_clip = None  # type: ignore[attr-defined]
+        batch = _collect_break_clip_batch(scene, state, pending)
+        pending = None
+        screen = _play_mpv_sequence(batch, screen, flags)
     return screen
 
 
@@ -599,25 +674,18 @@ def main() -> None:
             if mouse_hide.kiosk_mode():
                 mouse_hide.apply(screen)
 
-            # Queued clip(s): chain back-to-back during live inning breaks.
+            # Queued clip(s): live breaks batch into one mpv run to avoid DRM black gaps.
             pending = getattr(scene, "_pending_clip", None)
             if pending and not playback.is_transcode_busy():
-                while pending and not playback.is_transcode_busy():
+                snap = state.snapshot()
+                in_break = scene_key == "live" and getattr(
+                    scene, "in_inning_break", lambda _s: False
+                )(snap)
+                if in_break:
+                    screen = _play_live_break_reel(scene, state, screen, display_flags, pending)
+                else:
                     scene._pending_clip = None  # type: ignore[attr-defined]
-                    snap = state.snapshot()
-                    in_break = scene_key == "live" and getattr(
-                        scene, "in_inning_break", lambda _s: False
-                    )(snap)
-                    screen = _play_mpv(
-                        pending,
-                        screen,
-                        display_flags,
-                        show_transition=not in_break,
-                    )
-                    if scene_key != "live" or not in_break:
-                        break
-                    scene._maybe_queue_clip(snap)  # type: ignore[attr-defined]
-                    pending = getattr(scene, "_pending_clip", None)
+                    screen = _play_mpv(pending, screen, display_flags)
 
             # Boost tick rate while a pygame-rendered GIF animation is running
             # (live event overlays); normal scenes run at the low base FPS.
