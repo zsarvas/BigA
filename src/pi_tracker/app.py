@@ -367,7 +367,8 @@ def _play_mpv(path: Path, screen: pygame.Surface, flags: int) -> "pygame.Surface
         "--cursor-autohide=always",
         "--input-cursor=no",
         f"--log-file={_MPV_LOG}",
-        "--log-file-level=warn",
+        # Bookworm mpv lacks --log-file-level; --msg-level works on older builds too.
+        "--msg-level=cplayer=warn,vo=warn,vd=warn,ao=warn,ffmpeg=warn",
     ]
     if on_pi:
         # Native DRM mode + hw decode; panscan zooms to fill (crop edges, no stretch).
