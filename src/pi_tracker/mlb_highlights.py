@@ -201,10 +201,8 @@ def count_playable_game_highlights() -> int:
         if not sub.is_dir() or not sub.name.isdigit():
             continue
         for p in sub.glob("*.mp4"):
-            low = p.name.lower()
-            if ".raw" in low or ".tmp" in low:
-                continue
-            n += 1
+            if is_valid_highlight_mp4(p):
+                n += 1
     return n
 
 
@@ -299,44 +297,132 @@ def game_highlights_dir(game_pk: int) -> Path:
     return d
 
 
-def sweep_incomplete_highlights(folder: Path, *, stale_after_sec: float = 120) -> int:
-    """
-    Delete abandoned partial downloads (``.rawdl``, ``*.tc.tmp``, etc.).
+_MIN_MEDIA_BYTES = 2048
+_PROBE_TIMEOUT_SEC = 20
 
-    After a reboot or kill mid-download the in-memory busy flag is clear but
-    these files remain.  While ``is_download_busy()`` is true, nothing is
-    removed.  Otherwise only files whose mtime is older than *stale_after_sec*
-    are removed so a very slow but active write is not deleted.
+
+def _probe_media_ok(path: Path) -> bool:
+    """
+    True when *path* looks like a complete, decodable media file.
+
+    Uses ffprobe when available (Pi transcode path always has it). Partial
+    downloads and power-cut truncations usually fail here (moov atom missing).
+    """
+    import shutil
+    import subprocess as sp
+
+    try:
+        if path.stat().st_size < _MIN_MEDIA_BYTES:
+            return False
+    except OSError:
+        return False
+
+    ffprobe = shutil.which("ffprobe")
+    if not ffprobe:
+        return True  # size-only gate when ffprobe is absent (dev machines)
+
+    try:
+        result = sp.run(
+            [
+                ffprobe,
+                "-v",
+                "error",
+                "-show_entries",
+                "format=duration",
+                "-of",
+                "default=noprint_wrappers=1:nokey=1",
+                str(path),
+            ],
+            capture_output=True,
+            timeout=_PROBE_TIMEOUT_SEC,
+        )
+    except (OSError, sp.TimeoutExpired):
+        return False
+    if result.returncode != 0:
+        return False
+    try:
+        duration = float((result.stdout or b"").decode().strip())
+    except ValueError:
+        return False
+    return duration > 0.1
+
+
+def is_valid_highlight_mp4(path: Path) -> bool:
+    """Finished highlight clip — not a temp name and passes ffprobe."""
+    low = path.name.lower()
+    if ".raw" in low or ".tmp" in low:
+        return False
+    if path.suffix.lower() != ".mp4":
+        return False
+    return _probe_media_ok(path)
+
+
+def sweep_incomplete_highlights(folder: Path, *, stale_partial_sec: float = 30) -> int:
+    """
+    Remove partial temps, corrupt clips, and abandoned downloads.
+
+    Guardrails after power loss or ``systemctl restart`` mid-transcode:
+
+    * ``*.tc.tmp`` — dropped whenever ffmpeg is not running
+    * corrupt ``*.mp4`` — ffprobe failure → delete (re-download or resume from raw)
+    * ``*.rawdl`` — kept when ffprobe-valid (ready to resume transcode); invalid
+      partial downloads removed (very fresh partials kept while download_busy)
     """
     if not folder.is_dir():
         return 0
     if playback.is_download_busy() or playback.is_transcode_busy():
         return 0
+
     now = time.time()
     removed = 0
-    for p in list(folder.iterdir()):
-        if not p.is_file():
-            continue
-        low = p.name.lower()
-        if not (low.endswith(".rawdl") or ".tmp" in low):
-            continue
+
+    for p in list(folder.glob("*.tc.tmp")):
         try:
-            age = now - p.stat().st_mtime
-        except OSError:
+            p.unlink()
+            removed += 1
+            log.info("removed partial transcode temp: %s", p.name)
+        except OSError as exc:
+            log.warning("could not remove transcode temp %s: %s", p.name, exc)
+
+    for p in list(folder.glob("*.mp4")):
+        low = p.name.lower()
+        if ".raw" in low or ".tmp" in low:
             continue
-        if age < stale_after_sec:
-            log.debug(
-                "keeping in-progress highlight file %s (updated %.0fs ago)",
-                p.name,
-                age,
-            )
+        if is_valid_highlight_mp4(p):
             continue
         try:
             p.unlink()
             removed += 1
-            log.info("removed stale incomplete highlight: %s (idle %.0fs)", p.name, age)
+            log.info("removed corrupt highlight mp4: %s", p.name)
         except OSError as exc:
-            log.warning("could not remove incomplete highlight %s: %s", p.name, exc)
+            log.warning("could not remove corrupt mp4 %s: %s", p.name, exc)
+
+    for raw in list(folder.glob("*.rawdl")):
+        dest = folder / f"{raw.stem}.mp4"
+        if dest.exists() and is_valid_highlight_mp4(dest):
+            try:
+                raw.unlink()
+                removed += 1
+                log.info("removed leftover rawdl (mp4 ok): %s", raw.name)
+            except OSError as exc:
+                log.warning("could not remove leftover rawdl %s: %s", raw.name, exc)
+            continue
+        if _probe_media_ok(raw):
+            continue  # complete download waiting for resume — keep at any age
+        try:
+            age = now - raw.stat().st_mtime
+        except OSError:
+            continue
+        if age < stale_partial_sec:
+            log.debug("keeping very fresh partial rawdl %s (%.0fs old)", raw.name, age)
+            continue
+        try:
+            raw.unlink()
+            removed += 1
+            log.info("removed corrupt/partial rawdl: %s", raw.name)
+        except OSError as exc:
+            log.warning("could not remove partial rawdl %s: %s", raw.name, exc)
+
     return removed
 
 
@@ -344,10 +430,7 @@ def log_highlight_folder_status(folder: Path) -> None:
     """One-line summary for telling active downloads from stuck orphans."""
     if not folder.is_dir():
         return
-    mp4s = [
-        p for p in folder.glob("*.mp4")
-        if ".raw" not in p.name.lower() and ".tmp" not in p.name.lower()
-    ]
+    mp4s = [p for p in folder.glob("*.mp4") if is_valid_highlight_mp4(p)]
     parts = [f"{len(mp4s)} ready"]
     for pattern in ("*.rawdl", "*.tc.tmp"):
         for p in sorted(folder.glob(pattern)):
@@ -459,6 +542,10 @@ def _transcode_for_pi(src: Path, dest: Path) -> bool:
             )
             if result.returncode == 0 and tmp.stat().st_size > 0:
                 tmp.rename(dest)
+                if not is_valid_highlight_mp4(dest):
+                    log.warning("transcode output failed validation: %s", dest.name)
+                    dest.unlink(missing_ok=True)
+                    continue
                 src.unlink(missing_ok=True)
                 _chown_for_pi(dest)
                 log.info(
@@ -493,6 +580,15 @@ def _resume_orphan_transcodes(dest_dir: Path, stop: threading.Event) -> Path | N
     for raw in sorted(dest_dir.glob("*.rawdl")):
         dest = dest_dir / f"{raw.stem}.mp4"
         if dest.exists():
+            if is_valid_highlight_mp4(dest):
+                raw.unlink(missing_ok=True)
+            else:
+                log.warning("removing corrupt mp4 before resume: %s", dest.name)
+                dest.unlink(missing_ok=True)
+            if dest.exists():
+                continue
+        if not _probe_media_ok(raw):
+            log.warning("removing corrupt rawdl (cannot resume): %s", raw.name)
             raw.unlink(missing_ok=True)
             continue
         tc_tmp = dest.with_suffix(".tc.tmp")
@@ -511,6 +607,10 @@ def _resume_orphan_transcodes(dest_dir: Path, stop: threading.Event) -> Path | N
                 _chown_for_pi(dest)
                 return dest
             raw.rename(dest)
+            if not is_valid_highlight_mp4(dest):
+                log.warning("resume: original file failed validation: %s", dest.name)
+                dest.unlink(missing_ok=True)
+                continue
             _chown_for_pi(dest)
             log.info("saved %s (original quality, resume)", dest.name)
             return dest
@@ -532,7 +632,10 @@ def _download_clip(
     fname = f"{slug}.mp4"
     dest = dest_dir / fname
     if dest.exists():
-        return dest  # already downloaded
+        if is_valid_highlight_mp4(dest):
+            return dest
+        log.warning("removing corrupt highlight %s — will re-download", dest.name)
+        dest.unlink(missing_ok=True)
     raw = dest.with_suffix(".rawdl")
     tc_tmp = dest.with_suffix(".tc.tmp")
     client = http or requests
@@ -578,6 +681,10 @@ def _download_clip(
     try:
         if not _transcode_for_pi(raw, dest):
             raw.rename(dest)
+            if not is_valid_highlight_mp4(dest):
+                log.warning("original file failed validation: %s", fname)
+                dest.unlink(missing_ok=True)
+                return None
             log.info("saved %s (original quality)", fname)
         _chown_for_pi(dest)
         if game_pk:
@@ -641,10 +748,7 @@ class HighlightDownloader:
 
     def all_clips(self) -> list[Path]:
         """All finished clips on disk for this game."""
-        return sorted(
-            p for p in self._dest.glob("*.mp4")
-            if ".raw" not in p.name.lower() and ".tmp" not in p.name.lower()
-        )
+        return sorted(p for p in self._dest.glob("*.mp4") if is_valid_highlight_mp4(p))
 
     def _clip_dest(self, clip: dict) -> Path:
         slug = _slug(clip.get("blurb", clip["id"]))
@@ -682,10 +786,14 @@ class HighlightDownloader:
             url = clip.get("url") or ""
             dest = self._clip_dest(clip)
             if dest.exists():
-                self._seen_ids.add(cid)
-                if url:
-                    self._seen_urls.add(url)
-                continue
+                if not is_valid_highlight_mp4(dest):
+                    log.warning("removing corrupt highlight %s (API poll)", dest.name)
+                    dest.unlink(missing_ok=True)
+                else:
+                    self._seen_ids.add(cid)
+                    if url:
+                        self._seen_urls.add(url)
+                    continue
             if cid in self._seen_ids:
                 self._seen_ids.discard(cid)
             if url and url in self._seen_urls:

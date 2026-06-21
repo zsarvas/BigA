@@ -85,11 +85,9 @@ BG_DIM = _env_clamp_int("BIGA_BG_DIM", 130, lo=0, hi=255)
 IDLE_VIDEOS_DIR = ASSETS_DIR / "idle_videos"
 HIGHLIGHT_MIN_GAP_MIN = _env_clamp_int("BIGA_HIGHLIGHT_MIN_MIN", 5, lo=1, hi=720)
 HIGHLIGHT_MAX_GAP_MIN = _env_clamp_int("BIGA_HIGHLIGHT_MAX_MIN", 5, lo=1, hi=720)
-# Idle scene: fixed gap between highlight / idle-reel clips (game recap or idle_videos/).
-IDLE_HIGHLIGHT_GAP_MIN = _env_clamp_int("BIGA_IDLE_HIGHLIGHT_GAP_MIN", 1, lo=1, hi=720)
-
-# Shorter gap for post-game / win-loss scene where highlights rotate faster.
-GAME_HIGHLIGHT_GAP_MIN = _env_clamp_int("BIGA_GAME_HIGHLIGHT_GAP_MIN", 1, lo=1, hi=60)
+# Fixed gap between highlight clips (idle recap, win, and loss scenes).
+IDLE_HIGHLIGHT_GAP_MIN = _env_clamp_int("BIGA_IDLE_HIGHLIGHT_GAP_MIN", 2, lo=1, hi=720)
+GAME_HIGHLIGHT_GAP_MIN = _env_clamp_int("BIGA_GAME_HIGHLIGHT_GAP_MIN", 2, lo=1, hi=60)
 
 # Game-specific highlights — downloaded during/after a live game, wiped at first
 # pitch of the next game. Organised as highlights/{game_pk}/ per game.
