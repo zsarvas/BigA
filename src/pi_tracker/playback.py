@@ -33,17 +33,19 @@ def is_active() -> bool:
 
 _download_busy_count = 0
 _download_busy_lock = threading.Lock()
+_transcode_busy = False
+_transcode_lock = threading.Lock()
 
 
 def download_begin() -> None:
-    """Highlight downloader started a clip (network + ffmpeg)."""
+    """Highlight downloader started a network fetch for one clip."""
     global _download_busy_count
     with _download_busy_lock:
         _download_busy_count += 1
 
 
 def download_end() -> None:
-    """Highlight downloader finished a clip."""
+    """Highlight downloader finished (or aborted) a network fetch."""
     global _download_busy_count
     with _download_busy_lock:
         if _download_busy_count > 0:
@@ -51,16 +53,37 @@ def download_end() -> None:
 
 
 def is_download_busy() -> bool:
-    """True while a game highlight is being downloaded or transcoded."""
+    """True while a highlight clip is being fetched over the network."""
     with _download_busy_lock:
         return _download_busy_count > 0
 
 
+def transcode_begin() -> None:
+    """ffmpeg re-encode running — do not start mpv or other heavy CPU work."""
+    global _transcode_busy
+    with _transcode_lock:
+        _transcode_busy = True
+
+
+def transcode_end() -> None:
+    """ffmpeg finished."""
+    global _transcode_busy
+    with _transcode_lock:
+        _transcode_busy = False
+
+
+def is_transcode_busy() -> bool:
+    with _transcode_lock:
+        return _transcode_busy
+
+
 def reset_download_busy() -> None:
-    """Clear a leaked busy counter (e.g. downloader stopped mid-clip)."""
-    global _download_busy_count
+    """Clear leaked busy flags (e.g. downloader stopped mid-clip)."""
+    global _download_busy_count, _transcode_busy
     with _download_busy_lock:
         _download_busy_count = 0
+    with _transcode_lock:
+        _transcode_busy = False
 
 
 def wait_while_active(stop: threading.Event, poll: float = 0.25) -> None:
@@ -72,3 +95,8 @@ def wait_while_active(stop: threading.Event, poll: float = 0.25) -> None:
     """
     while _active.is_set() and not stop.is_set():
         stop.wait(poll)
+
+
+def wait_for_clip_idle(poll: float = 0.25) -> None:
+    """Block until mpv clip playback finishes (used before heavy ffmpeg work)."""
+    wait_while_active(threading.Event(), poll)

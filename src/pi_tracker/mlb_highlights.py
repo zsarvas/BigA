@@ -310,7 +310,7 @@ def sweep_incomplete_highlights(folder: Path, *, stale_after_sec: float = 120) -
     """
     if not folder.is_dir():
         return 0
-    if playback.is_download_busy():
+    if playback.is_download_busy() or playback.is_transcode_busy():
         return 0
     now = time.time()
     removed = 0
@@ -356,8 +356,15 @@ def log_highlight_folder_status(folder: Path) -> None:
                 parts.append(f"{p.name} {st.st_size // 1024}KB age={time.time() - st.st_mtime:.0f}s")
             except OSError:
                 parts.append(p.name)
-    busy = playback.is_download_busy()
-    log.info("highlights/%s: %s | downloader_busy=%s", folder.name, ", ".join(parts), busy)
+    busy_dl = playback.is_download_busy()
+    busy_tc = playback.is_transcode_busy()
+    log.info(
+        "highlights/%s: %s | download_busy=%s transcode_busy=%s",
+        folder.name,
+        ", ".join(parts),
+        busy_dl,
+        busy_tc,
+    )
 
 
 def sweep_all_incomplete_highlights() -> int:
@@ -425,6 +432,7 @@ def _transcode_for_pi(src: Path, dest: Path) -> bool:
     w, h = _TRANSCODE_WIDTH, _TRANSCODE_HEIGHT
     vf = f"scale={w}:{h}:force_original_aspect_ratio=increase,crop={w}:{h}"
     tmp = dest.with_suffix(".tc.tmp")
+    tmp.unlink(missing_ok=True)
     kb_in = src.stat().st_size // 1024
     log.info("transcoding %s (%d KB) → %dx%d…", src.name, kb_in, w, h)
     t0 = time.monotonic()
@@ -474,12 +482,50 @@ def _transcode_for_pi(src: Path, dest: Path) -> bool:
     return False
 
 
+def _resume_orphan_transcodes(dest_dir: Path, stop: threading.Event) -> Path | None:
+    """
+    Finish clips left as ``.rawdl`` after a crash, service restart, or mpv/ffmpeg overlap.
+
+    Returns the finished ``.mp4`` path, or None if nothing to resume.
+    """
+    if playback.is_active() or stop.is_set():
+        return None
+    for raw in sorted(dest_dir.glob("*.rawdl")):
+        dest = dest_dir / f"{raw.stem}.mp4"
+        if dest.exists():
+            raw.unlink(missing_ok=True)
+            continue
+        tc_tmp = dest.with_suffix(".tc.tmp")
+        tc_tmp.unlink(missing_ok=True)
+        try:
+            kb = raw.stat().st_size // 1024
+        except OSError:
+            continue
+        log.info("resuming transcode for %s (%d KB on disk)", raw.name, kb)
+        playback.wait_for_clip_idle()
+        if stop.is_set():
+            return None
+        playback.transcode_begin()
+        try:
+            if _transcode_for_pi(raw, dest):
+                _chown_for_pi(dest)
+                return dest
+            raw.rename(dest)
+            _chown_for_pi(dest)
+            log.info("saved %s (original quality, resume)", dest.name)
+            return dest
+        finally:
+            playback.transcode_end()
+    return None
+
+
 def _download_clip(
     clip: dict,
     dest_dir: Path,
     http: requests.Session | None = None,
     *,
     game_pk: int | None = None,
+    stop: threading.Event | None = None,
 ) -> Path | None:
     """Download (and optionally transcode) a single clip to dest_dir."""
     slug = _slug(clip.get("blurb", clip["id"]))
@@ -490,6 +536,8 @@ def _download_clip(
     raw = dest.with_suffix(".rawdl")
     tc_tmp = dest.with_suffix(".tc.tmp")
     client = http or requests
+    wait_stop = stop or threading.Event()
+
     playback.download_begin()
     try:
         log.info("downloading: %s", clip["blurb"])
@@ -499,15 +547,36 @@ def _download_clip(
                 downloaded = 0
                 last_log = 0
                 for chunk in r.iter_content(chunk_size=1 << 20):
+                    playback.wait_while_active(wait_stop)
+                    if wait_stop.is_set():
+                        raise InterruptedError("downloader stopped")
                     if chunk:
                         f.write(chunk)
                         downloaded += len(chunk)
                         if downloaded - last_log >= 2 << 20:  # every 2 MB
                             log.info("downloading %s: %d KB so far", slug, downloaded // 1024)
                             last_log = downloaded
-        log.info("downloaded %s (%d KB) — transcoding…", slug, raw.stat().st_size // 1024)
+    except InterruptedError:
+        log.info("download stopped for %s", slug)
+        raw.unlink(missing_ok=True)
+        tc_tmp.unlink(missing_ok=True)
+        return None
+    except Exception as exc:
+        log.warning("download failed for %s: %s", clip["blurb"], exc)
+        raw.unlink(missing_ok=True)
+        tc_tmp.unlink(missing_ok=True)
+        return None
+    finally:
+        playback.download_end()
+
+    log.info("downloaded %s (%d KB) — transcoding…", slug, raw.stat().st_size // 1024)
+    playback.wait_for_clip_idle()
+    if wait_stop.is_set():
+        return None  # leave .rawdl for _resume_orphan_transcodes
+
+    playback.transcode_begin()
+    try:
         if not _transcode_for_pi(raw, dest):
-            # ffmpeg not available or failed — use original as-is
             raw.rename(dest)
             log.info("saved %s (original quality)", fname)
         _chown_for_pi(dest)
@@ -519,12 +588,11 @@ def _download_clip(
                 write_clip_meta(dest, meta)
         return dest
     except Exception as exc:
-        log.warning("download failed for %s: %s", clip["blurb"], exc)
-        raw.unlink(missing_ok=True)
+        log.warning("transcode failed for %s: %s", slug, exc)
         tc_tmp.unlink(missing_ok=True)
-        return None
+        return None  # keep .rawdl for resume
     finally:
-        playback.download_end()
+        playback.transcode_end()
 
 
 class HighlightDownloader:
@@ -602,6 +670,12 @@ class HighlightDownloader:
         """
         sweep_incomplete_highlights(self._dest)
         log_highlight_folder_status(self._dest)
+        if not playback.is_download_busy():
+            resumed = _resume_orphan_transcodes(self._dest, self._stop)
+            if resumed is not None:
+                with self._lock:
+                    self.new_clips.append(resumed)
+                return True, True
         clips, api_ok = fetch_highlight_clips_result(self.game_pk)
         for clip in clips:
             cid = clip["id"]
@@ -624,7 +698,9 @@ class HighlightDownloader:
             self._seen_ids.add(cid)
             if url:
                 self._seen_urls.add(url)
-            path = _download_clip(clip, self._dest, self._http, game_pk=self.game_pk)
+            path = _download_clip(
+                clip, self._dest, self._http, game_pk=self.game_pk, stop=self._stop
+            )
             if path:
                 with self._lock:
                     self.new_clips.append(path)
