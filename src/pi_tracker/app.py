@@ -46,7 +46,7 @@ from .team_config import tracked_team_abbr, tracked_team_name
 from . import mouse_hide
 from . import playback
 from .gpio_leds import cleanup_gpio, init_gpio, is_muted, set_win_led
-from .mlb_highlights import HighlightDownloader, sync_highlight_downloader
+from .mlb_highlights import HighlightDownloader, seed_idle_recap_from_schedule, sync_highlight_downloader
 from .scenes import FinalLossScene, FinalWinScene, IdleScene, LiveScene
 from .scenes._clip_player import clip_title_from_path
 
@@ -472,6 +472,8 @@ def main() -> None:
     _hl_downloader: HighlightDownloader | None = None
     _last_live_pk: int = 0
     _last_dl_key: tuple[str, int, int] | None = None
+    if not demo and not no_schedule:
+        seed_idle_recap_from_schedule(state)
     if not demo:
         _hl_downloader, _last_live_pk = sync_highlight_downloader(
             state.snapshot(), None, 0

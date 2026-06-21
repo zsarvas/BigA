@@ -11,6 +11,7 @@ from ..assets import AssetManager, StreamingGif, scale_surface
 from ..drawing.diamond import draw_diamond
 from .linescore_table import compute_linescore_geometry, draw_linescore_table_centered
 from ._clip_player import _playable_clip_paths, game_highlights_blocked
+from ..highlight_meta import ended_half_before_break, pick_break_highlight
 
 # inning_state values that indicate a break (MLB feed uses Middle / Between).
 _INNING_BREAK_STATES = frozenset({"middle", "between"})
@@ -146,7 +147,7 @@ class LiveScene:
     # ------------------------------------------------------------------
 
     def _maybe_queue_clip(self, state: dict[str, Any]) -> None:
-        """Queue the next unseen game highlight at each inning break."""
+        """Queue a highlight at each inning break (prefer clips from the half that just ended)."""
         if self._pending_clip is not None:
             return
         inning_state = str(state.get("inning_state", "")).lower()
@@ -158,11 +159,22 @@ class LiveScene:
         ):
             folder = config.GAME_HIGHLIGHTS_DIR / str(game_pk)
             if folder.is_dir() and not game_highlights_blocked(folder):
-                for path in sorted(_playable_clip_paths(folder)):
-                    if path.name not in self._played_clips:
-                        self._played_clips.add(path.name)
-                        self._pending_clip = path
-                        break
+                playable = _playable_clip_paths(folder)
+                ended_inn, ended_half = ended_half_before_break(inning_state, state)
+                path = pick_break_highlight(
+                    self._played_clips,
+                    ended_inn,
+                    ended_half,
+                    playable_paths=playable,
+                )
+                if path is None:
+                    for candidate in sorted(playable):
+                        if candidate.name not in self._played_clips:
+                            path = candidate
+                            break
+                if path is not None:
+                    self._played_clips.add(path.name)
+                    self._pending_clip = path
         self._last_inning_state = inning_state
 
     # ------------------------------------------------------------------
