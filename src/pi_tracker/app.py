@@ -46,7 +46,7 @@ from .team_config import tracked_team_abbr, tracked_team_name
 from . import mouse_hide
 from . import playback
 from .gpio_leds import cleanup_gpio, init_gpio, is_muted, set_win_led
-from .mlb_highlights import HighlightDownloader, seed_idle_recap_from_schedule, sync_highlight_downloader
+from .mlb_highlights import HighlightDownloader, is_valid_highlight_mp4, seed_idle_recap_from_schedule, sync_highlight_downloader
 from .scenes import FinalLossScene, FinalWinScene, IdleScene, LiveScene
 from .scenes._clip_player import clip_title_from_path
 
@@ -350,6 +350,11 @@ def _play_mpv(path: Path, screen: pygame.Surface, flags: int) -> "pygame.Surface
     On Pi: DRM output at native panel resolution + V4L2 hardware decode (smooth
     on Zero 2W).  Mac/dev: auto hwdec + panscan fill.
     """
+    if path.suffix.lower() == ".mp4" and not is_valid_highlight_mp4(path):
+        logging.warning("skipping corrupt highlight clip: %s", path.name)
+        path.unlink(missing_ok=True)
+        return screen
+
     size = screen.get_size()
     title = clip_title_from_path(path)
     _draw_now_showing_transition(screen, title)

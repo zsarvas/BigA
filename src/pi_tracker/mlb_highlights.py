@@ -430,10 +430,7 @@ def log_highlight_folder_status(folder: Path) -> None:
     """One-line summary for telling active downloads from stuck orphans."""
     if not folder.is_dir():
         return
-    mp4s = [
-        p for p in folder.glob("*.mp4")
-        if ".raw" not in p.name.lower() and ".tmp" not in p.name.lower()
-    ]
+    mp4s = [p for p in folder.glob("*.mp4") if is_valid_highlight_mp4(p)]
     parts = [f"{len(mp4s)} ready"]
     for pattern in ("*.rawdl", "*.tc.tmp"):
         for p in sorted(folder.glob(pattern)):
@@ -610,6 +607,10 @@ def _resume_orphan_transcodes(dest_dir: Path, stop: threading.Event) -> Path | N
                 _chown_for_pi(dest)
                 return dest
             raw.rename(dest)
+            if not is_valid_highlight_mp4(dest):
+                log.warning("resume: original file failed validation: %s", dest.name)
+                dest.unlink(missing_ok=True)
+                continue
             _chown_for_pi(dest)
             log.info("saved %s (original quality, resume)", dest.name)
             return dest
@@ -680,6 +681,10 @@ def _download_clip(
     try:
         if not _transcode_for_pi(raw, dest):
             raw.rename(dest)
+            if not is_valid_highlight_mp4(dest):
+                log.warning("original file failed validation: %s", fname)
+                dest.unlink(missing_ok=True)
+                return None
             log.info("saved %s (original quality)", fname)
         _chown_for_pi(dest)
         if game_pk:
@@ -743,10 +748,7 @@ class HighlightDownloader:
 
     def all_clips(self) -> list[Path]:
         """All finished clips on disk for this game."""
-        return sorted(
-            p for p in self._dest.glob("*.mp4")
-            if ".raw" not in p.name.lower() and ".tmp" not in p.name.lower()
-        )
+        return sorted(p for p in self._dest.glob("*.mp4") if is_valid_highlight_mp4(p))
 
     def _clip_dest(self, clip: dict) -> Path:
         slug = _slug(clip.get("blurb", clip["id"]))
@@ -784,10 +786,14 @@ class HighlightDownloader:
             url = clip.get("url") or ""
             dest = self._clip_dest(clip)
             if dest.exists():
-                self._seen_ids.add(cid)
-                if url:
-                    self._seen_urls.add(url)
-                continue
+                if not is_valid_highlight_mp4(dest):
+                    log.warning("removing corrupt highlight %s (API poll)", dest.name)
+                    dest.unlink(missing_ok=True)
+                else:
+                    self._seen_ids.add(cid)
+                    if url:
+                        self._seen_urls.add(url)
+                    continue
             if cid in self._seen_ids:
                 self._seen_ids.discard(cid)
             if url and url in self._seen_urls:
