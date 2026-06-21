@@ -513,6 +513,26 @@ def _play_live_break_reel(
     return screen
 
 
+def _flash_boot_logo(screen: pygame.Surface) -> None:
+    """Paint Angels logo immediately after display init (service restarts, post-Plymouth)."""
+    logo_path = config.LOGOS_DIR / f"{TRACKED_TEAM_ID}.png"
+    if not logo_path.is_file():
+        return
+    try:
+        w, h = screen.get_size()
+        img = pygame.image.load(str(logo_path)).convert_alpha()
+        target_h = max(1, int(h * 0.60))
+        scale = target_h / max(1, img.get_height())
+        target_w = max(1, int(img.get_width() * scale))
+        img = pygame.transform.smoothscale(img, (target_w, target_h))
+        screen.fill(config.BLACK)
+        screen.blit(img, img.get_rect(center=(w // 2, h // 2)))
+        pygame.display.flip()
+        mouse_hide.apply(screen)
+    except (pygame.error, OSError):
+        pass
+
+
 def main() -> None:
     _configure_logging()
     log = logging.getLogger(__name__)
@@ -531,6 +551,7 @@ def main() -> None:
     display_flags = flags
     screen = _open_pygame_window(config.SCREEN_WIDTH, config.SCREEN_HEIGHT, display_flags)
     pygame.display.set_caption("BigA Pi Tracker")
+    _flash_boot_logo(screen)
     mouse_hide.apply(screen)
     clock = pygame.time.Clock()
 

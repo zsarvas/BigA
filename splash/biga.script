@@ -3,17 +3,7 @@
 screen_width  = Window.GetWidth();
 screen_height = Window.GetHeight();
 
-// Black background
-bg = Image.CreateFromFile("biga-bg.png");
-if (!bg) {
-    bg_sprite = Sprite();
-    bg_sprite.SetOpacity(0);
-} else {
-    bg_sprite = Sprite(bg);
-    bg_sprite.SetX(0);
-    bg_sprite.SetY(0);
-    bg_sprite.SetZ(0);
-}
+// Black background (no external bg image required).
 Window.SetBackgroundTopColor(0, 0, 0);
 Window.SetBackgroundBottomColor(0, 0, 0);
 
