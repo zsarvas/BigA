@@ -10,6 +10,7 @@ User=root
 WorkingDirectory=/home/pi/BigA/portal
 ExecStartPre=/bin/mkdir -p /etc/NetworkManager/dnsmasq-shared.d
 ExecStartPre=/bin/cp -f /home/pi/BigA/portal/nm-dnsmasq/biga-captive.conf /etc/NetworkManager/dnsmasq-shared.d/biga-captive.conf
+ExecStartPre=/bin/bash /home/pi/BigA/scripts/setup_ap.sh
 ExecStartPre=/usr/bin/nmcli con up biga-ap
 ExecStart=/usr/bin/python3 /home/pi/BigA/portal/portal.py
 ExecStopPost=/usr/bin/nmcli con down biga-ap

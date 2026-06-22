@@ -22,6 +22,9 @@ from pathlib import Path
 RESET_PIN = int(os.environ.get("BIGA_RESET_PIN", 26))
 HOLD_SECONDS = int(os.environ.get("BIGA_RESET_HOLD", 5))
 CREDS_FILE = Path("/etc/biga/wifi_creds.json")
+FIRSTBOOT_SENTINEL = Path("/etc/biga/.firstboot_done")
+SETUP_AP = Path("/home/pi/BigA/scripts/setup_ap.sh")
+AP_CON_NAME = "biga-ap"
 
 logging.basicConfig(
     level=logging.INFO,
@@ -71,6 +74,16 @@ def _wipe_nm_client_wifi() -> None:
         _run(["nmcli", "connection", "delete", name], label=f"nmcli delete {name}")
 
 
+def _recreate_ap_profile() -> None:
+    """Rebuild biga-ap from the current wlan0 MAC so SSID/QR stay in sync."""
+    FIRSTBOOT_SENTINEL.unlink(missing_ok=True)
+    _run(["nmcli", "connection", "down", AP_CON_NAME], label="nmcli down biga-ap")
+    if SETUP_AP.is_file():
+        _run(["bash", str(SETUP_AP)], label="setup_ap.sh")
+    else:
+        log.error("setup_ap.sh missing at %s", SETUP_AP)
+
+
 def _reboot(delay_sec: float = 3.0) -> None:
     log.info("Rebooting in %.0fs (clean display + provisioning services)…", delay_sec)
     time.sleep(delay_sec)
@@ -88,6 +101,7 @@ def factory_reset() -> None:
         log.info("No credentials file found — already in factory state.")
 
     _wipe_nm_client_wifi()
+    _recreate_ap_profile()
 
     # Stop scoreboard before reboot — it holds DRM; hot-starting portal leaves a black panel.
     _service("stop", "biga")

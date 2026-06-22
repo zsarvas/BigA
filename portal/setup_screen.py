@@ -12,57 +12,43 @@ import threading
 import time
 from pathlib import Path
 
-from captive import PORTAL_HOSTNAME, wifi_qr_string
+from captive import PORTAL_HOSTNAME, ap_ssid, wifi_qr_string
 
 CREDS_FILE = Path("/etc/biga/wifi_creds.json")
-INTERFACE  = "wlan0"
 AP_PASSWORD = os.environ.get("BIGA_AP_PASSWORD", "bigasetup")
 
 
-def _ap_ssid() -> str:
-    if (override := os.environ.get("BIGA_AP_SSID", "")):
-        return override
-    try:
-        mac = Path(f"/sys/class/net/{INTERFACE}/address").read_text().strip().replace(":", "").upper()
-        return f"BigA-{mac[-4:]}"
-    except OSError:
-        return "BigA-Setup"
+def _make_qr_surface(ssid: str, qr_size: int):
+    """Build a pygame surface for the WiFi join QR code."""
+    import PIL.Image as PilImage
+    import pygame
+    import qrcode
+
+    qr = qrcode.QRCode(box_size=4, border=2)
+    qr.add_data(wifi_qr_string(ssid, AP_PASSWORD))
+    qr.make(fit=True)
+    qr_pil = qr.make_image(fill_color="black", back_color="white").convert("RGB")
+    qr_scaled = qr_pil.resize((qr_size, qr_size), PilImage.NEAREST)
+    return pygame.image.fromstring(qr_scaled.tobytes(), qr_scaled.size, "RGB")
 
 
 def main() -> None:
-    AP_SSID = _ap_ssid()
-
     # --- Generate QR code image ---
     try:
-        import qrcode
-        import PIL.Image as PilImage
-    except ImportError:
-        print("qrcode / pillow not available — setup screen cannot render QR", flush=True)
-        # Keep process alive so systemd doesn't restart-loop
-        while not CREDS_FILE.exists():
-            time.sleep(2)
-        return
-
-    wifi_str = wifi_qr_string(AP_SSID, AP_PASSWORD)
-    qr = qrcode.QRCode(box_size=4, border=2)
-    qr.add_data(wifi_str)
-    qr.make(fit=True)
-    qr_pil = qr.make_image(fill_color="black", back_color="white").convert("RGB")
-
-    # --- pygame display ---
-    os.environ.setdefault("SDL_VIDEODRIVER", os.environ.get("BIGA_SDL_VIDEO", "kmsdrm"))
-
-    try:
         import pygame
+        import qrcode  # noqa: F401 — availability check
+        import PIL.Image  # noqa: F401
     except ImportError:
-        print("pygame not available — setup screen cannot render", flush=True)
+        print("qrcode / pillow / pygame not available — setup screen cannot render", flush=True)
         while not CREDS_FILE.exists():
             time.sleep(2)
         return
+
+    os.environ.setdefault("SDL_VIDEODRIVER", os.environ.get("BIGA_SDL_VIDEO", "kmsdrm"))
 
     pygame.init()
     pygame.mouse.set_visible(False)
-    W = int(os.environ.get("BIGA_SCREEN_WIDTH",  480))
+    W = int(os.environ.get("BIGA_SCREEN_WIDTH", 480))
     H = int(os.environ.get("BIGA_SCREEN_HEIGHT", 320))
 
     try:
@@ -78,29 +64,25 @@ def main() -> None:
 
     pygame.display.set_caption("BigA Setup")
 
-    # --- Colors (Angels palette) ---
-    BG    = ( 10,  15,  30)
+    BG = (10, 15, 30)
     WHITE = (255, 255, 255)
-    GOLD  = (196, 168,  79)
-    RED   = (186,   0,  33)
-    NAVY  = (  0,  50,  99)
+    GOLD = (196, 168, 79)
+    RED = (186, 0, 33)
     MUTED = (107, 127, 153)
 
-    # --- Fonts (480×320 panel — instructions must read at a glance) ---
-    _bold   = "/usr/share/fonts/truetype/dejavu/DejaVuSans-Bold.ttf"
+    _bold = "/usr/share/fonts/truetype/dejavu/DejaVuSans-Bold.ttf"
     _normal = "/usr/share/fonts/truetype/dejavu/DejaVuSans.ttf"
     try:
-        f_title = pygame.font.Font(_bold,   22)
+        f_title = pygame.font.Font(_bold, 22)
         f_label = pygame.font.Font(_normal, 14)
-        f_value = pygame.font.Font(_bold,   17)
-        f_instr = pygame.font.Font(_bold,   20)
+        f_value = pygame.font.Font(_bold, 17)
+        f_instr = pygame.font.Font(_bold, 20)
     except Exception:
         f_title = pygame.font.SysFont("sans", 22, bold=True)
         f_label = pygame.font.SysFont("sans", 14)
         f_value = pygame.font.SysFont("sans", 17, bold=True)
         f_instr = pygame.font.SysFont("sans", 20, bold=True)
 
-    # --- QR surface (leave bottom band for large instruction text) ---
     INSTR_LINES = (
         "Scan QR to join Wi‑Fi",
         "Tap “Use Without Internet” if asked",
@@ -108,49 +90,49 @@ def main() -> None:
     )
     instr_h = sum(f_instr.get_height() for _ in INSTR_LINES) + 8
     QR_SIZE = min(H - instr_h - 24, 200)
-    qr_scaled = qr_pil.resize((QR_SIZE, QR_SIZE), PilImage.NEAREST)
-    qr_surf   = pygame.image.fromstring(qr_scaled.tobytes(), qr_scaled.size, "RGB")
     qr_x = 8
     qr_y = max(8, (H - instr_h - QR_SIZE) // 2)
-
-    # Right column origin
     RX = qr_x + QR_SIZE + 18
     RW = W - RX - 10
 
+    shown_ssid = ""
+    qr_surf = None
+
+    def _sync_ssid() -> None:
+        nonlocal shown_ssid, qr_surf
+        current = ap_ssid()
+        if current != shown_ssid:
+            shown_ssid = current
+            qr_surf = _make_qr_surface(current, QR_SIZE)
+
     def draw() -> None:
         screen.fill(BG)
+        pygame.draw.rect(
+            screen,
+            WHITE,
+            (qr_x - 6, qr_y - 6, QR_SIZE + 12, QR_SIZE + 12),
+            border_radius=8,
+        )
+        if qr_surf is not None:
+            screen.blit(qr_surf, (qr_x, qr_y))
 
-        # QR — white card background
-        pygame.draw.rect(screen, WHITE,
-                         (qr_x - 6, qr_y - 6, QR_SIZE + 12, QR_SIZE + 12),
-                         border_radius=8)
-        screen.blit(qr_surf, (qr_x, qr_y))
-
-        # ── Right column ──────────────────────────────────
         y = 22
-
-        # Title
         ts = f_title.render("BigA  Setup", True, WHITE)
         screen.blit(ts, (RX, y))
         y += ts.get_height() + 5
-
-        # Red rule
         pygame.draw.line(screen, RED, (RX, y), (RX + RW, y), 2)
         y += 14
 
-        def field(label: str, value: str, vc=GOLD) -> None:
-            nonlocal y
-            screen.blit(f_label.render(label, True, MUTED), (RX, y))
-            y += f_label.get_height() + 3
-            # value — clip to column width
-            vs = f_value.render(value, True, vc)
-            screen.blit(vs, (RX, y))
-            y += vs.get_height() + 14
+        screen.blit(f_label.render("Network", True, MUTED), (RX, y))
+        y += f_label.get_height() + 3
+        vs = f_value.render(shown_ssid, True, GOLD)
+        screen.blit(vs, (RX, y))
+        y += vs.get_height() + 14
 
-        field("Network",  AP_SSID)
-        field("Password", AP_PASSWORD, WHITE)
+        screen.blit(f_label.render("Password", True, MUTED), (RX, y))
+        y += f_label.get_height() + 3
+        screen.blit(f_value.render(AP_PASSWORD, True, WHITE), (RX, y))
 
-        # Large instructions — full width, bottom of panel
         y_instr = H - 10
         for line in reversed(INSTR_LINES):
             surf = f_instr.render(line, True, WHITE)
@@ -160,9 +142,6 @@ def main() -> None:
 
         pygame.display.flip()
 
-    draw()
-
-    # --- Watch for provisioning completion ---
     def _watch() -> None:
         while True:
             time.sleep(2)
@@ -172,8 +151,9 @@ def main() -> None:
 
     threading.Thread(target=_watch, daemon=True).start()
 
-    # --- Event loop ---
+    _sync_ssid()
     clock = pygame.time.Clock()
+    poll_ticks = 0
     while True:
         for event in pygame.event.get():
             if event.type == pygame.QUIT:
@@ -182,6 +162,13 @@ def main() -> None:
             if event.type == pygame.KEYDOWN and event.key == pygame.K_ESCAPE:
                 pygame.quit()
                 return
+
+        poll_ticks += 1
+        if poll_ticks >= 20:
+            poll_ticks = 0
+            _sync_ssid()
+
+        draw()
         clock.tick(10)
 
 

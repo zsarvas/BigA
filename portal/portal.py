@@ -31,6 +31,7 @@ from captive import (
     APPLE_CNA_HTML,
     PORTAL_HTTP_URL,
     PORTAL_IP,
+    ap_ssid,
     wifi_qr_string,
 )
 
@@ -50,22 +51,6 @@ logging.basicConfig(
     datefmt="%Y-%m-%d %H:%M:%S",
 )
 log = logging.getLogger("portal")
-
-
-def _ap_ssid() -> str:
-    """Return a unique SSID derived from the wlan0 MAC address."""
-    override = os.environ.get("BIGA_AP_SSID", "")
-    if override:
-        return override
-    try:
-        mac = Path(f"/sys/class/net/{INTERFACE}/address").read_text().strip()
-        suffix = mac.replace(":", "")[-4:].upper()
-        return f"BigA-{suffix}"
-    except OSError:
-        return "BigA-Setup"
-
-
-AP_SSID = _ap_ssid()
 
 # ---------------------------------------------------------------------------
 # Flask app
@@ -94,7 +79,7 @@ def scan_networks() -> list[dict]:
         for line in result.stdout.strip().splitlines():
             parts = line.split(":")
             ssid = parts[0].strip() if parts else ""
-            if not ssid or ssid == AP_SSID:
+            if not ssid or ssid == ap_ssid():
                 continue
             signal = int(parts[1]) if len(parts) > 1 and parts[1].isdigit() else 0
             security = parts[2].strip() if len(parts) > 2 else "WPA"
@@ -220,7 +205,7 @@ def captive_portal_check():
 @app.route("/")
 def index():
     networks = scan_networks()
-    return render_template("index.html", networks=networks, ap_ssid=AP_SSID)
+    return render_template("index.html", networks=networks, ap_ssid=ap_ssid())
 
 
 @app.route("/connect", methods=["POST"])
@@ -232,7 +217,7 @@ def connect():
         return render_template(
             "index.html",
             networks=scan_networks(),
-            ap_ssid=AP_SSID,
+            ap_ssid=ap_ssid(),
             error="Please select a network.",
         )
 
@@ -240,12 +225,12 @@ def connect():
 
     if success:
         _switch_to_client_mode()
-        return render_template("success.html", ssid=ssid, ap_ssid=AP_SSID)
+        return render_template("success.html", ssid=ssid, ap_ssid=ap_ssid())
 
     return render_template(
         "index.html",
         networks=scan_networks(),
-        ap_ssid=AP_SSID,
+        ap_ssid=ap_ssid(),
         selected_ssid=ssid,
         error=message,
     )
@@ -254,7 +239,7 @@ def connect():
 @app.route("/qr.png")
 def qr_png():
     """PNG QR code that encodes joining the Pi's AP network."""
-    img = qrcode.make(wifi_qr_string(AP_SSID, AP_PASSWORD))
+    img = qrcode.make(wifi_qr_string(ap_ssid(), AP_PASSWORD))
     buf = io.BytesIO()
     img.save(buf, format="PNG")
     buf.seek(0)
@@ -269,7 +254,7 @@ def status():
     )
     return jsonify({
         "provisioned": provisioned(),
-        "ap_ssid": AP_SSID,
+        "ap_ssid": ap_ssid(),
         "connections": active.stdout.strip().splitlines(),
     })
 
@@ -291,5 +276,5 @@ def factory_reset():
 if __name__ == "__main__":
     if os.geteuid() != 0:
         sys.exit("portal.py must run as root (nmcli device wifi connect requires root)")
-    log.info("BigA portal starting — AP SSID: %s  port: %d", AP_SSID, PORT)
+    log.info("BigA portal starting — AP SSID: %s  port: %d", ap_ssid(), PORT)
     app.run(host="0.0.0.0", port=PORT, debug=False)
