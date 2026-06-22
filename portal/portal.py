@@ -28,7 +28,6 @@ import qrcode
 from flask import Flask, jsonify, redirect, render_template, request, send_file, url_for
 
 from captive import (
-    APPLE_CNA_HTML,
     PORTAL_HTTP_URL,
     PORTAL_IP,
     ap_ssid,
@@ -176,18 +175,8 @@ def _switch_to_client_mode() -> None:
 
 # ---------------------------------------------------------------------------
 # Captive portal detection — iOS, Android, Windows probe these on join.
-# Return non-success HTML (Apple) or 302 (others) so the OS opens a browser.
-# HTTPS probes cannot be answered without a cert; DHCP option 114 + DNS help.
+# Always 302 to the setup portal (never return Apple's "Success" page or 204).
 # ---------------------------------------------------------------------------
-
-def _captive_portal_response():
-    path = request.path.rstrip("/") or "/"
-    # Apple CNA: anything other than the exact Success page should pop the sheet.
-    if path in ("/hotspot-detect.html", "/library/test/success.html", "/canonical.html"):
-        return APPLE_CNA_HTML, 200, {"Content-Type": "text/html", "Cache-Control": "no-store"}
-    # Android / Windows: redirect to portal (must not return 204 Success).
-    return redirect(PORTAL_HTTP_URL, code=302)
-
 
 @app.route("/hotspot-detect.html")
 @app.route("/library/test/success.html")
@@ -199,7 +188,7 @@ def _captive_portal_response():
 @app.route("/redirect")
 @app.route("/success.txt")
 def captive_portal_check():
-    return _captive_portal_response()
+    return redirect(PORTAL_HTTP_URL, code=302)
 
 
 @app.route("/")

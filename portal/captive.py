@@ -11,31 +11,6 @@ PORTAL_HTTP_URL = f"http://{PORTAL_IP}/"
 PORTAL_HOSTNAME = "biga.setup"
 WLAN_INTERFACE = "wlan0"
 AP_CON_NAME = "biga-ap"
-PORTAL_HTTP_URL = f"http://{PORTAL_IP}/"
-PORTAL_HOSTNAME = "biga.setup"
-
-# iOS CNA triggers when this exact page is NOT returned.
-_APPLE_SUCCESS = (
-    "<HTML><HEAD><TITLE>Success</TITLE></HEAD><BODY>Success</BODY></HTML>"
-)
-
-# Non-success body — prompts iOS/macOS to open the captive portal sheet.
-APPLE_CNA_HTML = (
-    "<HTML><HEAD><TITLE>BigA Setup</TITLE></HEAD>"
-    f'<BODY>WiFi setup required. <a href="{PORTAL_HTTP_URL}">Continue</a></BODY></HTML>'
-)
-
-CAPTIVE_PORTAL_PATHS = (
-    "/hotspot-detect.html",          # Apple (iOS / macOS)
-    "/library/test/success.html",    # Apple legacy
-    "/generate_204",                 # Android / Chrome
-    "/gen_204",
-    "/connecttest.txt",              # Microsoft Windows
-    "/ncsi.txt",
-    "/redirect",
-    "/success.txt",
-    "/canonical.html",               # Apple alternate
-)
 
 
 def ap_ssid() -> str:

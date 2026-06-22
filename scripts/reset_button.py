@@ -84,6 +84,21 @@ def _recreate_ap_profile() -> None:
         log.error("setup_ap.sh missing at %s", SETUP_AP)
 
 
+def _shutdown_leds() -> None:
+    """Turn off win-scene NeoPixels after biga exits (strip holds last frame otherwise)."""
+    src = Path("/home/pi/BigA/src")
+    if not (src / "pi_tracker" / "gpio_leds.py").is_file():
+        log.debug("gpio_leds not found — skip LED shutdown")
+        return
+    script = (
+        "import sys; "
+        f"sys.path.insert(0, {str(src)!r}); "
+        "from pi_tracker.gpio_leds import cleanup_gpio, init_gpio, set_win_led; "
+        "init_gpio(); set_win_led(False); cleanup_gpio()"
+    )
+    _run([sys.executable, "-c", script], label="shutdown NeoPixels")
+
+
 def _reboot(delay_sec: float = 3.0) -> None:
     log.info("Rebooting in %.0fs (clean display + provisioning services)…", delay_sec)
     time.sleep(delay_sec)
@@ -103,10 +118,13 @@ def factory_reset() -> None:
     _wipe_nm_client_wifi()
     _recreate_ap_profile()
 
-    # Stop scoreboard before reboot — it holds DRM; hot-starting portal leaves a black panel.
+    # Stop scoreboard before reboot — it holds DRM and GPIO 19 NeoPixels.
     _service("stop", "biga")
     _service("stop", "biga-setup-screen")
     _service("stop", "biga-portal")
+
+    time.sleep(0.75)
+    _shutdown_leds()
 
     _reboot()
 
