@@ -2,15 +2,13 @@
 """
 Factory reset button monitor.
 
-Watches GPIO BCM 27 (active-low, internal pull-up).
+Watches GPIO BCM 26 (active-low, internal pull-up).
 Hold the button for HOLD_SECONDS to trigger a factory reset:
-  1. Wipe saved WiFi credentials.
-  2. Stop the biga service.
-  3. Start the biga-portal service (AP provisioning mode).
-  4. TODO Phase 2: restore hostapd + dnsmasq AP networking.
+  1. Wipe saved WiFi credentials and NM client profiles.
+  2. Reboot — releases the display/DRM and starts portal + QR setup screen.
 
 Env vars
-  BIGA_RESET_PIN    BCM pin number (default: 27)
+  BIGA_RESET_PIN    BCM pin number (default: 26)
   BIGA_RESET_HOLD   Seconds to hold for reset (default: 5)
 """
 
@@ -44,15 +42,40 @@ except Exception:
     log.warning("gpiozero not available — running in stub mode (no GPIO)")
 
 
-def _service(action: str, name: str) -> None:
-    result = subprocess.run(
-        ["sudo", "systemctl", action, name],
-        capture_output=True, text=True, check=False,
-    )
+def _run(cmd: list[str], *, label: str = "") -> subprocess.CompletedProcess[str]:
+    result = subprocess.run(cmd, capture_output=True, text=True, check=False)
     if result.returncode == 0:
-        log.info("systemctl %s %s → OK", action, name)
+        log.info("%s → OK", label or " ".join(cmd))
     else:
-        log.error("systemctl %s %s failed: %s", action, name, result.stderr.strip())
+        err = (result.stderr or result.stdout or "").strip()
+        log.error("%s failed: %s", label or " ".join(cmd), err)
+    return result
+
+
+def _service(action: str, name: str) -> None:
+    _run(["systemctl", action, name], label=f"systemctl {action} {name}")
+
+
+def _wipe_nm_client_wifi() -> None:
+    """Drop saved home/office WiFi profiles; keep the biga-ap provisioning profile."""
+    result = _run(
+        ["nmcli", "-t", "-f", "NAME,TYPE", "connection", "show"],
+        label="nmcli connection show",
+    )
+    for line in result.stdout.splitlines():
+        if not line.endswith(":802-11-wireless"):
+            continue
+        name = line.split(":", 1)[0]
+        if name == "biga-ap":
+            continue
+        _run(["nmcli", "connection", "delete", name], label=f"nmcli delete {name}")
+
+
+def _reboot(delay_sec: float = 3.0) -> None:
+    log.info("Rebooting in %.0fs (clean display + provisioning services)…", delay_sec)
+    time.sleep(delay_sec)
+    _run(["sync"], label="sync")
+    _run(["systemctl", "reboot"], label="systemctl reboot")
 
 
 def factory_reset() -> None:
@@ -64,20 +87,14 @@ def factory_reset() -> None:
     else:
         log.info("No credentials file found — already in factory state.")
 
+    _wipe_nm_client_wifi()
+
+    # Stop scoreboard before reboot — it holds DRM; hot-starting portal leaves a black panel.
     _service("stop", "biga")
+    _service("stop", "biga-setup-screen")
+    _service("stop", "biga-portal")
 
-    # Restore AP mode via NetworkManager
-    result = subprocess.run(
-        ["nmcli", "con", "up", "biga-ap"],
-        capture_output=True, text=True, check=False,
-    )
-    if result.returncode == 0:
-        log.info("AP mode restored (biga-ap up).")
-    else:
-        log.error("nmcli con up biga-ap failed: %s", result.stderr.strip())
-
-    _service("start", "biga-portal")
-    log.info("Factory reset complete. Portal is active at 192.168.4.1.")
+    _reboot()
 
 
 def _run_stub() -> None:

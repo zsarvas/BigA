@@ -84,23 +84,28 @@ def main() -> None:
     NAVY  = (  0,  50,  99)
     MUTED = (107, 127, 153)
 
-    # --- Fonts ---
+    # --- Fonts (480×320 panel — instructions must read at a glance) ---
     _bold   = "/usr/share/fonts/truetype/dejavu/DejaVuSans-Bold.ttf"
     _normal = "/usr/share/fonts/truetype/dejavu/DejaVuSans.ttf"
     try:
-        f_title = pygame.font.Font(_bold,   20)
-        f_label = pygame.font.Font(_normal, 13)
-        f_value = pygame.font.Font(_bold,   15)
-        f_hint  = pygame.font.Font(_normal, 11)
+        f_title = pygame.font.Font(_bold,   22)
+        f_label = pygame.font.Font(_normal, 14)
+        f_value = pygame.font.Font(_bold,   17)
+        f_instr = pygame.font.Font(_bold,   20)
     except Exception:
-        f_title = f_label = f_value = f_hint = pygame.font.SysFont("sans", 14)
+        f_title = pygame.font.SysFont("sans", 22, bold=True)
+        f_label = pygame.font.SysFont("sans", 14)
+        f_value = pygame.font.SysFont("sans", 17, bold=True)
+        f_instr = pygame.font.SysFont("sans", 20, bold=True)
 
-    # --- QR surface ---
-    QR_SIZE = min(H - 20, 240)
+    # --- QR surface (leave bottom band for large instruction text) ---
+    INSTR_LINES = ("Scan QR to join, then", "open a browser to configure")
+    instr_h = sum(f_instr.get_height() for _ in INSTR_LINES) + 8
+    QR_SIZE = min(H - instr_h - 24, 200)
     qr_scaled = qr_pil.resize((QR_SIZE, QR_SIZE), PilImage.NEAREST)
     qr_surf   = pygame.image.fromstring(qr_scaled.tobytes(), qr_scaled.size, "RGB")
     qr_x = 8
-    qr_y = (H - QR_SIZE) // 2
+    qr_y = max(8, (H - instr_h - QR_SIZE) // 2)
 
     # Right column origin
     RX = qr_x + QR_SIZE + 18
@@ -139,11 +144,13 @@ def main() -> None:
         field("Network",  AP_SSID)
         field("Password", AP_PASSWORD, WHITE)
 
-        # Bottom hint
-        for i, line in enumerate(("Scan QR to join, then",
-                                   "open a browser to configure")):
-            screen.blit(f_hint.render(line, True, MUTED),
-                        (RX, H - 30 + i * 14))
+        # Large instructions — full width, bottom of panel
+        y_instr = H - 10
+        for line in reversed(INSTR_LINES):
+            surf = f_instr.render(line, True, WHITE)
+            y_instr -= surf.get_height()
+            screen.blit(surf, surf.get_rect(midtop=(W // 2, y_instr)))
+            y_instr -= 4
 
         pygame.display.flip()
 
