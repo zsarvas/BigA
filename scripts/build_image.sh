@@ -96,8 +96,29 @@ capture_image() {
     if [ "$OS" = "Darwin" ]; then
         info "Unmounting $DEVICE..."
         diskutil unmountDisk "$DEVICE"
-        # "Device not configured" at end-of-card is normal on macOS — not a real error.
-        sudo dd if="$RAW_DEVICE" of="$OUT_DIR/$IMG_NAME" bs=4m || true
+
+        local sector_size sectors
+        sector_size=$(diskutil info -plist "$DEVICE" | plutil -extract IOBlockSize raw - 2>/dev/null || echo 512)
+        sectors=$(diskutil info -plist "$DEVICE" | plutil -extract TotalSize raw - 2>/dev/null || echo 0)
+        if [ "$sectors" = "0" ] || [ -z "$sectors" ]; then
+            abort "Could not read $DEVICE size — is the SD card inserted?"
+        fi
+        sectors=$(( sectors / sector_size ))
+        info "Card size: $(( sectors * sector_size / 1000000000 )) GB ($sectors × ${sector_size}B sectors)"
+
+        # Exact sector count avoids truncated images when macOS dd hits end-of-device quirks.
+        if ! sudo dd if="$RAW_DEVICE" of="$OUT_DIR/$IMG_NAME" bs="$sector_size" count="$sectors" status=progress; then
+            rm -f "$OUT_DIR/$IMG_NAME"
+            abort "dd capture failed — image not written"
+        fi
+
+        local img_bytes expected_bytes
+        img_bytes=$(stat -f%z "$OUT_DIR/$IMG_NAME" 2>/dev/null || echo 0)
+        expected_bytes=$(( sectors * sector_size ))
+        if [ "$img_bytes" -ne "$expected_bytes" ]; then
+            rm -f "$OUT_DIR/$IMG_NAME"
+            abort "Capture size mismatch: got ${img_bytes} bytes, expected ${expected_bytes}"
+        fi
     else
         sudo dd if="$RAW_DEVICE" of="$OUT_DIR/$IMG_NAME" bs=4M status=progress
     fi
@@ -160,7 +181,13 @@ shrink_image() {
         if ! limactl shell "$lima_instance" -- sudo bash "$pishrink_local" -s "$lima_img"; then
             limactl shell "$lima_instance" -- rm -f "$lima_img"
             rm -f "$pishrink_local"
-            abort "pishrink failed — original image untouched at $OUT_DIR/$IMG_NAME"
+            echo ""
+            echo "  pishrink failed — the .img capture may be truncated or corrupt."
+            echo "  Check: diskutil list   (confirm you picked the SD card, not an internal disk)"
+            echo "  Re-run capture after deleting: rm $OUT_DIR/$IMG_NAME"
+            read -rp "  Continue without shrinking (compress full-size image)? [y/N] " skip
+            [[ "$skip" =~ ^[Yy]$ ]] || abort "pishrink failed — original image at $OUT_DIR/$IMG_NAME"
+            return
         fi
 
         info "Copying shrunk image back…"
