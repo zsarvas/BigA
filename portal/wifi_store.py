@@ -125,6 +125,10 @@ def sync_nm_profiles(networks: list[dict[str, Any]]) -> None:
         password = str(net.get("password", ""))
         if not ssid:
             continue
+        if not password:
+            # setup.py / portal always store PSK; empty would clobber a working Imager profile.
+            log.warning("skip %r — no password in wifi_creds.json; keeping existing NM profile", ssid)
+            continue
         con_name = _con_name_for_ssid(ssid)
         priority = max(0, 100 - i * 10)
         _delete_nm_profile(con_name)

@@ -42,6 +42,17 @@ def _boot_paths() -> tuple[str, str]:
     return "/boot", "/boot/overlays"
 
 
+def _nm_connection_field(con_name: str, field: str) -> str:
+    """Read one NetworkManager connection field (``-s`` includes secrets like PSK)."""
+    proc = subprocess.run(
+        ["nmcli", "-s", "-g", field, "connection", "show", con_name],
+        capture_output=True,
+        text=True,
+        check=False,
+    )
+    return (proc.stdout or "").strip()
+
+
 def _sudo_read(path: str) -> str:
     proc = subprocess.run(["sudo", "cat", path], capture_output=True, text=True, check=False)
     if proc.returncode != 0:
@@ -386,8 +397,16 @@ run(
     "copying service file",
 )
 # Ensure SSH is enabled and running — this is the only remote access method.
+boot_dir, _ = _boot_paths()
+run(f"sudo touch {boot_dir}/ssh", "ensuring SSH boot flag on firmware partition")
 run("sudo systemctl enable ssh", "enabling SSH")
 run("sudo systemctl start ssh", "starting SSH")
+# Imager/cloud-init already configured the Pi; disable cloud-init so later reboots
+# don't race boot mounts or re-run first-boot modules (shows "boot stage config" on screen).
+run(
+    "sudo mkdir -p /etc/cloud && sudo touch /etc/cloud/cloud-init.disabled",
+    "disabling cloud-init after setup",
+)
 
 run("sudo systemctl daemon-reload", "reloading systemd")
 run("sudo systemctl enable biga", "enabling biga service")
@@ -485,23 +504,32 @@ if _already_connected:
         _ssid_line = next(
             (l for l in _active.splitlines() if ":802-11-wireless:" in l and "biga-ap" not in l), ""
         )
-        _ssid = _ssid_line.split(":")[0]
+        _con_name = _ssid_line.split(":")[0]
+        _ssid = _nm_connection_field(_con_name, "802-11-wireless.ssid") or _con_name
+        _password = _nm_connection_field(_con_name, "802-11-wireless-security.psk")
+        if not _password:
+            print(
+                "  ✗ WiFi is up but NM has no stored PSK — not writing wifi_creds.json "
+                "(portal will run on next boot)"
+            )
+            _ssid = ""
         run("sudo mkdir -p /etc/biga", "ensuring /etc/biga exists")
         _tmp = "/tmp/biga-wifi-creds.json"
-        with open(_tmp, "w") as _f:
-            _json.dump(
-                {
-                    "networks": [
-                        {"ssid": _ssid, "password": "", "added": _time.time()},
-                    ]
-                },
-                _f,
+        if _ssid:
+            with open(_tmp, "w") as _f:
+                _json.dump(
+                    {
+                        "networks": [
+                            {"ssid": _ssid, "password": _password, "added": _time.time()},
+                        ]
+                    },
+                    _f,
+                )
+            run(
+                f"sudo cp {_tmp} {_creds_path} && sudo chmod 600 {_creds_path}",
+                f"writing wifi_creds.json (ssid={_ssid})",
             )
-        run(
-            f"sudo cp {_tmp} {_creds_path} && sudo chmod 600 {_creds_path}",
-            f"writing wifi_creds.json (ssid={_ssid})",
-        )
-        run("sudo rm -f /etc/biga/provisioning_active", "clearing provisioning flag")
+            run("sudo rm -f /etc/biga/provisioning_active", "clearing provisioning flag")
     else:
         print("  → wifi_creds.json already exists")
 else:
