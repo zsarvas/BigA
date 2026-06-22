@@ -157,6 +157,44 @@ def _delete_nm_profile(name: str) -> None:
     subprocess.run(["nmcli", "connection", "delete", name], capture_output=True, check=False)
 
 
+def saved_connection_names(
+    networks: list[dict[str, Any]] | None = None,
+) -> list[tuple[str, str]]:
+    """(ssid, nm con-name) newest first."""
+    nets = networks if networks is not None else load_networks()
+    out: list[tuple[str, str]] = []
+    for net in nets:
+        ssid = str(net.get("ssid", "")).strip()
+        if ssid:
+            out.append((ssid, _con_name_for_ssid(ssid)))
+    return out
+
+
+def bring_up_connection(con_name: str) -> bool:
+    """Activate one saved profile on wlan0. Returns True if nmcli succeeded."""
+    subprocess.run(
+        ["nmcli", "device", "disconnect", WLAN_INTERFACE],
+        capture_output=True,
+        check=False,
+    )
+    time.sleep(0.5)
+    result = subprocess.run(
+        ["nmcli", "connection", "up", con_name, "ifname", WLAN_INTERFACE],
+        capture_output=True,
+        text=True,
+        timeout=30,
+        check=False,
+    )
+    if result.returncode != 0:
+        log.debug(
+            "connection up %s failed: %s",
+            con_name,
+            (result.stderr or result.stdout or "").strip(),
+        )
+        return False
+    return True
+
+
 def wipe_all_networks() -> None:
     """Full factory wipe — golden image prep only."""
     for net in load_networks():
