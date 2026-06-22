@@ -480,7 +480,7 @@ run(
 run("chmod +x " + os.path.join(REPO, "scripts", "check_wifi_connectivity.py"), "making connectivity check executable")
 run("sudo systemctl daemon-reload", "reloading systemd for connectivity")
 run("sudo systemctl enable biga-connectivity", "enabling biga-connectivity service")
-print("  → offline boot falls back to QR provisioning")
+print("  → boot syncs saved WiFi to NetworkManager (QR setup via reset button only)")
 
 # 13. AP mode setup (NetworkManager profile + firstboot service)
 # If the Pi is already connected to a WiFi network (e.g. flashed with creds for
@@ -533,7 +533,7 @@ if _already_connected:
     else:
         print("  → wifi_creds.json already exists")
 else:
-    print("  → no existing WiFi — connectivity check will enable provisioning on boot")
+    print("  → no existing WiFi — hold reset for 5s to open QR setup on first use")
 print("")
 print("\n[13/13] Setting up AP mode...")
 run(f"chmod +x {os.path.join(REPO, 'scripts', 'setup_ap.sh')}", "making setup_ap.sh executable")
