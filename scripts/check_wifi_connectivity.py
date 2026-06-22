@@ -84,7 +84,8 @@ def _wait_for_internet(deadline: float) -> bool:
 def _start_provisioning_services() -> None:
     subprocess.run(["systemctl", "stop", "biga"], check=False)
     for unit in ("biga-portal", "biga-setup-screen"):
-        subprocess.run(["systemctl", "start", unit], check=False)
+        # Don't block the oneshot — portal ExecStartPre (nmcli AP up) can take a while.
+        subprocess.run(["systemctl", "start", "--no-block", unit], check=False)
 
 
 def _passive_phase() -> bool:
