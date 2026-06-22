@@ -9,6 +9,7 @@ User=root
 Environment=PYTHONUNBUFFERED=1
 Environment=BIGA_SDL_VIDEO=kmsdrm
 Environment=SDL_VIDEODRIVER=kmsdrm
+WorkingDirectory=/home/pi/BigA/portal
 # Clear tty2 then take it over with the setup screen
 ExecStartPre=/bin/bash -c "printf '\\033[2J\\033[H' > /dev/tty2 2>/dev/null || true"
 ExecStart=/usr/bin/openvt -c 2 -s -f -w -- /usr/bin/python3 /home/pi/BigA/portal/setup_screen.py

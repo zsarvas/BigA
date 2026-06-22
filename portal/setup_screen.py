@@ -12,6 +12,8 @@ import threading
 import time
 from pathlib import Path
 
+from captive import PORTAL_HOSTNAME, wifi_qr_string
+
 CREDS_FILE = Path("/etc/biga/wifi_creds.json")
 INTERFACE  = "wlan0"
 AP_PASSWORD = os.environ.get("BIGA_AP_PASSWORD", "bigasetup")
@@ -41,7 +43,7 @@ def main() -> None:
             time.sleep(2)
         return
 
-    wifi_str = f"WIFI:T:WPA;S:{AP_SSID};P:{AP_PASSWORD};;"
+    wifi_str = wifi_qr_string(AP_SSID, AP_PASSWORD)
     qr = qrcode.QRCode(box_size=4, border=2)
     qr.add_data(wifi_str)
     qr.make(fit=True)
@@ -99,7 +101,11 @@ def main() -> None:
         f_instr = pygame.font.SysFont("sans", 20, bold=True)
 
     # --- QR surface (leave bottom band for large instruction text) ---
-    INSTR_LINES = ("Scan QR to join, then", "open a browser to configure")
+    INSTR_LINES = (
+        "Scan QR to join Wi‑Fi",
+        "Tap “Use Without Internet” if asked",
+        f"Portal: {PORTAL_HOSTNAME}",
+    )
     instr_h = sum(f_instr.get_height() for _ in INSTR_LINES) + 8
     QR_SIZE = min(H - instr_h - 24, 200)
     qr_scaled = qr_pil.resize((QR_SIZE, QR_SIZE), PilImage.NEAREST)

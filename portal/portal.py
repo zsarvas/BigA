@@ -27,13 +27,20 @@ from pathlib import Path
 import qrcode
 from flask import Flask, jsonify, redirect, render_template, request, send_file, url_for
 
+from captive import (
+    APPLE_CNA_HTML,
+    PORTAL_HTTP_URL,
+    PORTAL_IP,
+    wifi_qr_string,
+)
+
 # ---------------------------------------------------------------------------
 # Config
 # ---------------------------------------------------------------------------
 
 CREDS_FILE = Path("/etc/biga/wifi_creds.json")
 INTERFACE = "wlan0"
-AP_IP = "192.168.4.1"
+AP_IP = PORTAL_IP
 AP_PASSWORD = os.environ.get("BIGA_AP_PASSWORD", "bigasetup")
 PORT = int(os.environ.get("BIGA_PORTAL_PORT", 80))
 
@@ -183,24 +190,23 @@ def _switch_to_client_mode() -> None:
 # ---------------------------------------------------------------------------
 
 # ---------------------------------------------------------------------------
-# Captive portal detection — iOS, Android, Windows, macOS all probe these
-# URLs on joining a new network. Redirecting them to "/" triggers the OS to
-# auto-open a browser and prompt the user to sign in.
+# Captive portal detection — iOS, Android, Windows probe these on join.
+# Return non-success HTML (Apple) or 302 (others) so the OS opens a browser.
+# HTTPS probes cannot be answered without a cert; DHCP option 114 + DNS help.
 # ---------------------------------------------------------------------------
 
-_CAPTIVE_PORTAL_PATHS = [
-    "/hotspot-detect.html",          # Apple (iOS / macOS)
-    "/library/test/success.html",    # Apple legacy
-    "/generate_204",                 # Android / Chrome
-    "/gen_204",                      # Android alternate
-    "/connecttest.txt",              # Microsoft Windows
-    "/ncsi.txt",                     # Windows NCSI
-    "/redirect",                     # generic
-    "/success.txt",                  # generic
-]
+def _captive_portal_response():
+    path = request.path.rstrip("/") or "/"
+    # Apple CNA: anything other than the exact Success page should pop the sheet.
+    if path in ("/hotspot-detect.html", "/library/test/success.html", "/canonical.html"):
+        return APPLE_CNA_HTML, 200, {"Content-Type": "text/html", "Cache-Control": "no-store"}
+    # Android / Windows: redirect to portal (must not return 204 Success).
+    return redirect(PORTAL_HTTP_URL, code=302)
+
 
 @app.route("/hotspot-detect.html")
 @app.route("/library/test/success.html")
+@app.route("/canonical.html")
 @app.route("/generate_204")
 @app.route("/gen_204")
 @app.route("/connecttest.txt")
@@ -208,7 +214,7 @@ _CAPTIVE_PORTAL_PATHS = [
 @app.route("/redirect")
 @app.route("/success.txt")
 def captive_portal_check():
-    return redirect(url_for("index"), 302)
+    return _captive_portal_response()
 
 
 @app.route("/")
@@ -248,8 +254,7 @@ def connect():
 @app.route("/qr.png")
 def qr_png():
     """PNG QR code that encodes joining the Pi's AP network."""
-    wifi_str = f"WIFI:T:WPA;S:{AP_SSID};P:{AP_PASSWORD};;"
-    img = qrcode.make(wifi_str)
+    img = qrcode.make(wifi_qr_string(AP_SSID, AP_PASSWORD))
     buf = io.BytesIO()
     img.save(buf, format="PNG")
     buf.seek(0)
