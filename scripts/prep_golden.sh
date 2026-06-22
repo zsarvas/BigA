@@ -41,6 +41,7 @@ rm -rf /tmp/* /var/tmp/* 2>/dev/null || true
 # WiFi credentials — user provisions via portal on first boot
 echo "[5/8] Removing saved WiFi credentials..."
 rm -f /etc/biga/wifi_creds.json
+rm -f /etc/biga/provisioning_active
 # NOTE: /etc/biga/deploy_key is intentionally preserved — it is the
 # read-only SSH deploy key that lets the Pi pull from the private repo.
 

@@ -1,0 +1,15 @@
+[Unit]
+Description=BigA WiFi connectivity check (provisioning fallback)
+After=NetworkManager.service network-online.target
+Wants=network-online.target
+Before=biga.service
+
+[Service]
+Type=oneshot
+RemainAfterExit=yes
+ExecStart=/usr/bin/python3 /home/pi/BigA/scripts/check_wifi_connectivity.py
+StandardOutput=append:/var/log/biga-connectivity.log
+StandardError=append:/var/log/biga-connectivity.log
+
+[Install]
+WantedBy=multi-user.target

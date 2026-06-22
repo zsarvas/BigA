@@ -1,9 +1,11 @@
 [Unit]
 Description=Big A Angels Tracker
-After=network-online.target multi-user.target
+After=network-online.target multi-user.target biga-connectivity.service
 Wants=network-online.target
-# Only start when user WiFi credentials have been provisioned via the portal.
+Requires=biga-connectivity.service
+# Scoreboard runs when WiFi is provisioned and not in add-network / offline mode.
 ConditionPathExists=/etc/biga/wifi_creds.json
+ConditionPathExists=!/etc/biga/provisioning_active
 
 [Service]
 Type=simple

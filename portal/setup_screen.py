@@ -3,18 +3,16 @@
 BigA Setup Screen
 Shown on the Pi's display while in AP provisioning mode.
 Displays a QR code + credentials so the user knows how to connect.
-Exits automatically once wifi_creds.json is written (provisioning complete).
+Exits automatically when provisioning completes (new network saved).
 """
 
 import os
 import sys
 import threading
 import time
-from pathlib import Path
 
 from captive import PORTAL_HOSTNAME, ap_ssid, wifi_qr_string
-
-CREDS_FILE = Path("/etc/biga/wifi_creds.json")
+from wifi_store import is_provisioning
 AP_PASSWORD = os.environ.get("BIGA_AP_PASSWORD", "bigasetup")
 
 
@@ -40,7 +38,7 @@ def main() -> None:
         import PIL.Image  # noqa: F401
     except ImportError:
         print("qrcode / pillow / pygame not available — setup screen cannot render", flush=True)
-        while not CREDS_FILE.exists():
+        while is_provisioning():
             time.sleep(2)
         return
 
@@ -58,7 +56,7 @@ def main() -> None:
             screen = pygame.display.set_mode((W, H))
         except Exception as exc:
             print(f"Cannot open display: {exc}", flush=True)
-            while not CREDS_FILE.exists():
+            while is_provisioning():
                 time.sleep(2)
             return
 
@@ -86,7 +84,8 @@ def main() -> None:
     INSTR_LINES = (
         "Scan QR to join Wi‑Fi",
         "Tap “Use Without Internet” if asked",
-        f"Portal: {PORTAL_HOSTNAME}",
+        f"Open a browser and go to: {PORTAL_HOSTNAME}",
+        f"if you aren't already on the page"
     )
     instr_h = sum(f_instr.get_height() for _ in INSTR_LINES) + 8
     QR_SIZE = min(H - instr_h - 24, 200)
@@ -145,7 +144,7 @@ def main() -> None:
     def _watch() -> None:
         while True:
             time.sleep(2)
-            if CREDS_FILE.exists():
+            if not is_provisioning():
                 pygame.event.post(pygame.event.Event(pygame.QUIT))
                 return
 

@@ -3,9 +3,9 @@
 Factory reset button monitor.
 
 Watches GPIO BCM 26 (active-low, internal pull-up).
-Hold the button for HOLD_SECONDS to trigger a factory reset:
-  1. Wipe saved WiFi credentials and NM client profiles.
-  2. Reboot — releases the display/DRM and starts portal + QR setup screen.
+Hold the button for HOLD_SECONDS to enter **add-network** provisioning:
+  1. Keep saved WiFi networks (up to 7); show QR / portal to add another.
+  2. Reboot — releases the display/DRM and starts portal + setup screen.
 
 Env vars
   BIGA_RESET_PIN    BCM pin number (default: 26)
@@ -21,10 +21,13 @@ from pathlib import Path
 
 RESET_PIN = int(os.environ.get("BIGA_RESET_PIN", 26))
 HOLD_SECONDS = int(os.environ.get("BIGA_RESET_HOLD", 5))
-CREDS_FILE = Path("/etc/biga/wifi_creds.json")
 FIRSTBOOT_SENTINEL = Path("/etc/biga/.firstboot_done")
 SETUP_AP = Path("/home/pi/BigA/scripts/setup_ap.sh")
+PORTAL_DIR = Path("/home/pi/BigA/portal")
 AP_CON_NAME = "biga-ap"
+
+sys.path.insert(0, str(PORTAL_DIR))
+from wifi_store import enter_provisioning, has_networks  # noqa: E402
 
 logging.basicConfig(
     level=logging.INFO,
@@ -57,21 +60,6 @@ def _run(cmd: list[str], *, label: str = "") -> subprocess.CompletedProcess[str]
 
 def _service(action: str, name: str) -> None:
     _run(["systemctl", action, name], label=f"systemctl {action} {name}")
-
-
-def _wipe_nm_client_wifi() -> None:
-    """Drop saved home/office WiFi profiles; keep the biga-ap provisioning profile."""
-    result = _run(
-        ["nmcli", "-t", "-f", "NAME,TYPE", "connection", "show"],
-        label="nmcli connection show",
-    )
-    for line in result.stdout.splitlines():
-        if not line.endswith(":802-11-wireless"):
-            continue
-        name = line.split(":", 1)[0]
-        if name == "biga-ap":
-            continue
-        _run(["nmcli", "connection", "delete", name], label=f"nmcli delete {name}")
 
 
 def _recreate_ap_profile() -> None:
@@ -107,15 +95,14 @@ def _reboot(delay_sec: float = 3.0) -> None:
 
 
 def factory_reset() -> None:
-    log.info("Factory reset triggered (GPIO %d held %ds).", RESET_PIN, HOLD_SECONDS)
+    log.info("Add-network provisioning triggered (GPIO %d held %ds).", RESET_PIN, HOLD_SECONDS)
 
-    if CREDS_FILE.exists():
-        CREDS_FILE.unlink()
-        log.info("WiFi credentials wiped (%s).", CREDS_FILE)
+    enter_provisioning()
+    if has_networks():
+        log.info("Keeping existing saved networks — portal will append another.")
     else:
-        log.info("No credentials file found — already in factory state.")
+        log.info("No saved networks yet — first-time setup.")
 
-    _wipe_nm_client_wifi()
     _recreate_ap_profile()
 
     # Stop scoreboard before reboot — it holds DRM and GPIO 19 NeoPixels.

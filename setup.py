@@ -450,8 +450,18 @@ run(
 )
 run("sudo systemctl daemon-reload", "reloading systemd for reset button")
 run("sudo systemctl enable biga-reset", "enabling biga-reset service")
-print("  → GPIO BCM 26 — hold 5 s to factory reset")
+print("  → GPIO BCM 26 — hold 5 s to add another WiFi network")
 print("  → reset log: /var/log/biga-reset.log")
+
+connectivity_service_src = os.path.join(REPO, "scripts", "biga-connectivity.service")
+run(
+    f"sudo cp {connectivity_service_src} /etc/systemd/system/biga-connectivity.service",
+    "copying connectivity service file",
+)
+run("chmod +x " + os.path.join(REPO, "scripts", "check_wifi_connectivity.py"), "making connectivity check executable")
+run("sudo systemctl daemon-reload", "reloading systemd for connectivity")
+run("sudo systemctl enable biga-connectivity", "enabling biga-connectivity service")
+print("  → offline boot falls back to QR provisioning")
 
 # 13. AP mode setup (NetworkManager profile + firstboot service)
 # If the Pi is already connected to a WiFi network (e.g. flashed with creds for
@@ -470,20 +480,32 @@ if _already_connected:
     _creds_path = "/etc/biga/wifi_creds.json"
     if not os.path.exists(_creds_path):
         import json as _json
+        import time as _time
+
         _ssid_line = next(
             (l for l in _active.splitlines() if ":802-11-wireless:" in l and "biga-ap" not in l), ""
         )
         _ssid = _ssid_line.split(":")[0]
-        run(f"sudo mkdir -p /etc/biga", "ensuring /etc/biga exists")
+        run("sudo mkdir -p /etc/biga", "ensuring /etc/biga exists")
         _tmp = "/tmp/biga-wifi-creds.json"
         with open(_tmp, "w") as _f:
-            _json.dump({"ssid": _ssid, "password": ""}, _f)
-        run(f"sudo cp {_tmp} {_creds_path} && sudo chmod 600 {_creds_path}",
-            f"writing wifi_creds.json (ssid={_ssid}) — portal will not start")
+            _json.dump(
+                {
+                    "networks": [
+                        {"ssid": _ssid, "password": "", "added": _time.time()},
+                    ]
+                },
+                _f,
+            )
+        run(
+            f"sudo cp {_tmp} {_creds_path} && sudo chmod 600 {_creds_path}",
+            f"writing wifi_creds.json (ssid={_ssid})",
+        )
+        run("sudo rm -f /etc/biga/provisioning_active", "clearing provisioning flag")
     else:
-        print(f"  → wifi_creds.json already exists — portal will not start")
+        print("  → wifi_creds.json already exists")
 else:
-    print("  → no existing WiFi — portal will handle provisioning on first boot")
+    print("  → no existing WiFi — connectivity check will enable provisioning on boot")
 print("")
 print("\n[13/13] Setting up AP mode...")
 run(f"chmod +x {os.path.join(REPO, 'scripts', 'setup_ap.sh')}", "making setup_ap.sh executable")
