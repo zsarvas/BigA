@@ -2,7 +2,7 @@
 Description=BigA Setup Screen (QR code display during AP provisioning)
 After=biga-portal.service
 Requires=biga-portal.service
-ConditionPathExists=!/etc/biga/wifi_creds.json
+ConditionPathExists=/etc/biga/provisioning_active
 
 [Service]
 Type=simple

@@ -1,8 +1,7 @@
 [Unit]
 Description=BigA WiFi Provisioning Portal
-After=network.target NetworkManager.service biga-firstboot.service
-# Only runs when no user WiFi credentials exist (AP / factory-reset state).
-ConditionPathExists=!/etc/biga/wifi_creds.json
+After=network.target NetworkManager.service biga-firstboot.service biga-connectivity.service
+ConditionPathExists=/etc/biga/provisioning_active
 
 [Service]
 Type=simple

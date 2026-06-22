@@ -15,7 +15,6 @@ Env vars
 """
 
 import io
-import json
 import logging
 import os
 import subprocess
@@ -33,12 +32,18 @@ from captive import (
     ap_ssid,
     wifi_qr_string,
 )
+from wifi_store import (
+    append_network,
+    enter_provisioning,
+    has_networks,
+    is_provisioning,
+)
 
 # ---------------------------------------------------------------------------
 # Config
 # ---------------------------------------------------------------------------
 
-CREDS_FILE = Path("/etc/biga/wifi_creds.json")
+CREDS_FILE = Path("/etc/biga/wifi_creds.json")  # legacy import path for templates/logs
 INTERFACE = "wlan0"
 AP_IP = PORTAL_IP
 AP_PASSWORD = os.environ.get("BIGA_AP_PASSWORD", "bigasetup")
@@ -93,67 +98,31 @@ def scan_networks() -> list[dict]:
 
 def connect_wifi(ssid: str, password: str) -> tuple[bool, str]:
     """
-    Create an NM connection profile for the user's network and persist creds.
-    Does NOT bring down the AP or attempt to connect immediately — the Pi
-    reboots after this returns, at which point NM connects cleanly on boot.
-    Returns (success, human-readable message).
+    Append a network profile and persist credentials (keeps up to 7 saved).
+    Reboot applies NM profiles cleanly on the client side.
     """
     log.info("Saving connection profile for %r", ssid)
-
-    # Wipe stale profiles to avoid key-mgmt / duplicate errors.
-    for name in (ssid, "biga-client"):
-        subprocess.run(["nmcli", "connection", "delete", name], capture_output=True, check=False)
-
-    # Create explicit profile with key-mgmt — avoids "property is missing" errors.
-    add = subprocess.run(
-        [
-            "nmcli", "connection", "add",
-            "type", "wifi",
-            "con-name", "biga-client",
-            "ifname", INTERFACE,
-            "ssid", ssid,
-            "wifi-sec.key-mgmt", "wpa-psk",
-            "wifi-sec.psk", password,
-            "ipv4.method", "auto",
-            "connection.autoconnect", "yes",
-            "connection.autoconnect-priority", "10",
-        ],
-        capture_output=True, text=True, check=False,
-    )
-    if add.returncode != 0:
-        detail = (add.stderr or add.stdout).strip()
-        log.warning("nmcli connection add failed: %s", detail)
-        return False, detail or "Failed to save connection profile."
-
-    _persist_creds(ssid, password)
-    return True, "Profile saved."
-
-
-def _persist_creds(ssid: str, password: str) -> None:
-    """Save credentials so the factory-reset button can wipe them later."""
-    CREDS_FILE.parent.mkdir(parents=True, exist_ok=True)
-    CREDS_FILE.write_text(
-        json.dumps({"ssid": ssid, "password": password}, indent=2)
-    )
-    CREDS_FILE.chmod(0o600)
-    log.info("Credentials persisted to %s", CREDS_FILE)
+    try:
+        append_network(ssid, password)
+    except Exception as exc:
+        log.warning("append_network failed: %s", exc)
+        return False, str(exc) or "Failed to save network."
+    return True, "Network saved."
 
 
 def wipe_creds() -> None:
-    """Wipe credentials and restore AP mode (also called by the reset button)."""
-    if CREDS_FILE.exists():
-        CREDS_FILE.unlink()
-        log.info("Credentials wiped.")
-
-    subprocess.run(["systemctl", "stop",  "biga"],        check=False)
-    subprocess.run(["nmcli", "con", "up", "biga-ap"],     check=False)
+    """Enter provisioning mode to add/replace WiFi (keeps saved networks)."""
+    enter_provisioning()
+    subprocess.run(["systemctl", "stop", "biga"], check=False)
+    subprocess.run(["nmcli", "con", "up", "biga-ap"], check=False)
     subprocess.run(["systemctl", "start", "biga-portal"], check=False)
-    log.info("AP mode restored. Portal active at %s.", AP_IP)
+    subprocess.run(["systemctl", "start", "biga-setup-screen"], check=False)
+    log.info("Provisioning mode — portal at %s", AP_IP)
 
 
 def provisioned() -> bool:
-    """True if user credentials have been saved."""
-    return CREDS_FILE.exists()
+    """True when at least one network is saved and not in provisioning mode."""
+    return has_networks() and not is_provisioning()
 
 
 def _switch_to_client_mode() -> None:
