@@ -6,12 +6,19 @@ import io
 import os
 import platform
 import sys
+import time
 import warnings
 from pathlib import Path
 
 import pygame
 
 from . import config
+
+
+def animation_ms() -> int:
+    """Monotonic ms for GIF timing — unaffected by pygame clock pauses during mpv."""
+    return int(time.monotonic() * 1000)
+
 
 # On Pi OS Lite, pygame.font.match_font() runs fc-list and often hangs or times out.
 # Prefer explicit paths; set BIGA_FONT_PATH=/path/to/font.ttf to override.

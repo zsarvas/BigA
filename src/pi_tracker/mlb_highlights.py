@@ -56,55 +56,21 @@ def _chown_for_pi(path: Path) -> None:
     except (KeyError, OSError):
         pass
 
-# Blurb substrings that indicate non-play content we skip.
+# Blurb substrings for non-play content we skip downloading.
 _SKIP_PATTERNS = (
-    "through bat tracking",
-    "statcast analysis",
-    "outing against",
-    "breaking down",
-    "the distance behind",
-    "starting lineups",
-    "bench availability",
     "bullpen availability",
+    "bench availability",
+    "starting lineups",
     "fielding alignment",
-    "joins the broadcast",
-    "on d-backs",
-    "on angels",
-    "on his ",
-    "condensed game",        # too long for between-innings; grab separately
-)
-
-# Keep these even if they match a skip pattern above (override list).
-_KEEP_PATTERNS = (
-    "home run",
-    "homer",
-    "double",
-    "triple",
-    "single",
-    "strikeout",
-    "fans ",
-    "steals",
-    "catch",
-    "grab",
-    "replay review",
-    "challenge",
-    "closes out",
-    "rbi",
-    "walk-off",
-    "walkoff",
+    "probable pitchers",
+    "breaking down",
 )
 
 
-def _is_play_clip(blurb: str) -> bool:
-    """Return True if the blurb looks like an on-field play clip worth keeping."""
+def should_download(blurb: str) -> bool:
+    """True when the highlight is worth fetching (default include unless skipped)."""
     lower = blurb.lower()
-    for keep in _KEEP_PATTERNS:
-        if keep in lower:
-            return True
-    for skip in _SKIP_PATTERNS:
-        if skip in lower:
-            return False
-    return True  # default include if no skip pattern matched
+    return not any(p in lower for p in _SKIP_PATTERNS)
 
 
 def _best_mp4_url(playbacks: list[dict]) -> str | None:
@@ -158,7 +124,7 @@ def fetch_highlight_clips_result(game_pk: int) -> tuple[list[dict], bool]:
         if item.get("type") != "video":
             continue
         blurb = str(item.get("blurb") or "")
-        if not blurb or not _is_play_clip(blurb):
+        if not blurb or not should_download(blurb):
             continue
         playbacks = item.get("playbacks") or []
         mp4_url = _best_mp4_url(playbacks)
@@ -517,13 +483,37 @@ def _transcode_for_pi(src: Path, dest: Path) -> bool:
     tmp = dest.with_suffix(".tc.tmp")
     tmp.unlink(missing_ok=True)
     kb_in = src.stat().st_size // 1024
-    log.info("transcoding %s (%d KB) → %dx%d…", src.name, kb_in, w, h)
+    light = playback.prefers_light_transcode()
+    log.info(
+        "transcoding %s (%d KB) → %dx%d%s…",
+        src.name,
+        kb_in,
+        w,
+        h,
+        " (low priority)" if light else "",
+    )
     t0 = time.monotonic()
 
+    def _lower_priority() -> None:
+        import os
+
+        try:
+            os.nice(10)
+        except OSError:
+            pass
+
     # Hardware encode when available (much faster on Pi); fall back to ultrafast x264.
-    encoder_attempts = (
-        ["-c:v", "h264_v4l2m2m", "-b:v", "800k"],
-        ["-c:v", "libx264", "-preset", "ultrafast", "-crf", "26"],
+    encoder_attempts: tuple[tuple[str, ...], ...] = (
+        ("-c:v", "h264_v4l2m2m", "-b:v", "600k" if light else "800k"),
+        (
+            "-c:v",
+            "libx264",
+            "-preset",
+            "ultrafast",
+            "-crf",
+            "26",
+            *(("-threads", "2") if light else ()),
+        ),
     )
     for enc_args in encoder_attempts:
         try:
@@ -539,6 +529,7 @@ def _transcode_for_pi(src: Path, dest: Path) -> bool:
                 ],
                 capture_output=True,
                 timeout=300,
+                preexec_fn=_lower_priority if light else None,
             )
             if result.returncode == 0 and tmp.stat().st_size > 0:
                 tmp.rename(dest)

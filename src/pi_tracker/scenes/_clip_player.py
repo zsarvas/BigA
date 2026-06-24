@@ -70,6 +70,15 @@ _TITLE_ABBREV = {
 }
 
 
+_CONDENSED_CLIP_WEIGHT = 0.6
+
+
+def _is_condensed_clip(path: Path) -> bool:
+    """True for MLB ``Condensed Game: …`` highlights (slug ``condensed-game-…``)."""
+    stem = path.stem.lower().replace("_", "-")
+    return "condensed-game" in stem or stem.startswith("condensed")
+
+
 def clip_title_from_path(path: Path) -> str:
     """
     Humanize a highlight clip filename back into a short title.
@@ -115,8 +124,13 @@ def _playable_clip_paths(folder: Path) -> list[Path]:
     return out
 
 
-def _pick_clip(folder: Path, played: set[str]) -> Path | None:
-    """Choose a random clip from *folder*, preferring smaller (transcoded) files."""
+def _pick_clip(
+    folder: Path,
+    played: set[str],
+    *,
+    prefer_condensed: bool = False,
+) -> Path | None:
+    """Choose a clip from *folder*, optionally favoring condensed-game recaps."""
     clips = _playable_clip_paths(folder) + list(folder.glob("*.gif"))
     if not clips:
         return None
@@ -124,10 +138,24 @@ def _pick_clip(folder: Path, played: set[str]) -> Path | None:
     if not unseen:
         played.clear()
         unseen = clips
-    # Smallest files are usually our 480×320 transcodes; huge ones are full 720p API pulls.
-    unseen.sort(key=lambda p: p.stat().st_size if p.exists() else 0)
-    small_pool = unseen[:max(1, (len(unseen) + 1) // 2)]
-    path = random.choice(small_pool)
+
+    if prefer_condensed:
+        condensed = [p for p in unseen if _is_condensed_clip(p)]
+        others = [p for p in unseen if not _is_condensed_clip(p)]
+        if condensed and random.random() < _CONDENSED_CLIP_WEIGHT:
+            path = random.choice(condensed)
+        elif others:
+            path = random.choice(others)
+        elif condensed:
+            path = random.choice(condensed)
+        else:
+            return None
+    else:
+        # Smallest files are usually our 480×320 transcodes; huge ones are full 720p API pulls.
+        unseen.sort(key=lambda p: p.stat().st_size if p.exists() else 0)
+        small_pool = unseen[: max(1, (len(unseen) + 1) // 2)]
+        path = random.choice(small_pool)
+
     played.add(path.name)
     return path
 
@@ -163,6 +191,8 @@ class ClipPlayerMixin:
         gap_min: int | None = None,
         *,
         block_on_download: bool = True,
+        prefer_condensed: bool = False,
+        allow_during_transcode: bool = False,
     ) -> None:
         """
         Check if it's time to queue a clip.  Sets ``self._pending_clip`` when
@@ -171,6 +201,8 @@ class ClipPlayerMixin:
         *gap_min* overrides the default random gap (uses config values if None).
         *block_on_download* — when False, finished clips may play even while a
         background download/transcode is running (idle recap reel).
+        *prefer_condensed* — win/loss scenes: 60% chance to pick condensed game recap.
+        *allow_during_transcode* — win/loss: queue ready clips while ffmpeg transcodes another.
         """
         self.__init_cp()
 
@@ -191,13 +223,15 @@ class ClipPlayerMixin:
             return
 
         if folder and folder.is_dir():
-            # ffmpeg and mpv both hammer the Zero 2W — never overlap transcode + playback.
-            if playback.is_transcode_busy():
+            if not allow_during_transcode and playback.is_transcode_busy():
                 return
-            blocked = block_on_download and game_highlights_blocked(folder)
+            blocked = block_on_download and game_highlights_blocked(
+                folder,
+                block_transcode=not allow_during_transcode,
+            )
             if blocked:
                 return  # retry next frame; don't reset the play timer
-            path = _pick_clip(folder, self._cp_played)
+            path = _pick_clip(folder, self._cp_played, prefer_condensed=prefer_condensed)
             if path:
                 self._pending_clip = path
 
