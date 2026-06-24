@@ -111,6 +111,12 @@ def _try_set_mode(
         return None, e
 
 
+def _finalize_display(screen: pygame.Surface) -> pygame.Surface:
+    """Hide SDL/DRM cursor plane once a window exists."""
+    mouse_hide.hide_cursor_hard()
+    return screen
+
+
 def _open_pygame_window(width: int, height: int, flags: int) -> pygame.Surface:
     """
     Open the display. Target is **Bookworm + KMSDRM**.
@@ -128,7 +134,7 @@ def _open_pygame_window(width: int, height: int, flags: int) -> pygame.Surface:
         return pygame.display.set_mode((width, height), flags)
 
     try:
-        return _set_mode()
+        return _finalize_display(_set_mode())
     except pygame.error as first:
         if not _linux_text_console():
             raise
@@ -153,7 +159,7 @@ def _open_pygame_window(width: int, height: int, flags: int) -> pygame.Surface:
             print(f"BigA: retrying SDL_VIDEODRIVER={driver}.", file=sys.stderr, flush=True)
             surface, err = _try_set_mode(width, height, flags, driver)
             if surface is not None:
-                return surface
+                return _finalize_display(surface)
             if err is not None:
                 last_err = err
                 print(f"BigA: {driver} failed ({err!s}).", file=sys.stderr, flush=True)
@@ -425,7 +431,7 @@ def _play_mpv_sequence(
     if on_pi:
         time.sleep(_MPV_DRM_HANDOFF_SEC)
     pygame.display.init()
-    screen = pygame.display.set_mode(size, flags)
+    screen = _finalize_display(pygame.display.set_mode(size, flags))
     mouse_hide.handoff_from_mpv(screen, fill=config.BLACK)
     return screen
 
