@@ -102,8 +102,24 @@ def wait_for_clip_idle(poll: float = 0.25) -> None:
     wait_while_active(threading.Event(), poll)
 
 
+_final_scene_active = False
+_final_scene_lock = threading.Lock()
+
 _live_break_priority = False
 _live_break_lock = threading.Lock()
+
+
+def set_final_scene_active(active: bool) -> None:
+    """True while win/loss scene is showing (smooth GIF + lighter background ffmpeg)."""
+    global _final_scene_active
+    with _final_scene_lock:
+        _final_scene_active = active
+
+
+def prefers_light_transcode() -> bool:
+    """Background ffmpeg should yield CPU to the win/loss GIF renderer."""
+    with _final_scene_lock:
+        return _final_scene_active
 
 
 def set_live_break_priority(active: bool) -> None:

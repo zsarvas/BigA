@@ -5,7 +5,7 @@ from typing import Any
 import pygame
 
 from .. import config
-from ..assets import AssetManager
+from ..assets import AssetManager, animation_ms
 from ..mlb_http import ANGELS_TEAM_ID as TRACKED_TEAM_ID
 from .final_score_row import draw_score_with_flanking_logos
 from .linescore_table import draw_linescore_table_centered
@@ -49,8 +49,9 @@ class FinalWinScene(ClipPlayerMixin):
             _game_clip_folder(state),
             gap_min=config.GAME_HIGHLIGHT_GAP_MIN,
             prefer_condensed=True,
+            allow_during_transcode=True,
         )
-        assets.draw_gif_background(screen, "win.gif", pygame.time.get_ticks(), fallback=(12, 40, 12))
+        assets.draw_gif_background(screen, "win.gif", animation_ms(), fallback=(12, 40, 12))
         draw_score_with_flanking_logos(
             screen,
             assets,

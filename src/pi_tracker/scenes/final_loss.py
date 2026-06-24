@@ -18,6 +18,7 @@ class FinalLossScene(ClipPlayerMixin):
             _game_clip_folder(state),
             gap_min=config.GAME_HIGHLIGHT_GAP_MIN,
             prefer_condensed=True,
+            allow_during_transcode=True,
         )
         screen.fill((18, 18, 22))
         draw_score_with_flanking_logos(

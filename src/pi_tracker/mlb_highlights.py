@@ -483,13 +483,37 @@ def _transcode_for_pi(src: Path, dest: Path) -> bool:
     tmp = dest.with_suffix(".tc.tmp")
     tmp.unlink(missing_ok=True)
     kb_in = src.stat().st_size // 1024
-    log.info("transcoding %s (%d KB) → %dx%d…", src.name, kb_in, w, h)
+    light = playback.prefers_light_transcode()
+    log.info(
+        "transcoding %s (%d KB) → %dx%d%s…",
+        src.name,
+        kb_in,
+        w,
+        h,
+        " (low priority)" if light else "",
+    )
     t0 = time.monotonic()
 
+    def _lower_priority() -> None:
+        import os
+
+        try:
+            os.nice(10)
+        except OSError:
+            pass
+
     # Hardware encode when available (much faster on Pi); fall back to ultrafast x264.
-    encoder_attempts = (
-        ["-c:v", "h264_v4l2m2m", "-b:v", "800k"],
-        ["-c:v", "libx264", "-preset", "ultrafast", "-crf", "26"],
+    encoder_attempts: tuple[tuple[str, ...], ...] = (
+        ("-c:v", "h264_v4l2m2m", "-b:v", "600k" if light else "800k"),
+        (
+            "-c:v",
+            "libx264",
+            "-preset",
+            "ultrafast",
+            "-crf",
+            "26",
+            *(("-threads", "2") if light else ()),
+        ),
     )
     for enc_args in encoder_attempts:
         try:
@@ -505,6 +529,7 @@ def _transcode_for_pi(src: Path, dest: Path) -> bool:
                 ],
                 capture_output=True,
                 timeout=300,
+                preexec_fn=_lower_priority if light else None,
             )
             if result.returncode == 0 and tmp.stat().st_size > 0:
                 tmp.rename(dest)

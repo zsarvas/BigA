@@ -647,6 +647,7 @@ def main() -> None:
                     )
 
             scene = scenes.get(scene_key, scenes["idle"])
+            playback.set_final_scene_active(scene_key in ("win", "loss"))
             scene.draw(screen, assets, snap)
             if debug_hud:
                 _draw_debug_hud(
@@ -679,8 +680,9 @@ def main() -> None:
                     getattr(scene, "in_inning_break", lambda _s: False)(snap)
                     or getattr(scene, "_break_reel_active", False)
                 )
-                # Clips on disk are ready — don't defer live breaks for background ffmpeg.
-                if in_break or not playback.is_transcode_busy():
+                # Ready clips on disk can play during background ffmpeg (win/loss + live breaks).
+                clip_ready = is_valid_highlight_mp4(pending)
+                if in_break or not playback.is_transcode_busy() or clip_ready:
                     if in_break:
                         screen = _play_live_break_reel(
                             scene, state, screen, display_flags, pending
@@ -689,9 +691,11 @@ def main() -> None:
                         scene._pending_clip = None  # type: ignore[attr-defined]
                         screen = _play_mpv(pending, screen, display_flags)
 
-            # Boost tick rate while a pygame-rendered GIF animation is running
-            # (live event overlays); normal scenes run at the low base FPS.
-            tick_fps = config.HIGHLIGHT_FPS if getattr(scene, "_anim", None) else config.FPS
+            # Boost tick rate for pygame-rendered GIFs (live events, win/loss backgrounds).
+            if getattr(scene, "_anim", None) or scene_key in ("win", "loss"):
+                tick_fps = config.HIGHLIGHT_FPS
+            else:
+                tick_fps = config.FPS
             clock.tick(tick_fps)
             frame_i += 1
     finally:

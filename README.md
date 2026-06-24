@@ -433,6 +433,7 @@ What gets stripped from the image before publishing:
 - SSH host keys (regenerated uniquely on each first boot)
 - `machine-id` (regenerated on first boot)
 - Saved WiFi credentials (`/etc/biga/wifi_creds.json`)
+- Downloaded game highlights (`assets/highlights/{game_pk}/`)
 - All logs and package caches
 
 ---

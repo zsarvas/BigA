@@ -192,6 +192,7 @@ class ClipPlayerMixin:
         *,
         block_on_download: bool = True,
         prefer_condensed: bool = False,
+        allow_during_transcode: bool = False,
     ) -> None:
         """
         Check if it's time to queue a clip.  Sets ``self._pending_clip`` when
@@ -201,6 +202,7 @@ class ClipPlayerMixin:
         *block_on_download* — when False, finished clips may play even while a
         background download/transcode is running (idle recap reel).
         *prefer_condensed* — win/loss scenes: 60% chance to pick condensed game recap.
+        *allow_during_transcode* — win/loss: queue ready clips while ffmpeg transcodes another.
         """
         self.__init_cp()
 
@@ -221,10 +223,12 @@ class ClipPlayerMixin:
             return
 
         if folder and folder.is_dir():
-            # ffmpeg and mpv both hammer the Zero 2W — never overlap transcode + playback.
-            if playback.is_transcode_busy():
+            if not allow_during_transcode and playback.is_transcode_busy():
                 return
-            blocked = block_on_download and game_highlights_blocked(folder)
+            blocked = block_on_download and game_highlights_blocked(
+                folder,
+                block_transcode=not allow_during_transcode,
+            )
             if blocked:
                 return  # retry next frame; don't reset the play timer
             path = _pick_clip(folder, self._cp_played, prefer_condensed=prefer_condensed)
