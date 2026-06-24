@@ -22,7 +22,6 @@ import os
 import platform
 import subprocess
 import sys
-import textwrap
 import threading
 import time
 from pathlib import Path
@@ -49,7 +48,6 @@ from . import playback
 from .gpio_leds import cleanup_gpio, init_gpio, is_muted, set_win_led
 from .mlb_highlights import HighlightDownloader, is_valid_highlight_mp4, seed_idle_recap_from_schedule, sync_highlight_downloader
 from .scenes import FinalLossScene, FinalWinScene, IdleScene, LiveScene
-from .scenes._clip_player import clip_title_from_path
 
 
 def _demo_opponent() -> tuple[int, str, str]:
@@ -305,43 +303,9 @@ def _configure_logging() -> None:
         logging.getLogger(noisy).setLevel(logging.WARNING)
 
 
-_NOW_SHOWING_COLOR = (255, 50, 50)
-_NOW_SHOWING_HOLD_SEC = 0.5
 _MPV_LOG = Path("/tmp/biga-mpv.log")
 # Brief pause after mpv exits so vo=drm releases KMS master before pygame KMSDRM init.
 _MPV_DRM_HANDOFF_SEC = 0.2
-
-
-def _draw_now_showing_transition(screen: pygame.Surface, title: str) -> None:
-    """Brief full-screen card before handing the display to mpv."""
-    w, _h = screen.get_size()
-    screen.fill(config.BLACK)
-
-    head_font = _repo_font(config.layout_size(22))
-    body_font = _repo_font(config.layout_size(13))
-
-    head = head_font.render("NOW SHOWING", True, _NOW_SHOWING_COLOR)
-    screen.blit(head, head.get_rect(center=(w // 2, config.layout_y(96))))
-
-    # ~26 chars fits two lines on 480px at this font size.
-    wrapped = textwrap.fill(title, width=26)
-    lines = wrapped.split("\n")
-    max_lines = 3
-    if len(lines) > max_lines:
-        lines = lines[:max_lines]
-        if not lines[-1].endswith("…"):
-            lines[-1] = lines[-1].rstrip() + "…"
-
-    line_h = body_font.get_height() + 2
-    block_h = len(lines) * line_h - 2
-    y = config.layout_y(132) - block_h // 2
-    for line in lines:
-        surf = body_font.render(line, True, config.WHITE)
-        screen.blit(surf, surf.get_rect(center=(w // 2, y + line_h // 2)))
-        y += line_h
-
-    pygame.display.flip()
-    time.sleep(_NOW_SHOWING_HOLD_SEC)
 
 
 def _filter_valid_clip_paths(paths: list[Path], *, validate: bool = True) -> list[Path]:
@@ -362,6 +326,7 @@ def _filter_valid_clip_paths(paths: list[Path], *, validate: bool = True) -> lis
 def _mpv_cmd(w: int, h: int, *, on_pi: bool) -> list[str]:
     cmd = [
         "mpv",
+        "--no-terminal",
         "--quiet",
         "--osd-level=0",
         "--cursor-autohide=always",
@@ -423,7 +388,6 @@ def _play_mpv_sequence(
     screen: pygame.Surface,
     flags: int,
     *,
-    show_transition: bool = False,
     validate: bool = True,
 ) -> "pygame.Surface":
     """
@@ -439,8 +403,6 @@ def _play_mpv_sequence(
         return screen
 
     size = screen.get_size()
-    if show_transition:
-        _draw_now_showing_transition(screen, clip_title_from_path(paths[0]))
     mouse_hide.apply(screen)
     pygame.display.flip()
     mouse_hide.apply(screen)
@@ -468,15 +430,9 @@ def _play_mpv_sequence(
     return screen
 
 
-def _play_mpv(
-    path: Path,
-    screen: pygame.Surface,
-    flags: int,
-    *,
-    show_transition: bool = True,
-) -> "pygame.Surface":
+def _play_mpv(path: Path, screen: pygame.Surface, flags: int) -> "pygame.Surface":
     """Hand the display to mpv for one clip, then reclaim it."""
-    return _play_mpv_sequence([path], screen, flags, show_transition=show_transition)
+    return _play_mpv_sequence([path], screen, flags)
 
 
 def _play_live_break_reel(

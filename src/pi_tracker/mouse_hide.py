@@ -107,6 +107,10 @@ def handoff_from_mpv(screen: pygame.Surface, *, fill: tuple[int, int, int] = (0,
     """
     Re-hide after mpv releases DRM/KMS — a few black flips without unsafe SDL calls.
     """
+    try:
+        pygame.mouse.set_visible(False)
+    except pygame.error:
+        pass
     for _ in range(3):
         apply(screen)
         try:
