@@ -17,7 +17,12 @@ from typing import Any
 
 from .. import config
 from .. import playback
-from ..mlb_highlights import is_game_highlight_file, is_playable_highlight_mp4, sweep_incomplete_highlights
+from ..mlb_highlights import (
+    game_folder_has_playable_clips,
+    is_game_highlight_file,
+    is_playable_highlight_mp4,
+    sweep_incomplete_highlights,
+)
 
 
 def is_game_highlight_folder(folder: Path) -> bool:

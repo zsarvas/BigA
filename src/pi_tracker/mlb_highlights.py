@@ -265,6 +265,82 @@ def game_highlights_dir(game_pk: int) -> Path:
 
 _MIN_MEDIA_BYTES = 2048
 _PROBE_TIMEOUT_SEC = 20
+# Panel transcodes are a few MB; 720p API originals are 50–400+ MB — reject without ffprobe.
+_MAX_PLAYABLE_GAME_CLIP_BYTES = (
+    max(1, int(os.environ.get("BIGA_MAX_PLAYABLE_CLIP_MB", "25") or "25")) * 1024 * 1024
+)
+
+# (mtime, size) → probe result — avoids ffprobe storms on the main draw loop.
+_valid_mp4_cache: dict[str, tuple[tuple[float, int], bool]] = {}
+_playable_mp4_cache: dict[str, tuple[tuple[float, int], bool]] = {}
+_dims_cache: dict[str, tuple[tuple[float, int], tuple[int, int] | None]] = {}
+
+
+def _clip_stat(path: Path) -> tuple[float, int]:
+    st = path.stat()
+    return st.st_mtime, st.st_size
+
+
+def _cache_get(cache: dict, path: Path) -> tuple[bool, bool]:
+    """Return (hit, value). *value* is meaningless when not hit."""
+    key = str(path.resolve())
+    try:
+        stat = _clip_stat(path)
+    except OSError:
+        return False, False
+    entry = cache.get(key)
+    if entry is not None and entry[0] == stat:
+        return True, entry[1]
+    return False, False
+
+
+def _cache_put(cache: dict, path: Path, value: bool) -> None:
+    try:
+        cache[str(path.resolve())] = (_clip_stat(path), value)
+    except OSError:
+        pass
+
+
+def clear_highlight_probe_cache() -> None:
+    """Drop cached ffprobe results (e.g. after re-transcode)."""
+    _valid_mp4_cache.clear()
+    _playable_mp4_cache.clear()
+    _dims_cache.clear()
+
+
+def is_game_highlight_file(path: Path) -> bool:
+    """True for finished clips under ``highlights/{game_pk}/`` (not idle reel)."""
+    if path.suffix.lower() != ".mp4":
+        return False
+    try:
+        path.resolve().parent.resolve().relative_to(config.GAME_HIGHLIGHTS_DIR.resolve())
+    except ValueError:
+        return False
+    return True
+
+
+def is_oversized_game_clip(path: Path) -> bool:
+    """True when a game clip is too large to be a panel transcode (skip ffprobe)."""
+    if not is_game_highlight_file(path):
+        return False
+    try:
+        return path.stat().st_size > _MAX_PLAYABLE_GAME_CLIP_BYTES
+    except OSError:
+        return True
+
+
+def is_likely_playable_game_clip(path: Path) -> bool:
+    """
+    Fast gate for per-frame folder checks — ``stat()`` only, no ffprobe.
+
+    Use ``is_playable_highlight_mp4`` before mpv playback.
+    """
+    low = path.name.lower()
+    if ".raw" in low or ".tmp" in low or ".panel" in low:
+        return False
+    if path.suffix.lower() != ".mp4":
+        return False
+    return not is_oversized_game_clip(path)
 
 
 def _probe_media_ok(path: Path) -> bool:
@@ -320,17 +396,32 @@ def is_valid_highlight_mp4(path: Path) -> bool:
         return False
     if path.suffix.lower() != ".mp4":
         return False
-    return _probe_media_ok(path)
+    hit, ok = _cache_get(_valid_mp4_cache, path)
+    if hit:
+        return ok
+    ok = _probe_media_ok(path)
+    _cache_put(_valid_mp4_cache, path, ok)
+    return ok
 
 
 def probe_video_dimensions(path: Path) -> tuple[int, int] | None:
     """Return ``(width, height)`` of the first video stream, or None if unknown."""
+    key = str(path.resolve())
+    try:
+        stat = _clip_stat(path)
+    except OSError:
+        return None
+    cached = _dims_cache.get(key)
+    if cached is not None and cached[0] == stat:
+        return cached[1]
+
     import shutil
     import subprocess as sp
 
     ffprobe = shutil.which("ffprobe")
     if not ffprobe:
         return None
+    dims: tuple[int, int] | None
     try:
         result = sp.run(
             [
@@ -349,28 +440,22 @@ def probe_video_dimensions(path: Path) -> tuple[int, int] | None:
             timeout=_PROBE_TIMEOUT_SEC,
         )
     except (OSError, sp.TimeoutExpired):
-        return None
-    if result.returncode != 0:
-        return None
-    raw = (result.stdout or b"").decode().strip()
-    if "x" not in raw:
-        return None
-    w_s, h_s = raw.split("x", 1)
-    try:
-        return int(w_s), int(h_s)
-    except ValueError:
-        return None
-
-
-def is_game_highlight_file(path: Path) -> bool:
-    """True for finished clips under ``highlights/{game_pk}/`` (not idle reel)."""
-    if path.suffix.lower() != ".mp4":
-        return False
-    try:
-        path.resolve().parent.resolve().relative_to(config.GAME_HIGHLIGHTS_DIR.resolve())
-    except ValueError:
-        return False
-    return True
+        dims = None
+    else:
+        if result.returncode != 0:
+            dims = None
+        else:
+            raw = (result.stdout or b"").decode().strip()
+            if "x" not in raw:
+                dims = None
+            else:
+                w_s, h_s = raw.split("x", 1)
+                try:
+                    dims = (int(w_s), int(h_s))
+                except ValueError:
+                    dims = None
+    _dims_cache[key] = (stat, dims)
+    return dims
 
 
 def is_panel_sized_mp4(path: Path) -> bool:
@@ -379,6 +464,8 @@ def is_panel_sized_mp4(path: Path) -> bool:
 
     When ffprobe is unavailable (dev machines), returns True so tests are not blocked.
     """
+    if is_oversized_game_clip(path):
+        return False
     dims = probe_video_dimensions(path)
     if dims is None:
         return True
@@ -388,11 +475,30 @@ def is_panel_sized_mp4(path: Path) -> bool:
 
 def is_playable_highlight_mp4(path: Path) -> bool:
     """Valid highlight that is safe to play on the Pi panel (game clips must be panel-sized)."""
+    if is_game_highlight_file(path) and is_oversized_game_clip(path):
+        return False
+    hit, ok = _cache_get(_playable_mp4_cache, path)
+    if hit:
+        return ok
     if not is_valid_highlight_mp4(path):
+        _cache_put(_playable_mp4_cache, path, False)
         return False
     if is_game_highlight_file(path):
-        return is_panel_sized_mp4(path)
-    return True
+        ok = is_panel_sized_mp4(path)
+    else:
+        ok = True
+    _cache_put(_playable_mp4_cache, path, ok)
+    return ok
+
+
+def game_folder_has_playable_clips(folder: Path) -> bool:
+    """Fast check for win/loss scene — no ffprobe (safe to call every frame)."""
+    if not folder.is_dir():
+        return False
+    for p in folder.glob("*.mp4"):
+        if is_likely_playable_game_clip(p):
+            return True
+    return False
 
 
 _RETRANSCODE_GRACE_SEC = max(
@@ -420,6 +526,7 @@ def _retranscode_to_panel(path: Path, *, background: bool = False) -> bool:
             tmp_dest.rename(final)
             _chown_for_pi(final)
         log.info("re-transcoded oversized highlight → panel size: %s", final_name)
+        clear_highlight_probe_cache()
         return True
     finally:
         playback.transcode_end()

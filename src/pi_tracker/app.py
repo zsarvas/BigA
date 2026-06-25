@@ -665,6 +665,8 @@ def main() -> None:
             pygame.display.flip()
             if mouse_hide.kiosk_mode():
                 mouse_hide.apply(screen)
+            if frame_i == 0:
+                log.info("main loop first frame (scene=%s)", scene_key)
 
             # Hold background ffmpeg until ready break clips have played.
             if scene_key == "live":
