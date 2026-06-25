@@ -323,6 +323,127 @@ def is_valid_highlight_mp4(path: Path) -> bool:
     return _probe_media_ok(path)
 
 
+def probe_video_dimensions(path: Path) -> tuple[int, int] | None:
+    """Return ``(width, height)`` of the first video stream, or None if unknown."""
+    import shutil
+    import subprocess as sp
+
+    ffprobe = shutil.which("ffprobe")
+    if not ffprobe:
+        return None
+    try:
+        result = sp.run(
+            [
+                ffprobe,
+                "-v",
+                "error",
+                "-select_streams",
+                "v:0",
+                "-show_entries",
+                "stream=width,height",
+                "-of",
+                "csv=p=0:s=x",
+                str(path),
+            ],
+            capture_output=True,
+            timeout=_PROBE_TIMEOUT_SEC,
+        )
+    except (OSError, sp.TimeoutExpired):
+        return None
+    if result.returncode != 0:
+        return None
+    raw = (result.stdout or b"").decode().strip()
+    if "x" not in raw:
+        return None
+    w_s, h_s = raw.split("x", 1)
+    try:
+        return int(w_s), int(h_s)
+    except ValueError:
+        return None
+
+
+def is_game_highlight_file(path: Path) -> bool:
+    """True for finished clips under ``highlights/{game_pk}/`` (not idle reel)."""
+    if path.suffix.lower() != ".mp4":
+        return False
+    try:
+        path.resolve().parent.resolve().relative_to(config.GAME_HIGHLIGHTS_DIR.resolve())
+    except ValueError:
+        return False
+    return True
+
+
+def is_panel_sized_mp4(path: Path) -> bool:
+    """
+    True when the video fits the panel without mpv CPU-scaling (≤ SCREEN_WIDTH×HEIGHT).
+
+    When ffprobe is unavailable (dev machines), returns True so tests are not blocked.
+    """
+    dims = probe_video_dimensions(path)
+    if dims is None:
+        return True
+    w, h = dims
+    return w <= config.SCREEN_WIDTH and h <= config.SCREEN_HEIGHT
+
+
+def is_playable_highlight_mp4(path: Path) -> bool:
+    """Valid highlight that is safe to play on the Pi panel (game clips must be panel-sized)."""
+    if not is_valid_highlight_mp4(path):
+        return False
+    if is_game_highlight_file(path):
+        return is_panel_sized_mp4(path)
+    return True
+
+
+def _retranscode_to_panel(path: Path) -> bool:
+    """Re-encode an oversized on-disk highlight to panel resolution in place."""
+    if not path.is_file() or is_panel_sized_mp4(path):
+        return True
+    final_name = path.name
+    tmp_dest = path.with_suffix(".panel.mp4")
+    tmp_dest.unlink(missing_ok=True)
+    playback.transcode_begin()
+    try:
+        if not _transcode_for_pi(path, tmp_dest):
+            log.warning("re-transcode failed for oversized highlight: %s", final_name)
+            return False
+        final = tmp_dest.parent / final_name
+        if tmp_dest != final:
+            if final.exists():
+                final.unlink()
+            tmp_dest.rename(final)
+            _chown_for_pi(final)
+        log.info("re-transcoded oversized highlight → panel size: %s", final_name)
+        return True
+    finally:
+        playback.transcode_end()
+
+
+def _sweep_oversized_highlights(folder: Path) -> None:
+    """Background re-transcode for 720p (etc.) clips that slipped through as originals."""
+    if not folder.is_dir():
+        return
+    if playback.is_download_busy() or playback.is_transcode_busy():
+        return
+    for p in sorted(folder.glob("*.mp4")):
+        low = p.name.lower()
+        if ".raw" in low or ".tmp" in low or ".panel" in low:
+            continue
+        if not is_valid_highlight_mp4(p) or is_panel_sized_mp4(p):
+            continue
+        dims = probe_video_dimensions(p)
+        log.warning(
+            "oversized highlight %s (%sx%s) — re-transcoding to %dx%d",
+            p.name,
+            dims[0] if dims else "?",
+            dims[1] if dims else "?",
+            config.SCREEN_WIDTH,
+            config.SCREEN_HEIGHT,
+        )
+        _retranscode_to_panel(p)
+        return  # one per sweep — ffmpeg is heavy on the Zero 2W
+
+
 def sweep_incomplete_highlights(folder: Path, *, stale_partial_sec: float = 30) -> int:
     """
     Remove partial temps, corrupt clips, and abandoned downloads.
@@ -338,6 +459,8 @@ def sweep_incomplete_highlights(folder: Path, *, stale_partial_sec: float = 30) 
         return 0
     if playback.is_download_busy() or playback.is_transcode_busy():
         return 0
+
+    _sweep_oversized_highlights(folder)
 
     now = time.time()
     removed = 0
@@ -602,6 +725,15 @@ def _resume_orphan_transcodes(dest_dir: Path, stop: threading.Event) -> Path | N
                 log.warning("resume: original file failed validation: %s", dest.name)
                 dest.unlink(missing_ok=True)
                 continue
+            if not is_panel_sized_mp4(dest):
+                dims = probe_video_dimensions(dest)
+                log.warning(
+                    "resume: oversized original %s (%sx%s) — will re-transcode on next sweep",
+                    dest.name,
+                    dims[0] if dims else "?",
+                    dims[1] if dims else "?",
+                )
+                continue
             _chown_for_pi(dest)
             log.info("saved %s (original quality, resume)", dest.name)
             return dest
@@ -671,12 +803,23 @@ def _download_clip(
     playback.transcode_begin()
     try:
         if not _transcode_for_pi(raw, dest):
-            raw.rename(dest)
-            if not is_valid_highlight_mp4(dest):
-                log.warning("original file failed validation: %s", fname)
-                dest.unlink(missing_ok=True)
+            if is_panel_sized_mp4(raw):
+                raw.rename(dest)
+                if not is_valid_highlight_mp4(dest):
+                    log.warning("original file failed validation: %s", fname)
+                    dest.unlink(missing_ok=True)
+                    return None
+                log.info("saved %s (original quality)", fname)
+            else:
+                dims = probe_video_dimensions(raw)
+                log.warning(
+                    "transcode failed for oversized clip %s (%sx%s, %d KB) — keeping .rawdl for retry",
+                    fname,
+                    dims[0] if dims else "?",
+                    dims[1] if dims else "?",
+                    raw.stat().st_size // 1024,
+                )
                 return None
-            log.info("saved %s (original quality)", fname)
         _chown_for_pi(dest)
         if game_pk:
             from .highlight_meta import build_clip_meta, write_clip_meta

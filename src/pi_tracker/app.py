@@ -46,7 +46,15 @@ from .team_config import tracked_team_abbr, tracked_team_name
 from . import mouse_hide
 from . import playback
 from .gpio_leds import cleanup_gpio, init_gpio, is_muted, set_win_led
-from .mlb_highlights import HighlightDownloader, is_valid_highlight_mp4, seed_idle_recap_from_schedule, sync_highlight_downloader
+from .mlb_highlights import (
+    HighlightDownloader,
+    is_game_highlight_file,
+    is_panel_sized_mp4,
+    is_playable_highlight_mp4,
+    is_valid_highlight_mp4,
+    seed_idle_recap_from_schedule,
+    sync_highlight_downloader,
+)
 from .scenes import FinalLossScene, FinalWinScene, IdleScene, LiveScene
 
 
@@ -317,15 +325,18 @@ _MPV_DRM_HANDOFF_SEC = 0.2
 def _filter_valid_clip_paths(paths: list[Path], *, validate: bool = True) -> list[Path]:
     good: list[Path] = []
     for path in paths:
-        if (
-            validate
-            and path.suffix.lower() == ".mp4"
-            and not is_valid_highlight_mp4(path)
-        ):
-            logging.warning("skipping corrupt highlight clip: %s", path.name)
-            path.unlink(missing_ok=True)
-        else:
-            good.append(path)
+        if validate and path.suffix.lower() == ".mp4":
+            if not is_valid_highlight_mp4(path):
+                logging.warning("skipping corrupt highlight clip: %s", path.name)
+                path.unlink(missing_ok=True)
+                continue
+            if is_game_highlight_file(path) and not is_panel_sized_mp4(path):
+                logging.warning(
+                    "skipping oversized highlight clip: %s (needs panel transcode)",
+                    path.name,
+                )
+                continue
+        good.append(path)
     return good
 
 
@@ -687,7 +698,11 @@ def main() -> None:
                     or getattr(scene, "_break_reel_active", False)
                 )
                 # Ready clips on disk can play during background ffmpeg (win/loss + live breaks).
-                clip_ready = is_valid_highlight_mp4(pending)
+                clip_ready = (
+                    is_playable_highlight_mp4(pending)
+                    if is_game_highlight_file(pending)
+                    else is_valid_highlight_mp4(pending)
+                )
                 if in_break or not playback.is_transcode_busy() or clip_ready:
                     if in_break:
                         screen = _play_live_break_reel(

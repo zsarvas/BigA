@@ -17,7 +17,7 @@ from typing import Any
 
 from .. import config
 from .. import playback
-from ..mlb_highlights import sweep_incomplete_highlights
+from ..mlb_highlights import is_game_highlight_file, is_playable_highlight_mp4, sweep_incomplete_highlights
 
 
 def is_game_highlight_folder(folder: Path) -> bool:
@@ -114,11 +114,13 @@ def _rand_gap_ms() -> int:
 
 
 def _playable_clip_paths(folder: Path) -> list[Path]:
-    """Finished .mp4 clips only — skip in-progress download/transcode temps."""
+    """Finished .mp4 clips only — skip in-progress temps and oversized game pulls."""
     out: list[Path] = []
     for p in folder.glob("*.mp4"):
         low = p.name.lower()
         if ".raw" in low or ".tmp" in low:
+            continue
+        if is_game_highlight_file(p) and not is_playable_highlight_mp4(p):
             continue
         out.append(p)
     return out
