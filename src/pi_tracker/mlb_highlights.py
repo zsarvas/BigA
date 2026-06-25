@@ -67,8 +67,25 @@ _SKIP_PATTERNS = (
 )
 
 
+def condensed_games_enabled() -> bool:
+    """Condensed-game recaps are huge (10+ min, 100–400 MB) — off on Pi by default."""
+    return os.environ.get("BIGA_ALLOW_CONDENSED", "").strip().lower() in ("1", "true", "yes")
+
+
+def is_condensed_game_blurb(blurb: str) -> bool:
+    return "condensed game" in blurb.lower()
+
+
+def is_condensed_game_clip(path: Path) -> bool:
+    """True for MLB ``Condensed Game: …`` highlights (slug ``condensed-game-…``)."""
+    stem = path.stem.lower().replace("_", "-")
+    return "condensed-game" in stem or stem.startswith("condensed")
+
+
 def should_download(blurb: str) -> bool:
     """True when the highlight is worth fetching (default include unless skipped)."""
+    if not condensed_games_enabled() and is_condensed_game_blurb(blurb):
+        return False
     lower = blurb.lower()
     return not any(p in lower for p in _SKIP_PATTERNS)
 
@@ -265,6 +282,84 @@ def game_highlights_dir(game_pk: int) -> Path:
 
 _MIN_MEDIA_BYTES = 2048
 _PROBE_TIMEOUT_SEC = 20
+# Panel transcodes are a few MB; 720p API originals are 50–400+ MB — reject without ffprobe.
+_MAX_PLAYABLE_GAME_CLIP_BYTES = (
+    max(1, int(os.environ.get("BIGA_MAX_PLAYABLE_CLIP_MB", "25") or "25")) * 1024 * 1024
+)
+
+# (mtime, size) → probe result — avoids ffprobe storms on the main draw loop.
+_valid_mp4_cache: dict[str, tuple[tuple[float, int], bool]] = {}
+_playable_mp4_cache: dict[str, tuple[tuple[float, int], bool]] = {}
+_dims_cache: dict[str, tuple[tuple[float, int], tuple[int, int] | None]] = {}
+
+
+def _clip_stat(path: Path) -> tuple[float, int]:
+    st = path.stat()
+    return st.st_mtime, st.st_size
+
+
+def _cache_get(cache: dict, path: Path) -> tuple[bool, bool]:
+    """Return (hit, value). *value* is meaningless when not hit."""
+    key = str(path.resolve())
+    try:
+        stat = _clip_stat(path)
+    except OSError:
+        return False, False
+    entry = cache.get(key)
+    if entry is not None and entry[0] == stat:
+        return True, entry[1]
+    return False, False
+
+
+def _cache_put(cache: dict, path: Path, value: bool) -> None:
+    try:
+        cache[str(path.resolve())] = (_clip_stat(path), value)
+    except OSError:
+        pass
+
+
+def clear_highlight_probe_cache() -> None:
+    """Drop cached ffprobe results (e.g. after re-transcode)."""
+    _valid_mp4_cache.clear()
+    _playable_mp4_cache.clear()
+    _dims_cache.clear()
+
+
+def is_game_highlight_file(path: Path) -> bool:
+    """True for finished clips under ``highlights/{game_pk}/`` (not idle reel)."""
+    if path.suffix.lower() != ".mp4":
+        return False
+    try:
+        path.resolve().parent.resolve().relative_to(config.GAME_HIGHLIGHTS_DIR.resolve())
+    except ValueError:
+        return False
+    return True
+
+
+def is_oversized_game_clip(path: Path) -> bool:
+    """True when a game clip is too large to be a panel transcode (skip ffprobe)."""
+    if not is_game_highlight_file(path):
+        return False
+    try:
+        return path.stat().st_size > _MAX_PLAYABLE_GAME_CLIP_BYTES
+    except OSError:
+        return True
+
+
+def is_likely_playable_game_clip(path: Path) -> bool:
+    """
+    Fast gate for per-frame folder checks — ``stat()`` only, no ffprobe.
+
+    Use ``is_playable_highlight_mp4`` before mpv playback.
+    """
+    if not condensed_games_enabled() and is_condensed_game_clip(path):
+        return False
+    low = path.name.lower()
+    if ".raw" in low or ".tmp" in low or ".panel" in low:
+        return False
+    if path.suffix.lower() != ".mp4":
+        return False
+    return not is_oversized_game_clip(path)
 
 
 def _probe_media_ok(path: Path) -> bool:
@@ -320,7 +415,179 @@ def is_valid_highlight_mp4(path: Path) -> bool:
         return False
     if path.suffix.lower() != ".mp4":
         return False
-    return _probe_media_ok(path)
+    hit, ok = _cache_get(_valid_mp4_cache, path)
+    if hit:
+        return ok
+    ok = _probe_media_ok(path)
+    _cache_put(_valid_mp4_cache, path, ok)
+    return ok
+
+
+def probe_video_dimensions(path: Path) -> tuple[int, int] | None:
+    """Return ``(width, height)`` of the first video stream, or None if unknown."""
+    key = str(path.resolve())
+    try:
+        stat = _clip_stat(path)
+    except OSError:
+        return None
+    cached = _dims_cache.get(key)
+    if cached is not None and cached[0] == stat:
+        return cached[1]
+
+    import shutil
+    import subprocess as sp
+
+    ffprobe = shutil.which("ffprobe")
+    if not ffprobe:
+        return None
+    dims: tuple[int, int] | None
+    try:
+        result = sp.run(
+            [
+                ffprobe,
+                "-v",
+                "error",
+                "-select_streams",
+                "v:0",
+                "-show_entries",
+                "stream=width,height",
+                "-of",
+                "csv=p=0:s=x",
+                str(path),
+            ],
+            capture_output=True,
+            timeout=_PROBE_TIMEOUT_SEC,
+        )
+    except (OSError, sp.TimeoutExpired):
+        dims = None
+    else:
+        if result.returncode != 0:
+            dims = None
+        else:
+            raw = (result.stdout or b"").decode().strip()
+            if "x" not in raw:
+                dims = None
+            else:
+                w_s, h_s = raw.split("x", 1)
+                try:
+                    dims = (int(w_s), int(h_s))
+                except ValueError:
+                    dims = None
+    _dims_cache[key] = (stat, dims)
+    return dims
+
+
+def is_panel_sized_mp4(path: Path) -> bool:
+    """
+    True when the video fits the panel without mpv CPU-scaling (≤ SCREEN_WIDTH×HEIGHT).
+
+    When ffprobe is unavailable (dev machines), returns True so tests are not blocked.
+    """
+    if is_oversized_game_clip(path):
+        return False
+    dims = probe_video_dimensions(path)
+    if dims is None:
+        return True
+    w, h = dims
+    return w <= config.SCREEN_WIDTH and h <= config.SCREEN_HEIGHT
+
+
+def is_playable_highlight_mp4(path: Path) -> bool:
+    """Valid highlight that is safe to play on the Pi panel (game clips must be panel-sized)."""
+    if is_game_highlight_file(path) and not condensed_games_enabled() and is_condensed_game_clip(path):
+        return False
+    if is_game_highlight_file(path) and is_oversized_game_clip(path):
+        return False
+    hit, ok = _cache_get(_playable_mp4_cache, path)
+    if hit:
+        return ok
+    if not is_valid_highlight_mp4(path):
+        _cache_put(_playable_mp4_cache, path, False)
+        return False
+    if is_game_highlight_file(path):
+        ok = is_panel_sized_mp4(path)
+    else:
+        ok = True
+    _cache_put(_playable_mp4_cache, path, ok)
+    return ok
+
+
+def game_folder_has_playable_clips(folder: Path) -> bool:
+    """Fast check for win/loss scene — no ffprobe (safe to call every frame)."""
+    if not folder.is_dir():
+        return False
+    for p in folder.glob("*.mp4"):
+        if is_likely_playable_game_clip(p):
+            return True
+    return False
+
+
+_RETRANSCODE_GRACE_SEC = max(
+    0,
+    int(os.environ.get("BIGA_RETRANSCODE_GRACE_SEC", "60") or "60"),
+)
+
+
+def _retranscode_to_panel(path: Path, *, background: bool = False) -> bool:
+    """Re-encode an oversized on-disk highlight to panel resolution in place."""
+    if not path.is_file() or is_panel_sized_mp4(path):
+        return True
+    final_name = path.name
+    tmp_dest = path.with_suffix(".panel.mp4")
+    tmp_dest.unlink(missing_ok=True)
+    playback.transcode_begin()
+    try:
+        if not _transcode_for_pi(path, tmp_dest, background=background):
+            log.warning("re-transcode failed for oversized highlight: %s", final_name)
+            return False
+        final = tmp_dest.parent / final_name
+        if tmp_dest != final:
+            if final.exists():
+                final.unlink()
+            tmp_dest.rename(final)
+            _chown_for_pi(final)
+        log.info("re-transcoded oversized highlight → panel size: %s", final_name)
+        clear_highlight_probe_cache()
+        return True
+    finally:
+        playback.transcode_end()
+
+
+def sweep_oversized_highlights(folder: Path, *, started_at: float) -> None:
+    """
+    Background-only repair: re-transcode one 720p clip per call.
+
+  Never call from the pygame main thread — ffmpeg on a large condensed game can
+    take many minutes and starve the UI.
+    """
+    if not folder.is_dir():
+        return
+    if time.monotonic() - started_at < _RETRANSCODE_GRACE_SEC:
+        return
+    if playback.is_download_busy() or playback.is_transcode_busy():
+        return
+    if playback.is_active():
+        return
+    playback.wait_for_transcode_slot()
+    for p in sorted(folder.glob("*.mp4")):
+        low = p.name.lower()
+        if ".raw" in low or ".tmp" in low or ".panel" in low:
+            continue
+        if not is_valid_highlight_mp4(p) or is_panel_sized_mp4(p):
+            continue
+        if not condensed_games_enabled() and is_condensed_game_clip(p):
+            continue
+        dims = probe_video_dimensions(p)
+        log.warning(
+            "oversized highlight %s (%sx%s) — re-transcoding to %dx%d (background)",
+            p.name,
+            dims[0] if dims else "?",
+            dims[1] if dims else "?",
+            config.SCREEN_WIDTH,
+            config.SCREEN_HEIGHT,
+        )
+        _retranscode_to_panel(p, background=True)
+        return  # one per poll — ffmpeg is heavy on the Zero 2W
 
 
 def probe_video_dimensions(path: Path) -> tuple[int, int] | None:
@@ -592,7 +859,7 @@ _TRANSCODE_WIDTH = config.SCREEN_WIDTH
 _TRANSCODE_HEIGHT = config.SCREEN_HEIGHT
 
 
-def _transcode_for_pi(src: Path, dest: Path) -> bool:
+def _transcode_for_pi(src: Path, dest: Path, *, background: bool = False) -> bool:
     """
     Re-encode *src* to panel-sized H.264 with cover+crop (no letterboxing/stretch).
     Tries Pi hardware encoder first, then software libx264.
@@ -606,7 +873,7 @@ def _transcode_for_pi(src: Path, dest: Path) -> bool:
     tmp = dest.with_suffix(".tc.tmp")
     tmp.unlink(missing_ok=True)
     kb_in = src.stat().st_size // 1024
-    light = playback.prefers_light_transcode()
+    light = background or playback.prefers_light_transcode()
     log.info(
         "transcoding %s (%d KB) → %dx%d%s…",
         src.name,
@@ -693,6 +960,9 @@ def _resume_orphan_transcodes(dest_dir: Path, stop: threading.Event) -> Path | N
         return None
     for raw in sorted(dest_dir.glob("*.rawdl")):
         dest = dest_dir / f"{raw.stem}.mp4"
+        if not condensed_games_enabled() and is_condensed_game_clip(dest):
+            log.info("skipping condensed-game orphan transcode: %s", raw.name)
+            continue
         if dest.exists():
             if is_valid_highlight_mp4(dest):
                 raw.unlink(missing_ok=True)
@@ -728,7 +998,7 @@ def _resume_orphan_transcodes(dest_dir: Path, stop: threading.Event) -> Path | N
             if not is_panel_sized_mp4(dest):
                 dims = probe_video_dimensions(dest)
                 log.warning(
-                    "resume: oversized original %s (%sx%s) — will re-transcode on next sweep",
+                    "resume: oversized original %s (%sx%s) — will re-transcode in background",
                     dest.name,
                     dims[0] if dims else "?",
                     dims[1] if dims else "?",
@@ -848,6 +1118,7 @@ class HighlightDownloader:
     def __init__(self, game_pk: int) -> None:
         self.game_pk = game_pk
         self._dest = game_highlights_dir(game_pk)
+        self._started_at = time.monotonic()
         sweep_incomplete_highlights(self._dest)
         self._seen_ids: set[str] = set()
         self._seen_urls: set[str] = set()
@@ -907,6 +1178,7 @@ class HighlightDownloader:
         downloaded or transcoded this cycle.
         """
         sweep_incomplete_highlights(self._dest)
+        sweep_oversized_highlights(self._dest, started_at=self._started_at)
         log_highlight_folder_status(self._dest)
         if not playback.is_download_busy():
             resumed = _resume_orphan_transcodes(self._dest, self._stop)

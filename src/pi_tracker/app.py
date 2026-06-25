@@ -586,16 +586,6 @@ def main() -> None:
     _last_dl_key: tuple[str, int, int] | None = None
     if not demo and not no_schedule:
         seed_idle_recap_from_schedule(state)
-    if not demo:
-        _hl_downloader, _last_live_pk = sync_highlight_downloader(
-            state.snapshot(), None, 0
-        )
-        s0 = state.snapshot()
-        _last_dl_key = (
-            str(s0.get("scene", "idle")),
-            int(s0.get("live_game_pk") or 0),
-            int(s0.get("next_game_pk") or 0),
-        )
     running = True
     loop_start = time.monotonic()
     frame_i = 0
@@ -675,6 +665,8 @@ def main() -> None:
             pygame.display.flip()
             if mouse_hide.kiosk_mode():
                 mouse_hide.apply(screen)
+            if frame_i == 0:
+                log.info("main loop first frame (scene=%s)", scene_key)
 
             # Hold background ffmpeg until ready break clips have played.
             if scene_key == "live":
