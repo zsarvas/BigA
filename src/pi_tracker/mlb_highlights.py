@@ -18,6 +18,7 @@ called at first pitch of a new game.
 
 from __future__ import annotations
 
+import json
 import logging
 import os
 import shutil
@@ -90,6 +91,26 @@ def should_download(blurb: str) -> bool:
     return not any(p in lower for p in _SKIP_PATTERNS)
 
 
+def _parse_mlb_duration(raw: object) -> int | None:
+    """Parse MLB ``duration`` strings like ``00:03:05`` → seconds."""
+    if not raw or not isinstance(raw, str):
+        return None
+    parts = raw.strip().split(":")
+    try:
+        nums = [int(p) for p in parts]
+    except ValueError:
+        return None
+    if len(nums) == 3:
+        h, m, s = nums
+    elif len(nums) == 2:
+        h, m, s = 0, nums[0], nums[1]
+    elif len(nums) == 1:
+        h, m, s = 0, 0, nums[0]
+    else:
+        return None
+    return h * 3600 + m * 60 + s
+
+
 def _best_mp4_url(playbacks: list[dict]) -> str | None:
     """Return the best mp4 URL — prefer mp4Avc (4000K) over highBit (16000K)."""
     for pb in playbacks:
@@ -152,6 +173,7 @@ def fetch_highlight_clips_result(game_pk: int) -> tuple[list[dict], bool]:
             "blurb": blurb,
             "url": mp4_url,
             "cclocation_vtt": str(item.get("cclocationVtt") or ""),
+            "duration_sec": _parse_mlb_duration(item.get("duration")),
         })
     return results, True
 
@@ -286,6 +308,18 @@ _PROBE_TIMEOUT_SEC = 20
 _MAX_PLAYABLE_GAME_CLIP_BYTES = (
     max(1, int(os.environ.get("BIGA_MAX_PLAYABLE_CLIP_MB", "25") or "25")) * 1024 * 1024
 )
+# mp4Avc 720p play clips are often 30–45 MB; skip only outliers (long recaps, multi-minute packages).
+_MAX_DOWNLOAD_CLIP_BYTES = (
+    max(1, int(os.environ.get("BIGA_MAX_DOWNLOAD_CLIP_MB", "80") or "80")) * 1024 * 1024
+)
+_MAX_HIGHLIGHT_DURATION_SEC = max(
+    30,
+    int(os.environ.get("BIGA_MAX_HIGHLIGHT_DURATION_SEC", "360") or "360"),
+)
+_MAX_TRANSCODE_ATTEMPTS = max(
+    1,
+    int(os.environ.get("BIGA_MAX_TRANSCODE_ATTEMPTS", "3") or "3"),
+)
 
 # (mtime, size) → probe result — avoids ffprobe storms on the main draw loop.
 _valid_mp4_cache: dict[str, tuple[tuple[float, int], bool]] = {}
@@ -323,6 +357,141 @@ def clear_highlight_probe_cache() -> None:
     _valid_mp4_cache.clear()
     _playable_mp4_cache.clear()
     _dims_cache.clear()
+
+
+def _skip_meta_path(dest_dir: Path, stem: str) -> Path:
+    return dest_dir / f"{stem}.skip.json"
+
+
+def _fail_meta_path(dest_dir: Path, stem: str) -> Path:
+    return dest_dir / f"{stem}.fail.json"
+
+
+def is_clip_permanently_skipped(dest_mp4: Path) -> bool:
+    return _skip_meta_path(dest_mp4.parent, dest_mp4.stem).is_file()
+
+
+def _read_json_sidecar(path: Path) -> dict[str, Any] | None:
+    if not path.is_file():
+        return None
+    try:
+        data = json.loads(path.read_text(encoding="utf-8"))
+        return data if isinstance(data, dict) else None
+    except (OSError, json.JSONDecodeError):
+        return None
+
+
+def _write_json_sidecar(path: Path, data: dict[str, Any]) -> None:
+    tmp = path.with_suffix(".tmp")
+    tmp.write_text(json.dumps(data, separators=(",", ":")), encoding="utf-8")
+    tmp.replace(path)
+    _chown_for_pi(path)
+
+
+def _cleanup_clip_artifacts(dest_dir: Path, stem: str) -> None:
+    for name in (
+        f"{stem}.mp4",
+        f"{stem}.rawdl",
+        f"{stem}.tc.tmp",
+        f"{stem}.panel.mp4",
+        f"{stem}.panel.tc.tmp",
+        f"{stem}.fail.json",
+    ):
+        (dest_dir / name).unlink(missing_ok=True)
+
+
+def _mark_clip_skipped(
+    dest_dir: Path,
+    stem: str,
+    *,
+    reason: str,
+    blurb: str = "",
+    attempts: int = 0,
+    bytes_: int = 0,
+) -> None:
+    _write_json_sidecar(
+        _skip_meta_path(dest_dir, stem),
+        {
+            "reason": reason,
+            "attempts": attempts,
+            "bytes": bytes_,
+            "blurb": blurb,
+        },
+    )
+
+
+def _read_transcode_attempts(dest_dir: Path, stem: str) -> int:
+    meta = _read_json_sidecar(_fail_meta_path(dest_dir, stem))
+    if not meta:
+        return 0
+    try:
+        return max(0, int(meta.get("attempts") or 0))
+    except (TypeError, ValueError):
+        return 0
+
+
+def _record_transcode_failure(dest_dir: Path, stem: str) -> int:
+    attempts = _read_transcode_attempts(dest_dir, stem) + 1
+    _write_json_sidecar(_fail_meta_path(dest_dir, stem), {"attempts": attempts})
+    return attempts
+
+
+def _clear_transcode_failures(dest_dir: Path, stem: str) -> None:
+    _fail_meta_path(dest_dir, stem).unlink(missing_ok=True)
+
+
+def _give_up_clip(
+    dest_dir: Path,
+    stem: str,
+    *,
+    reason: str,
+    blurb: str = "",
+    attempts: int = 0,
+    bytes_: int = 0,
+) -> None:
+    _cleanup_clip_artifacts(dest_dir, stem)
+    _mark_clip_skipped(
+        dest_dir,
+        stem,
+        reason=reason,
+        blurb=blurb,
+        attempts=attempts,
+        bytes_=bytes_,
+    )
+    clear_highlight_probe_cache()
+    log.warning(
+        "permanently skipping highlight %s (%s, %d attempts)",
+        stem,
+        reason,
+        attempts,
+    )
+
+
+def _handle_transcode_failure(path: Path, *, blurb: str = "") -> None:
+    """Increment retry counter; quarantine clip after ``_MAX_TRANSCODE_ATTEMPTS``."""
+    dest_dir = path.parent
+    stem = path.stem
+    try:
+        bytes_ = path.stat().st_size
+    except OSError:
+        bytes_ = 0
+    attempts = _record_transcode_failure(dest_dir, stem)
+    if attempts >= _MAX_TRANSCODE_ATTEMPTS:
+        _give_up_clip(
+            dest_dir,
+            stem,
+            reason="transcode",
+            blurb=blurb,
+            attempts=attempts,
+            bytes_=bytes_,
+        )
+    else:
+        log.warning(
+            "transcode failed for %s (attempt %d/%d) — will retry in background",
+            path.name,
+            attempts,
+            _MAX_TRANSCODE_ATTEMPTS,
+        )
 
 
 def is_game_highlight_file(path: Path) -> bool:
@@ -538,7 +707,7 @@ def _retranscode_to_panel(path: Path, *, background: bool = False) -> bool:
     playback.transcode_begin()
     try:
         if not _transcode_for_pi(path, tmp_dest, background=background):
-            log.warning("re-transcode failed for oversized highlight: %s", final_name)
+            _handle_transcode_failure(path)
             return False
         final = tmp_dest.parent / final_name
         if tmp_dest != final:
@@ -547,6 +716,7 @@ def _retranscode_to_panel(path: Path, *, background: bool = False) -> bool:
             tmp_dest.rename(final)
             _chown_for_pi(final)
         log.info("re-transcoded oversized highlight → panel size: %s", final_name)
+        _clear_transcode_failures(path.parent, path.stem)
         clear_highlight_probe_cache()
         return True
     finally:
@@ -572,6 +742,8 @@ def sweep_oversized_highlights(folder: Path, *, started_at: float) -> None:
     for p in sorted(folder.glob("*.mp4")):
         low = p.name.lower()
         if ".raw" in low or ".tmp" in low or ".panel" in low:
+            continue
+        if is_clip_permanently_skipped(p):
             continue
         if not is_valid_highlight_mp4(p) or is_panel_sized_mp4(p):
             continue
@@ -827,6 +999,30 @@ def _transcode_for_pi(src: Path, dest: Path, *, background: bool = False) -> boo
     return False
 
 
+def _probe_download_size(url: str, client: requests.Session | requests) -> int | None:
+    """Return remote ``Content-Length`` when the CDN exposes it."""
+    try:
+        resp = client.head(url, timeout=30, allow_redirects=True)
+        if resp.status_code >= 400:
+            return None
+        raw = resp.headers.get("Content-Length") or resp.headers.get("content-length")
+        if raw:
+            return int(raw)
+    except (ValueError, requests.RequestException):
+        pass
+    return None
+
+
+def _clip_too_large_to_fetch(clip: dict, content_length: int | None) -> str | None:
+    """Human-readable reason when a clip should not be downloaded."""
+    dur = clip.get("duration_sec")
+    if isinstance(dur, int) and dur > _MAX_HIGHLIGHT_DURATION_SEC:
+        return f"duration {dur}s > {_MAX_HIGHLIGHT_DURATION_SEC}s"
+    if content_length is not None and content_length > _MAX_DOWNLOAD_CLIP_BYTES:
+        return f"size {content_length // 1024} KB > {_MAX_DOWNLOAD_CLIP_BYTES // 1024} KB"
+    return None
+
+
 def _resume_orphan_transcodes(dest_dir: Path, stop: threading.Event) -> Path | None:
     """
     Finish clips left as ``.rawdl`` after a crash, service restart, or mpv/ffmpeg overlap.
@@ -837,6 +1033,9 @@ def _resume_orphan_transcodes(dest_dir: Path, stop: threading.Event) -> Path | N
         return None
     for raw in sorted(dest_dir.glob("*.rawdl")):
         dest = dest_dir / f"{raw.stem}.mp4"
+        if is_clip_permanently_skipped(dest):
+            raw.unlink(missing_ok=True)
+            continue
         if not condensed_games_enabled() and is_condensed_game_clip(dest):
             log.info("skipping condensed-game orphan transcode: %s", raw.name)
             continue
@@ -866,6 +1065,7 @@ def _resume_orphan_transcodes(dest_dir: Path, stop: threading.Event) -> Path | N
         try:
             if _transcode_for_pi(raw, dest):
                 _chown_for_pi(dest)
+                _clear_transcode_failures(dest_dir, raw.stem)
                 return dest
             raw.rename(dest)
             if not is_valid_highlight_mp4(dest):
@@ -873,15 +1073,10 @@ def _resume_orphan_transcodes(dest_dir: Path, stop: threading.Event) -> Path | N
                 dest.unlink(missing_ok=True)
                 continue
             if not is_panel_sized_mp4(dest):
-                dims = probe_video_dimensions(dest)
-                log.warning(
-                    "resume: oversized original %s (%sx%s) — will re-transcode in background",
-                    dest.name,
-                    dims[0] if dims else "?",
-                    dims[1] if dims else "?",
-                )
+                _handle_transcode_failure(dest)
                 continue
             _chown_for_pi(dest)
+            _clear_transcode_failures(dest_dir, raw.stem)
             log.info("saved %s (original quality, resume)", dest.name)
             return dest
         finally:
@@ -901,6 +1096,9 @@ def _download_clip(
     slug = _slug(clip.get("blurb", clip["id"]))
     fname = f"{slug}.mp4"
     dest = dest_dir / fname
+    blurb = str(clip.get("blurb") or "")
+    if is_clip_permanently_skipped(dest):
+        return None
     if dest.exists():
         if is_valid_highlight_mp4(dest):
             return dest
@@ -911,13 +1109,30 @@ def _download_clip(
     client = http or requests
     wait_stop = stop or threading.Event()
 
+    content_length = _probe_download_size(clip["url"], client)
+    too_large = _clip_too_large_to_fetch(clip, content_length)
+    if too_large:
+        log.info(
+            "skipping download (too large): %s — %s",
+            blurb[:80],
+            too_large,
+        )
+        _mark_clip_skipped(
+            dest_dir,
+            slug,
+            reason="too_large",
+            blurb=blurb,
+            bytes_=content_length or 0,
+        )
+        return None
+
+    downloaded = 0
     playback.download_begin()
     try:
-        log.info("downloading: %s", clip["blurb"])
+        log.info("downloading: %s", blurb)
         with client.get(clip["url"], stream=True, timeout=120) as r:
             r.raise_for_status()
             with open(raw, "wb") as f:
-                downloaded = 0
                 last_log = 0
                 for chunk in r.iter_content(chunk_size=1 << 20):
                     playback.wait_while_active(wait_stop)
@@ -926,6 +1141,10 @@ def _download_clip(
                     if chunk:
                         f.write(chunk)
                         downloaded += len(chunk)
+                        if downloaded > _MAX_DOWNLOAD_CLIP_BYTES:
+                            raise ValueError(
+                                f"download exceeded {_MAX_DOWNLOAD_CLIP_BYTES // 1024} KB"
+                            )
                         if downloaded - last_log >= 2 << 20:  # every 2 MB
                             log.info("downloading %s: %d KB so far", slug, downloaded // 1024)
                             last_log = downloaded
@@ -934,8 +1153,20 @@ def _download_clip(
         raw.unlink(missing_ok=True)
         tc_tmp.unlink(missing_ok=True)
         return None
+    except ValueError as exc:
+        log.info("aborting oversized download for %s: %s", slug, exc)
+        raw.unlink(missing_ok=True)
+        tc_tmp.unlink(missing_ok=True)
+        _mark_clip_skipped(
+            dest_dir,
+            slug,
+            reason="too_large",
+            blurb=blurb,
+            bytes_=downloaded,
+        )
+        return None
     except Exception as exc:
-        log.warning("download failed for %s: %s", clip["blurb"], exc)
+        log.warning("download failed for %s: %s", blurb, exc)
         raw.unlink(missing_ok=True)
         tc_tmp.unlink(missing_ok=True)
         return None
@@ -957,17 +1188,13 @@ def _download_clip(
                     dest.unlink(missing_ok=True)
                     return None
                 log.info("saved %s (original quality)", fname)
+                _clear_transcode_failures(dest_dir, slug)
             else:
-                dims = probe_video_dimensions(raw)
-                log.warning(
-                    "transcode failed for oversized clip %s (%sx%s, %d KB) — keeping .rawdl for retry",
-                    fname,
-                    dims[0] if dims else "?",
-                    dims[1] if dims else "?",
-                    raw.stat().st_size // 1024,
-                )
+                raw.rename(dest)
+                _handle_transcode_failure(dest, blurb=blurb)
                 return None
         _chown_for_pi(dest)
+        _clear_transcode_failures(dest_dir, slug)
         if game_pk:
             from .highlight_meta import build_clip_meta, write_clip_meta
 
@@ -1068,6 +1295,11 @@ class HighlightDownloader:
             cid = clip["id"]
             url = clip.get("url") or ""
             dest = self._clip_dest(clip)
+            if is_clip_permanently_skipped(dest):
+                self._seen_ids.add(cid)
+                if url:
+                    self._seen_urls.add(url)
+                continue
             if dest.exists():
                 if not is_valid_highlight_mp4(dest):
                     log.warning("removing corrupt highlight %s (API poll)", dest.name)
