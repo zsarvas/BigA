@@ -48,7 +48,6 @@ class FinalWinScene(ClipPlayerMixin):
         self._cp_tick(
             _game_clip_folder(state),
             gap_min=config.GAME_HIGHLIGHT_GAP_MIN,
-            prefer_condensed=True,
             allow_during_transcode=True,
         )
         assets.draw_gif_background(screen, "win.gif", animation_ms(), fallback=(12, 40, 12))

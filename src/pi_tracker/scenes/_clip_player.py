@@ -18,7 +18,9 @@ from typing import Any
 from .. import config
 from .. import playback
 from ..mlb_highlights import (
+    condensed_games_enabled,
     game_folder_has_playable_clips,
+    is_condensed_game_clip,
     is_game_highlight_file,
     is_playable_highlight_mp4,
     sweep_incomplete_highlights,
@@ -76,12 +78,6 @@ _TITLE_ABBREV = {
 
 
 _CONDENSED_CLIP_WEIGHT = 0.6
-
-
-def _is_condensed_clip(path: Path) -> bool:
-    """True for MLB ``Condensed Game: …`` highlights (slug ``condensed-game-…``)."""
-    stem = path.stem.lower().replace("_", "-")
-    return "condensed-game" in stem or stem.startswith("condensed")
 
 
 def clip_title_from_path(path: Path) -> str:
@@ -146,9 +142,9 @@ def _pick_clip(
         played.clear()
         unseen = clips
 
-    if prefer_condensed:
-        condensed = [p for p in unseen if _is_condensed_clip(p)]
-        others = [p for p in unseen if not _is_condensed_clip(p)]
+    if prefer_condensed and condensed_games_enabled():
+        condensed = [p for p in unseen if is_condensed_game_clip(p)]
+        others = [p for p in unseen if not is_condensed_game_clip(p)]
         if condensed and random.random() < _CONDENSED_CLIP_WEIGHT:
             path = random.choice(condensed)
         elif others:

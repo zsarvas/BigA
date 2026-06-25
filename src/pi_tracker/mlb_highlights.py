@@ -67,8 +67,25 @@ _SKIP_PATTERNS = (
 )
 
 
+def condensed_games_enabled() -> bool:
+    """Condensed-game recaps are huge (10+ min, 100–400 MB) — off on Pi by default."""
+    return os.environ.get("BIGA_ALLOW_CONDENSED", "").strip().lower() in ("1", "true", "yes")
+
+
+def is_condensed_game_blurb(blurb: str) -> bool:
+    return "condensed game" in blurb.lower()
+
+
+def is_condensed_game_clip(path: Path) -> bool:
+    """True for MLB ``Condensed Game: …`` highlights (slug ``condensed-game-…``)."""
+    stem = path.stem.lower().replace("_", "-")
+    return "condensed-game" in stem or stem.startswith("condensed")
+
+
 def should_download(blurb: str) -> bool:
     """True when the highlight is worth fetching (default include unless skipped)."""
+    if not condensed_games_enabled() and is_condensed_game_blurb(blurb):
+        return False
     lower = blurb.lower()
     return not any(p in lower for p in _SKIP_PATTERNS)
 
@@ -335,6 +352,8 @@ def is_likely_playable_game_clip(path: Path) -> bool:
 
     Use ``is_playable_highlight_mp4`` before mpv playback.
     """
+    if not condensed_games_enabled() and is_condensed_game_clip(path):
+        return False
     low = path.name.lower()
     if ".raw" in low or ".tmp" in low or ".panel" in low:
         return False
@@ -475,6 +494,8 @@ def is_panel_sized_mp4(path: Path) -> bool:
 
 def is_playable_highlight_mp4(path: Path) -> bool:
     """Valid highlight that is safe to play on the Pi panel (game clips must be panel-sized)."""
+    if is_game_highlight_file(path) and not condensed_games_enabled() and is_condensed_game_clip(path):
+        return False
     if is_game_highlight_file(path) and is_oversized_game_clip(path):
         return False
     hit, ok = _cache_get(_playable_mp4_cache, path)
@@ -553,6 +574,8 @@ def sweep_oversized_highlights(folder: Path, *, started_at: float) -> None:
         if ".raw" in low or ".tmp" in low or ".panel" in low:
             continue
         if not is_valid_highlight_mp4(p) or is_panel_sized_mp4(p):
+            continue
+        if not condensed_games_enabled() and is_condensed_game_clip(p):
             continue
         dims = probe_video_dimensions(p)
         log.warning(
@@ -814,6 +837,9 @@ def _resume_orphan_transcodes(dest_dir: Path, stop: threading.Event) -> Path | N
         return None
     for raw in sorted(dest_dir.glob("*.rawdl")):
         dest = dest_dir / f"{raw.stem}.mp4"
+        if not condensed_games_enabled() and is_condensed_game_clip(dest):
+            log.info("skipping condensed-game orphan transcode: %s", raw.name)
+            continue
         if dest.exists():
             if is_valid_highlight_mp4(dest):
                 raw.unlink(missing_ok=True)
