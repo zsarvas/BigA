@@ -27,7 +27,7 @@ PORTAL_DIR = Path("/home/pi/BigA/portal")
 AP_CON_NAME = "biga-ap"
 
 sys.path.insert(0, str(PORTAL_DIR))
-from wifi_store import enter_provisioning, has_networks  # noqa: E402
+from wifi_store import enter_provisioning, has_networks, prepare_ap_provisioning_mode  # noqa: E402
 
 logging.basicConfig(
     level=logging.INFO,
@@ -104,6 +104,9 @@ def factory_reset() -> None:
         log.info("No saved networks yet — first-time setup.")
 
     _recreate_ap_profile()
+
+    # Drop home WiFi before reboot so the next boot does not race NM autoconnect.
+    prepare_ap_provisioning_mode()
 
     # Stop scoreboard before reboot — it holds DRM and GPIO 19 NeoPixels.
     _service("stop", "biga")

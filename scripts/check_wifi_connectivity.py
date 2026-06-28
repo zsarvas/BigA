@@ -20,6 +20,7 @@ from wifi_store import (  # noqa: E402
     has_networks,
     is_provisioning,
     load_networks,
+    prepare_ap_provisioning_mode,
     seed_wifi_creds_from_nm,
     sync_nm_profiles,
 )
@@ -34,7 +35,8 @@ log = logging.getLogger("biga-connectivity")
 
 def main() -> int:
     if is_provisioning():
-        log.info("provisioning active — skip boot WiFi sync")
+        log.info("provisioning active — preparing AP mode")
+        prepare_ap_provisioning_mode()
         return 0
 
     seed_wifi_creds_from_nm()

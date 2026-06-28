@@ -143,6 +143,52 @@ def enter_provisioning() -> None:
     log.info("provisioning mode enabled (%s)", PROVISIONING_FLAG)
 
 
+def prepare_ap_provisioning_mode() -> bool:
+    """
+    Drop client WiFi and bring up ``biga-ap``.
+
+    Without this, NM auto-connects a saved home profile on boot and AP mode
+    fails — users often need to press reset twice before the QR screen appears.
+    """
+    result = subprocess.run(
+        ["nmcli", "-t", "-f", "NAME,TYPE", "connection", "show", "--active"],
+        capture_output=True,
+        text=True,
+        check=False,
+    )
+    for line in (result.stdout or "").splitlines():
+        parts = line.split(":")
+        if len(parts) < 2:
+            continue
+        name, typ = parts[0], parts[1]
+        if typ == "802-11-wireless" and name != AP_CON_NAME:
+            subprocess.run(
+                ["nmcli", "connection", "down", name],
+                capture_output=True,
+                check=False,
+            )
+    subprocess.run(
+        ["nmcli", "device", "disconnect", WLAN_INTERFACE],
+        capture_output=True,
+        check=False,
+    )
+    time.sleep(0.5)
+    up = subprocess.run(
+        ["nmcli", "connection", "up", AP_CON_NAME],
+        capture_output=True,
+        text=True,
+        check=False,
+    )
+    if up.returncode != 0:
+        log.warning(
+            "biga-ap up failed: %s",
+            (up.stderr or up.stdout or "").strip(),
+        )
+        return False
+    log.info("biga-ap active for provisioning")
+    return True
+
+
 def exit_provisioning() -> None:
     PROVISIONING_FLAG.unlink(missing_ok=True)
     log.info("provisioning mode disabled")
@@ -156,17 +202,7 @@ def network_needs_password(security: str) -> bool:
 
 def restore_ap_mode() -> None:
     """Bring ``biga-ap`` back after a failed client join during provisioning."""
-    subprocess.run(
-        ["nmcli", "device", "disconnect", WLAN_INTERFACE],
-        capture_output=True,
-        check=False,
-    )
-    time.sleep(0.5)
-    subprocess.run(
-        ["nmcli", "connection", "up", AP_CON_NAME],
-        capture_output=True,
-        check=False,
-    )
+    prepare_ap_provisioning_mode()
 
 
 def verify_wifi_connection(
