@@ -1,7 +1,7 @@
 [Unit]
 Description=BigA Setup Screen (QR code display during AP provisioning)
-After=biga-portal.service
-Requires=biga-portal.service
+After=NetworkManager.service biga-connectivity.service
+Wants=biga-portal.service
 ConditionPathExists=/etc/biga/provisioning_active
 
 [Service]

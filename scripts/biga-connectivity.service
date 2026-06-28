@@ -2,7 +2,7 @@
 Description=BigA WiFi boot sync (NM profiles from saved networks)
 After=NetworkManager.service network-online.target
 Wants=network-online.target
-Before=biga.service
+Before=biga.service biga-portal.service
 
 [Service]
 Type=oneshot
