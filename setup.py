@@ -88,15 +88,89 @@ def _boot_paths() -> tuple[str, str]:
     return "/boot", "/boot/overlays"
 
 
-def _nm_connection_field(con_name: str, field: str) -> str:
+def _nm_connection_field(con_name: str, field: str, *, sudo: bool = False) -> str:
     """Read one NetworkManager connection field (``-s`` includes secrets like PSK)."""
-    proc = subprocess.run(
-        ["nmcli", "-s", "-g", field, "connection", "show", con_name],
-        capture_output=True,
-        text=True,
-        check=False,
-    )
+    cmd = ["nmcli", "-s", "-g", field, "connection", "show", con_name]
+    if sudo:
+        cmd = ["sudo", *cmd]
+    proc = subprocess.run(cmd, capture_output=True, text=True, check=False)
     return (proc.stdout or "").strip()
+
+
+def _list_nm_wifi_profiles(*, active_only: bool = False) -> list[str]:
+    """Saved client WiFi profiles (excludes biga-ap), active first when requested."""
+    args = ["nmcli", "-t", "-f", "NAME,TYPE", "connection", "show"]
+    if active_only:
+        args.append("--active")
+    proc = subprocess.run(args, capture_output=True, text=True, check=False)
+    names: list[str] = []
+    for line in (proc.stdout or "").splitlines():
+        parts = line.split(":")
+        if len(parts) < 2:
+            continue
+        name, typ = parts[0], parts[1]
+        if typ == "802-11-wireless" and "biga-ap" not in name:
+            names.append(name)
+    return names
+
+
+def _seed_wifi_creds_from_nm() -> bool:
+    """
+    Import Pi Imager / NetworkManager WiFi into ``/etc/biga/wifi_creds.json``.
+
+    Imager stores the PSK in NM system connections — only root can read it via
+  ``nmcli -s``. Without sudo the PSK looks empty and biga never starts.
+    """
+    import json as _json
+    import time as _time
+
+    creds_path = "/etc/biga/wifi_creds.json"
+    if os.path.exists(creds_path):
+        print("  → wifi_creds.json already exists")
+        return True
+
+    candidates: list[str] = []
+    seen: set[str] = set()
+    for active_only in (True, False):
+        for name in _list_nm_wifi_profiles(active_only=active_only):
+            if name not in seen:
+                seen.add(name)
+                candidates.append(name)
+
+    for con_name in candidates:
+        ssid = _nm_connection_field(con_name, "802-11-wireless.ssid") or con_name
+        password = _nm_connection_field(
+            con_name, "802-11-wireless-security.psk", sudo=True
+        )
+        if not password:
+            continue
+        run("sudo mkdir -p /etc/biga", "ensuring /etc/biga exists")
+        tmp = "/tmp/biga-wifi-creds.json"
+        with open(tmp, "w", encoding="utf-8") as _f:
+            _json.dump(
+                {
+                    "networks": [
+                        {"ssid": ssid, "password": password, "added": _time.time()},
+                    ]
+                },
+                _f,
+            )
+        run(
+            f"sudo cp {tmp} {creds_path} && sudo chmod 600 {creds_path}",
+            f"writing wifi_creds.json from NM profile '{con_name}' (ssid={ssid})",
+        )
+        run("sudo rm -f /etc/biga/provisioning_active", "clearing provisioning flag")
+        return True
+
+    if candidates:
+        print(
+            "  ✗ WiFi profile(s) found but PSK could not be read — "
+            "hold reset 5s for QR setup, or write /etc/biga/wifi_creds.json manually"
+        )
+    else:
+        print("  → no WiFi profile yet — hold reset for 5s to open QR setup on first use")
+    run("sudo mkdir -p /etc/biga", "ensuring /etc/biga exists")
+    return False
 
 
 def _sudo_read(path: str) -> str:
@@ -524,54 +598,7 @@ print("  → boot syncs saved WiFi to NetworkManager (QR setup via reset button 
 # development), write wifi_creds.json now so the portal/setup-screen don't start
 # and take over the network after reboot.
 print("\n  Checking for existing WiFi connection...")
-_active = subprocess.run(
-    ["nmcli", "-t", "-f", "NAME,TYPE,STATE", "connection", "show", "--active"],
-    capture_output=True, text=True, check=False,
-).stdout
-_already_connected = any(
-    ":802-11-wireless:" in line and "biga-ap" not in line
-    for line in _active.splitlines()
-)
-if _already_connected:
-    _creds_path = "/etc/biga/wifi_creds.json"
-    if not os.path.exists(_creds_path):
-        import json as _json
-        import time as _time
-
-        _ssid_line = next(
-            (l for l in _active.splitlines() if ":802-11-wireless:" in l and "biga-ap" not in l), ""
-        )
-        _con_name = _ssid_line.split(":")[0]
-        _ssid = _nm_connection_field(_con_name, "802-11-wireless.ssid") or _con_name
-        _password = _nm_connection_field(_con_name, "802-11-wireless-security.psk")
-        if not _password:
-            print(
-                "  ✗ WiFi is up but NM has no stored PSK — not writing wifi_creds.json "
-                "(portal will run on next boot)"
-            )
-            _ssid = ""
-        run("sudo mkdir -p /etc/biga", "ensuring /etc/biga exists")
-        _tmp = "/tmp/biga-wifi-creds.json"
-        if _ssid:
-            with open(_tmp, "w") as _f:
-                _json.dump(
-                    {
-                        "networks": [
-                            {"ssid": _ssid, "password": _password, "added": _time.time()},
-                        ]
-                    },
-                    _f,
-                )
-            run(
-                f"sudo cp {_tmp} {_creds_path} && sudo chmod 600 {_creds_path}",
-                f"writing wifi_creds.json (ssid={_ssid})",
-            )
-            run("sudo rm -f /etc/biga/provisioning_active", "clearing provisioning flag")
-    else:
-        print("  → wifi_creds.json already exists")
-else:
-    print("  → no existing WiFi — hold reset for 5s to open QR setup on first use")
-print("")
+_seed_wifi_creds_from_nm()
 print("\n[13/13] Setting up AP mode...")
 run(f"chmod +x {os.path.join(REPO, 'scripts', 'setup_ap.sh')}", "making setup_ap.sh executable")
 run(f"sudo bash {os.path.join(REPO, 'scripts', 'setup_ap.sh')}", "creating biga-ap NM profile")
