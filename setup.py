@@ -18,17 +18,63 @@ def run(cmd, desc=None):
         sys.exit(1)
 
 
-def _pip_break_system_flag() -> str:
-    """``--break-system-packages`` exists only on pip 23+ (PEP 668). Omit on older Pi images."""
+def _pip_supports_break_system() -> bool:
+    """``--break-system-packages`` exists only on pip 23+ (PEP 668)."""
     help_proc = subprocess.run(
         ["pip3", "install", "--help"],
         capture_output=True,
         text=True,
         check=False,
     )
-    if help_proc.returncode == 0 and "--break-system-packages" in (help_proc.stdout or ""):
-        return " --break-system-packages"
-    return ""
+    return help_proc.returncode == 0 and "--break-system-packages" in (help_proc.stdout or "")
+
+
+def _pip_install_requirements() -> None:
+    """
+    Install Pi pip deps system-wide for the root ``biga`` service.
+
+    Without ``--break-system-packages`` (PEP 668), pip silently installs into
+    ``/home/pi/.local`` even when invoked via sudo — root then cannot import them.
+    """
+    req = f"{REPO}/requirements-pi.txt"
+    if _externally_managed_python():
+        if not _pip_supports_break_system():
+            print(
+                "  → upgrading pip so --break-system-packages is available "
+                "(PEP 668 / externally managed Python)"
+            )
+            run(
+                "sudo python3 -m pip install --upgrade pip --break-system-packages",
+                "upgrade pip",
+            )
+        if not _pip_supports_break_system():
+            print(
+                "  ✗ pip is too old for --break-system-packages. "
+                "biga runs as root and will not see ~/.local packages."
+            )
+            sys.exit(1)
+        run(
+            f"sudo python3 -m pip install -r {req} --break-system-packages",
+            "pip requirements-pi.txt (system-wide)",
+        )
+    else:
+        run(f"sudo pip3 install -r {req}", "pip requirements-pi.txt")
+    verify = subprocess.run(
+        [
+            "sudo",
+            "python3",
+            "-c",
+            "import flask, pygame, cv2; import rpi_ws281x; import cairosvg",
+        ],
+        capture_output=True,
+        text=True,
+        check=False,
+    )
+    if verify.returncode != 0:
+        print("  ✗ root python cannot import Pi requirements after pip install:")
+        print((verify.stderr or verify.stdout or "").strip())
+        sys.exit(1)
+    print("  → verified: root python imports flask, pygame, cv2, rpi_ws281x, cairosvg")
 
 
 def _externally_managed_python() -> bool:
@@ -317,16 +363,7 @@ run(
 
 # 2. pip deps (Pi-specific only; pygame comes from apt above, not requirements-pi.txt)
 print("\n[2/13] Installing Python packages...")
-pip_extra = _pip_break_system_flag()
-if _externally_managed_python() and not pip_extra:
-    print(
-        "  ⚠ This OS marks Python as externally managed but pip is too old for "
-        "--break-system-packages. If pip install fails, upgrade pip or use a venv."
-    )
-run(
-    f"pip3 install -r {REPO}/requirements-pi.txt{pip_extra}",
-    "pip requirements-pi.txt",
-)
+_pip_install_requirements()
 
 # 3. video group
 print("\n[3/13] Configuring user permissions...")
