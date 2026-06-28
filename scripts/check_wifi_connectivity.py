@@ -20,6 +20,7 @@ from wifi_store import (  # noqa: E402
     has_networks,
     is_provisioning,
     load_networks,
+    seed_wifi_creds_from_nm,
     sync_nm_profiles,
 )
 
@@ -35,6 +36,8 @@ def main() -> int:
     if is_provisioning():
         log.info("provisioning active — skip boot WiFi sync")
         return 0
+
+    seed_wifi_creds_from_nm()
 
     if not has_networks():
         log.warning(

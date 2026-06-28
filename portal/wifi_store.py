@@ -58,6 +58,77 @@ def save_networks(networks: list[dict[str, Any]]) -> None:
     CREDS_FILE.chmod(0o600)
 
 
+def _nm_field(con_name: str, field: str) -> str:
+    proc = subprocess.run(
+        ["nmcli", "-s", "-g", field, "connection", "show", con_name],
+        capture_output=True,
+        text=True,
+        check=False,
+    )
+    return (proc.stdout or "").strip()
+
+
+def list_nm_wifi_profiles(*, active_only: bool = False) -> list[str]:
+    """Saved client WiFi profiles (excludes biga-ap), active first when requested."""
+    args = ["nmcli", "-t", "-f", "NAME,TYPE", "connection", "show"]
+    if active_only:
+        args.append("--active")
+    proc = subprocess.run(args, capture_output=True, text=True, check=False)
+    names: list[str] = []
+    for line in (proc.stdout or "").splitlines():
+        parts = line.split(":")
+        if len(parts) < 2:
+            continue
+        name, typ = parts[0], parts[1]
+        if typ == "802-11-wireless" and AP_CON_NAME not in name:
+            names.append(name)
+    return names
+
+
+def seed_wifi_creds_from_nm() -> bool:
+    """
+    Import Pi Imager / NetworkManager WiFi into ``wifi_creds.json``.
+
+    Called from setup.py and boot-time connectivity check. Imager stores the PSK
+    in NM system connections — only root can read it via ``nmcli -s``.
+    """
+    if CREDS_FILE.exists():
+        return True
+    if is_provisioning():
+        return False
+
+    candidates: list[str] = []
+    seen: set[str] = set()
+    for active_only in (True, False):
+        for name in list_nm_wifi_profiles(active_only=active_only):
+            if name not in seen:
+                seen.add(name)
+                candidates.append(name)
+
+    for con_name in candidates:
+        ssid = _nm_field(con_name, "802-11-wireless.ssid") or con_name
+        password = _nm_field(con_name, "802-11-wireless-security.psk")
+        if not password:
+            continue
+        save_networks(
+            [{"ssid": ssid, "password": password, "added": time.time()}]
+        )
+        exit_provisioning()
+        log.info(
+            "seeded wifi_creds.json from NM profile %r (ssid=%r)",
+            con_name,
+            ssid,
+        )
+        return True
+
+    CREDS_FILE.parent.mkdir(parents=True, exist_ok=True)
+    if candidates:
+        log.warning(
+            "WiFi profile(s) present but PSK unreadable — hold reset 5s for QR setup"
+        )
+    return False
+
+
 def has_networks() -> bool:
     return bool(load_networks())
 
@@ -75,6 +146,109 @@ def enter_provisioning() -> None:
 def exit_provisioning() -> None:
     PROVISIONING_FLAG.unlink(missing_ok=True)
     log.info("provisioning mode disabled")
+
+
+def network_needs_password(security: str) -> bool:
+    """True for WPA/WEP networks; open networks use ``--`` in nmcli scans."""
+    s = (security or "").strip()
+    return bool(s and s != "--")
+
+
+def restore_ap_mode() -> None:
+    """Bring ``biga-ap`` back after a failed client join during provisioning."""
+    subprocess.run(
+        ["nmcli", "device", "disconnect", WLAN_INTERFACE],
+        capture_output=True,
+        check=False,
+    )
+    time.sleep(0.5)
+    subprocess.run(
+        ["nmcli", "connection", "up", AP_CON_NAME],
+        capture_output=True,
+        check=False,
+    )
+
+
+def verify_wifi_connection(
+    ssid: str,
+    password: str,
+    *,
+    wait_sec: float = 30,
+) -> tuple[bool, str]:
+    """
+    Join *ssid* from AP mode and wait for a home-LAN DHCP address.
+
+    On failure, restores ``biga-ap`` so the captive portal stays reachable.
+    On success, leaves wlan0 on the client network (portal reboots shortly).
+    """
+    ssid = ssid.strip()
+    subprocess.run(
+        ["nmcli", "connection", "down", AP_CON_NAME],
+        capture_output=True,
+        check=False,
+    )
+    subprocess.run(
+        ["nmcli", "device", "disconnect", WLAN_INTERFACE],
+        capture_output=True,
+        check=False,
+    )
+    time.sleep(0.5)
+
+    cmd = [
+        "nmcli",
+        "-w",
+        str(int(wait_sec)),
+        "device",
+        "wifi",
+        "connect",
+        ssid,
+        "ifname",
+        WLAN_INTERFACE,
+    ]
+    if password:
+        cmd.extend(["password", password])
+
+    try:
+        result = subprocess.run(
+            cmd,
+            capture_output=True,
+            text=True,
+            timeout=wait_sec + 10,
+            check=False,
+        )
+    except subprocess.TimeoutExpired:
+        restore_ap_mode()
+        return False, "Connection timed out — check password and signal."
+
+    if result.returncode != 0:
+        restore_ap_mode()
+        err = (result.stderr or result.stdout or "").strip()
+        tail = err.splitlines()[-1] if err else "Could not connect."
+        if "secrets were required" in err.lower() or "password" in err.lower():
+            return False, "Password required or incorrect."
+        return False, tail
+
+    deadline = time.monotonic() + 15
+    while time.monotonic() < deadline:
+        ip_proc = subprocess.run(
+            ["nmcli", "-g", "IP4.ADDRESS", "device", "show", WLAN_INTERFACE],
+            capture_output=True,
+            text=True,
+            check=False,
+        )
+        ip = (ip_proc.stdout or "").strip().split("/", 1)[0]
+        if ip and not ip.startswith("192.168.4."):
+            log.info("verified WiFi join to %r — got %s", ssid, ip)
+            return True, ""
+        time.sleep(1)
+
+    subprocess.run(
+        ["nmcli", "device", "disconnect", WLAN_INTERFACE],
+        capture_output=True,
+        check=False,
+    )
+    restore_ap_mode()
+    return False, "Joined network but did not receive an IP address."
 
 
 def append_network(ssid: str, password: str) -> None:

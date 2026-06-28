@@ -2,8 +2,10 @@
 """
 BigA Setup Screen
 Shown on the Pi's display while in AP provisioning mode.
-Displays a QR code + credentials so the user knows how to connect.
-Exits automatically when provisioning completes (new network saved).
+
+Two-step flow (WiFi QR cannot open the captive portal reliably):
+  1. User joins the BigA-XXXX network using the password on screen.
+  2. User scans the QR code → http://biga.setup → WiFi credential portal.
 """
 
 import os
@@ -11,19 +13,20 @@ import sys
 import threading
 import time
 
-from captive import PORTAL_HOSTNAME, ap_ssid, wifi_qr_string
+from captive import PORTAL_SETUP_URL, ap_ssid
 from wifi_store import is_provisioning
+
 AP_PASSWORD = os.environ.get("BIGA_AP_PASSWORD", "bigasetup")
 
 
-def _make_qr_surface(ssid: str, qr_size: int):
-    """Build a pygame surface for the WiFi join QR code."""
+def _make_qr_surface(url: str, qr_size: int):
+    """Build a pygame surface for the portal URL QR code."""
     import PIL.Image as PilImage
     import pygame
     import qrcode
 
     qr = qrcode.QRCode(box_size=4, border=2)
-    qr.add_data(wifi_qr_string(ssid, AP_PASSWORD))
+    qr.add_data(url)
     qr.make(fit=True)
     qr_pil = qr.make_image(fill_color="black", back_color="white").convert("RGB")
     qr_scaled = qr_pil.resize((qr_size, qr_size), PilImage.NEAREST)
@@ -31,7 +34,6 @@ def _make_qr_surface(ssid: str, qr_size: int):
 
 
 def main() -> None:
-    # --- Generate QR code image ---
     try:
         import pygame
         import qrcode  # noqa: F401 — availability check
@@ -72,37 +74,42 @@ def main() -> None:
     _normal = "/usr/share/fonts/truetype/dejavu/DejaVuSans.ttf"
     try:
         f_title = pygame.font.Font(_bold, 22)
-        f_label = pygame.font.Font(_normal, 14)
+        f_step = pygame.font.Font(_bold, 15)
+        f_label = pygame.font.Font(_normal, 13)
         f_value = pygame.font.Font(_bold, 17)
-        f_instr = pygame.font.Font(_bold, 20)
+        f_hint = pygame.font.Font(_normal, 12)
     except Exception:
         f_title = pygame.font.SysFont("sans", 22, bold=True)
-        f_label = pygame.font.SysFont("sans", 14)
+        f_step = pygame.font.SysFont("sans", 15, bold=True)
+        f_label = pygame.font.SysFont("sans", 13)
         f_value = pygame.font.SysFont("sans", 17, bold=True)
-        f_instr = pygame.font.SysFont("sans", 20, bold=True)
+        f_hint = pygame.font.SysFont("sans", 12)
 
-    INSTR_LINES = (
-        "Scan QR to join Wi‑Fi",
-        "Tap “Use Without Internet” if asked",
-        f"Open a browser and go to: {PORTAL_HOSTNAME}",
-        f"if you aren't already on the page"
+    STEP1_LINES = (
+        "1. Join Wi‑Fi (password →)",
+        '   Tap “Use Without Internet”',
     )
-    instr_h = sum(f_instr.get_height() for _ in INSTR_LINES) + 8
-    QR_SIZE = min(H - instr_h - 24, 200)
+    STEP2_LINE = "2. Scan QR to configure"
+
+    footer_h = f_hint.get_height() + 6
+    instr_h = (
+        sum(f_step.get_height() + 2 for _ in STEP1_LINES)
+        + f_step.get_height()
+        + footer_h
+        + 8
+    )
+    QR_SIZE = min(H - instr_h - 20, 188)
     qr_x = 8
-    qr_y = max(8, (H - instr_h - QR_SIZE) // 2)
-    RX = qr_x + QR_SIZE + 18
-    RW = W - RX - 10
+    qr_y = max(6, (H - instr_h - QR_SIZE) // 2)
+    RX = qr_x + QR_SIZE + 14
+    RW = W - RX - 8
 
     shown_ssid = ""
-    qr_surf = None
+    qr_surf = _make_qr_surface(PORTAL_SETUP_URL, QR_SIZE)
 
     def _sync_ssid() -> None:
-        nonlocal shown_ssid, qr_surf
-        current = ap_ssid()
-        if current != shown_ssid:
-            shown_ssid = current
-            qr_surf = _make_qr_surface(current, QR_SIZE)
+        nonlocal shown_ssid
+        shown_ssid = ap_ssid()
 
     def draw() -> None:
         screen.fill(BG)
@@ -112,32 +119,36 @@ def main() -> None:
             (qr_x - 6, qr_y - 6, QR_SIZE + 12, QR_SIZE + 12),
             border_radius=8,
         )
-        if qr_surf is not None:
-            screen.blit(qr_surf, (qr_x, qr_y))
+        screen.blit(qr_surf, (qr_x, qr_y))
 
-        y = 22
+        y = 18
         ts = f_title.render("BigA  Setup", True, WHITE)
         screen.blit(ts, (RX, y))
-        y += ts.get_height() + 5
+        y += ts.get_height() + 4
         pygame.draw.line(screen, RED, (RX, y), (RX + RW, y), 2)
-        y += 14
+        y += 12
 
         screen.blit(f_label.render("Network", True, MUTED), (RX, y))
-        y += f_label.get_height() + 3
+        y += f_label.get_height() + 2
         vs = f_value.render(shown_ssid, True, GOLD)
         screen.blit(vs, (RX, y))
-        y += vs.get_height() + 14
+        y += vs.get_height() + 10
 
         screen.blit(f_label.render("Password", True, MUTED), (RX, y))
-        y += f_label.get_height() + 3
+        y += f_label.get_height() + 2
         screen.blit(f_value.render(AP_PASSWORD, True, WHITE), (RX, y))
 
-        y_instr = H - 10
-        for line in reversed(INSTR_LINES):
-            surf = f_instr.render(line, True, WHITE)
+        y_instr = H - 8
+        hint = f_hint.render(PORTAL_SETUP_URL, True, MUTED)
+        y_instr -= hint.get_height()
+        screen.blit(hint, hint.get_rect(midtop=(W // 2, y_instr)))
+        y_instr -= 4
+
+        for line in reversed((STEP2_LINE, *reversed(STEP1_LINES))):
+            surf = f_step.render(line, True, WHITE)
             y_instr -= surf.get_height()
             screen.blit(surf, surf.get_rect(midtop=(W // 2, y_instr)))
-            y_instr -= 4
+            y_instr -= 2
 
         pygame.display.flip()
 

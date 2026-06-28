@@ -29,14 +29,16 @@ from flask import Flask, jsonify, redirect, render_template, request, send_file,
 from captive import (
     PORTAL_HTTP_URL,
     PORTAL_IP,
+    PORTAL_SETUP_URL,
     ap_ssid,
-    wifi_qr_string,
 )
 from wifi_store import (
     append_network,
     enter_provisioning,
     has_networks,
     is_provisioning,
+    network_needs_password,
+    verify_wifi_connection,
 )
 
 # ---------------------------------------------------------------------------
@@ -96,18 +98,25 @@ def scan_networks() -> list[dict]:
         return []
 
 
-def connect_wifi(ssid: str, password: str) -> tuple[bool, str]:
+def connect_wifi(ssid: str, password: str, *, security: str = "") -> tuple[bool, str]:
     """
-    Append a network profile and persist credentials (keeps up to 7 saved).
-    Reboot applies NM profiles cleanly on the client side.
+    Validate credentials, verify a real NM join, then persist on success.
     """
+    if network_needs_password(security) and not password:
+        return False, "Password is required for this network."
+
+    log.info("Verifying WiFi join to %r before saving credentials", ssid)
+    ok, err = verify_wifi_connection(ssid, password)
+    if not ok:
+        return False, err
+
     log.info("Saving connection profile for %r", ssid)
     try:
         append_network(ssid, password)
     except Exception as exc:
         log.warning("append_network failed: %s", exc)
         return False, str(exc) or "Failed to save network."
-    return True, "Network saved."
+    return True, "Connected."
 
 
 def wipe_creds() -> None:
@@ -170,16 +179,18 @@ def index():
 def connect():
     ssid = request.form.get("ssid", "").strip()
     password = request.form.get("password", "").strip()
+    networks = scan_networks()
 
     if not ssid:
         return render_template(
             "index.html",
-            networks=scan_networks(),
+            networks=networks,
             ap_ssid=ap_ssid(),
             error="Please select a network.",
         )
 
-    success, message = connect_wifi(ssid, password)
+    security = next((n["security"] for n in networks if n["ssid"] == ssid), "WPA2")
+    success, message = connect_wifi(ssid, password, security=security)
 
     if success:
         _switch_to_client_mode()
@@ -196,8 +207,8 @@ def connect():
 
 @app.route("/qr.png")
 def qr_png():
-    """PNG QR code that encodes joining the Pi's AP network."""
-    img = qrcode.make(wifi_qr_string(ap_ssid(), AP_PASSWORD))
+    """PNG QR code for the setup portal (http://biga.setup)."""
+    img = qrcode.make(PORTAL_SETUP_URL)
     buf = io.BytesIO()
     img.save(buf, format="PNG")
     buf.seek(0)

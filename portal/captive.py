@@ -9,6 +9,7 @@ from pathlib import Path
 PORTAL_IP = "192.168.4.1"
 PORTAL_HTTP_URL = f"http://{PORTAL_IP}/"
 PORTAL_HOSTNAME = "biga.setup"
+PORTAL_SETUP_URL = f"http://{PORTAL_HOSTNAME}/"
 WLAN_INTERFACE = "wlan0"
 AP_CON_NAME = "biga-ap"
 
