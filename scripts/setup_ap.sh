@@ -12,6 +12,8 @@ set -euo pipefail
 INTERFACE="wlan0"
 CON_NAME="biga-ap"
 AP_PASSWORD="${BIGA_AP_PASSWORD:-bigasetup}"
+# Shared default PSK for every device (print on housing / setup screen).
+# SSID is unique per Pi (BigA-<last4 MAC>). Override at image build time if needed.
 AP_IP="192.168.4.1"
 
 # Derive last-4 of MAC for a unique-per-device SSID

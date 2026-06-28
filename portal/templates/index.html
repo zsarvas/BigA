@@ -263,13 +263,8 @@
       <img src="/static/108.png" alt="Angels" onerror="this.style.display='none'" />
     </div>
     <h1>Big<span> A</span> Setup</h1>
-    <p class="subtitle">Connect this device to your WiFi network to get started.</p>
+    <p class="subtitle">Choose your home WiFi network below.</p>
   </header>
-
-  <div class="qr-block">
-    <img src="/qr.png" alt="QR code to join {{ ap_ssid }}" />
-    <div class="qr-label">Scan to join {{ ap_ssid }}</div>
-  </div>
 
   <div class="card">
     {% if error %}
@@ -290,6 +285,7 @@
               name="ssid"
               id="net-{{ loop.index }}"
               value="{{ net.ssid }}"
+              data-security="{{ net.security }}"
               {% if selected_ssid is defined and selected_ssid == net.ssid %}checked{% endif %}
             />
             <label class="network-label" for="net-{{ loop.index }}">
@@ -333,10 +329,34 @@
       f.type = f.type === "password" ? "text" : "password";
     }
 
-    document.getElementById("wifi-form").addEventListener("submit", function () {
+    function networkNeedsPassword(security) {
+      const s = (security || "").trim();
+      return s && s !== "--";
+    }
+
+    function updatePasswordRequired() {
+      const sel = document.querySelector('input[name="ssid"]:checked');
+      const pw = document.getElementById("password");
+      const needs = sel && networkNeedsPassword(sel.dataset.security);
+      pw.required = !!needs;
+    }
+
+    document.querySelectorAll('input[name="ssid"]').forEach((radio) => {
+      radio.addEventListener("change", updatePasswordRequired);
+    });
+    updatePasswordRequired();
+
+    document.getElementById("wifi-form").addEventListener("submit", function (e) {
+      const sel = document.querySelector('input[name="ssid"]:checked');
+      const pw = document.getElementById("password");
+      if (sel && networkNeedsPassword(sel.dataset.security) && !pw.value.trim()) {
+        e.preventDefault();
+        alert("Please enter the WiFi password for this network.");
+        return;
+      }
       const btn = document.getElementById("submit-btn");
       btn.disabled = true;
-      btn.textContent = "Connecting…";
+      btn.textContent = "Connecting… (up to 30s)";
     });
   </script>
 
