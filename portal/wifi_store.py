@@ -143,6 +143,37 @@ def enter_provisioning() -> None:
     log.info("provisioning mode enabled (%s)", PROVISIONING_FLAG)
 
 
+def ensure_ssh_running() -> None:
+    """
+    Keep SSH up across provisioning / golden-image boots.
+
+    ``setup_ap.sh`` only runs while the portal is active; after reset + WiFi
+    setup the Pi may boot with ``sshd`` down (especially if host keys were
+    wiped).  Call from boot connectivity, reset handler, and portal exit.
+    """
+    key_dir = Path("/etc/ssh")
+    if not any(key_dir.glob("ssh_host_*_key")):
+        log.warning("ssh host keys missing — regenerating")
+        subprocess.run(["ssh-keygen", "-A"], capture_output=True, check=False)
+    for boot_ssh in (Path("/boot/firmware/ssh"), Path("/boot/ssh")):
+        try:
+            boot_ssh.parent.mkdir(parents=True, exist_ok=True)
+            boot_ssh.touch(exist_ok=True)
+        except OSError:
+            pass
+    subprocess.run(["systemctl", "enable", "ssh"], capture_output=True, check=False)
+    start = subprocess.run(
+        ["systemctl", "start", "ssh"],
+        capture_output=True,
+        text=True,
+        check=False,
+    )
+    if start.returncode != 0:
+        log.warning("systemctl start ssh failed: %s", (start.stderr or "").strip())
+    else:
+        log.info("ssh service enabled and started")
+
+
 def prepare_ap_provisioning_mode() -> bool:
     """
     Drop client WiFi and bring up ``biga-ap``.

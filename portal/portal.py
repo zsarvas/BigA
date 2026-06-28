@@ -35,6 +35,7 @@ from captive import (
 from wifi_store import (
     append_network,
     enter_provisioning,
+    ensure_ssh_running,
     has_networks,
     is_provisioning,
     network_needs_password,
@@ -141,6 +142,7 @@ def _switch_to_client_mode() -> None:
     """
     def _run() -> None:
         time.sleep(4)
+        ensure_ssh_running()
         log.info("Rebooting to apply WiFi credentials…")
         subprocess.run(["reboot"])
 
@@ -245,5 +247,6 @@ def factory_reset():
 if __name__ == "__main__":
     if os.geteuid() != 0:
         sys.exit("portal.py must run as root (nmcli device wifi connect requires root)")
+    ensure_ssh_running()
     log.info("BigA portal starting — AP SSID: %s  port: %d", ap_ssid(), PORT)
     app.run(host="0.0.0.0", port=PORT, debug=False)
