@@ -17,6 +17,7 @@ _PORTAL_DIR = Path(__file__).resolve().parent.parent / "portal"
 sys.path.insert(0, str(_PORTAL_DIR))
 
 from wifi_store import (  # noqa: E402
+    ensure_ssh_running,
     has_networks,
     is_provisioning,
     load_networks,
@@ -34,6 +35,8 @@ log = logging.getLogger("biga-connectivity")
 
 
 def main() -> int:
+    ensure_ssh_running()
+
     if is_provisioning():
         log.info("provisioning active — preparing AP mode")
         prepare_ap_provisioning_mode()

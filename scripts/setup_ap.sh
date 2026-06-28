@@ -54,5 +54,8 @@ echo "  → AP profile '$CON_NAME' created (activate with: nmcli con up $CON_NAM
 # is only present if Pi Imager enabled it for that specific flash, which
 # doesn't carry over to cards flashed from the golden image.
 systemctl enable ssh 2>/dev/null || true
+if ! ls /etc/ssh/ssh_host_*_key >/dev/null 2>&1; then
+  ssh-keygen -A 2>/dev/null || true
+fi
 systemctl start  ssh 2>/dev/null || true
 echo "  → SSH enabled and started"
