@@ -92,6 +92,11 @@ jobs:
             # hostnamectl needs a running systemd, so write the files directly.
             echo 'biga' > /etc/hostname
             sed -i 's/127.0.1.1.*/127.0.1.1\tbiga/' /etc/hosts || true
+            # Set the WiFi country so the WLAN radio isn't rfkill-blocked on boot
+            # (Imager normally does this). Without a regdomain the biga-ap AP never
+            # beacons and no BigA-XXXX network appears for provisioning.
+            raspi-config nonint do_wifi_country "${BIGA_WIFI_COUNTRY:-US}" || true
+            rfkill unblock wifi || true
 
       - name: Compress
         run: |
