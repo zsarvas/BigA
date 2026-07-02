@@ -29,6 +29,18 @@ echo "  → SSID    : $AP_SSID"
 echo "  → Password: $AP_PASSWORD"
 echo "  → Gateway : $AP_IP"
 
+# Fresh Raspberry Pi OS soft-blocks the WLAN radio via rfkill until a WiFi
+# country / regulatory domain is set (Pi Imager normally does this). Without it
+# the biga-ap profile activates but never beacons, so no BigA-XXXX network
+# appears. Unblock and set the regdomain before bringing the AP up.
+WIFI_COUNTRY="${BIGA_WIFI_COUNTRY:-US}"
+rfkill unblock wifi 2>/dev/null || true
+iw reg set "$WIFI_COUNTRY" 2>/dev/null || true
+if command -v raspi-config >/dev/null 2>&1; then
+    raspi-config nonint do_wifi_country "$WIFI_COUNTRY" 2>/dev/null || true
+fi
+echo "  → WiFi country: $WIFI_COUNTRY (radio unblocked)"
+
 # Remove old profile if present
 nmcli con delete "$CON_NAME" 2>/dev/null && echo "  → removed old profile" || true
 

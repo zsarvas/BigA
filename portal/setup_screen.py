@@ -86,10 +86,10 @@ def main() -> None:
         f_hint = pygame.font.SysFont("sans", 12)
 
     STEP1_LINES = (
-        "1. Join Wi‑Fi (password →)",
-        '   Tap “Use Without Internet”',
+        "1. On your phone, join the Wi‑Fi shown here →",
+        "   (stay on it if it warns “no internet”)",
     )
-    STEP2_LINE = "2. Scan QR to configure"
+    STEP2_LINE = "2. Scan the QR code to enter your home Wi‑Fi"
 
     footer_h = f_hint.get_height() + 6
     instr_h = (
@@ -139,7 +139,7 @@ def main() -> None:
         screen.blit(f_value.render(AP_PASSWORD, True, WHITE), (RX, y))
 
         y_instr = H - 8
-        hint = f_hint.render(PORTAL_SETUP_URL, True, MUTED)
+        hint = f_hint.render(f"or open {PORTAL_SETUP_URL} in your browser", True, MUTED)
         y_instr -= hint.get_height()
         screen.blit(hint, hint.get_rect(midtop=(W // 2, y_instr)))
         y_instr -= 4
