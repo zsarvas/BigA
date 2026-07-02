@@ -17,6 +17,7 @@ from captive import PORTAL_SETUP_URL, ap_ssid
 from wifi_store import is_provisioning
 
 AP_PASSWORD = os.environ.get("BIGA_AP_PASSWORD", "bigasetup")
+PREVIEW = os.environ.get("BIGA_SETUP_PREVIEW", "").lower() in ("1", "true", "yes")
 
 
 def _make_qr_surface(url: str, qr_size: int):
@@ -40,11 +41,16 @@ def main() -> None:
         import PIL.Image  # noqa: F401
     except ImportError:
         print("qrcode / pillow / pygame not available — setup screen cannot render", flush=True)
+        if PREVIEW:
+            return
         while is_provisioning():
             time.sleep(2)
         return
 
-    os.environ.setdefault("SDL_VIDEODRIVER", os.environ.get("BIGA_SDL_VIDEO", "kmsdrm"))
+    if PREVIEW:
+        os.environ.pop("SDL_VIDEODRIVER", None)
+    else:
+        os.environ.setdefault("SDL_VIDEODRIVER", os.environ.get("BIGA_SDL_VIDEO", "kmsdrm"))
 
     pygame.init()
     pygame.mouse.set_visible(False)
@@ -52,12 +58,17 @@ def main() -> None:
     H = int(os.environ.get("BIGA_SCREEN_HEIGHT", 320))
 
     try:
-        screen = pygame.display.set_mode((W, H), pygame.FULLSCREEN | pygame.NOFRAME)
+        if PREVIEW:
+            screen = pygame.display.set_mode((W, H))
+        else:
+            screen = pygame.display.set_mode((W, H), pygame.FULLSCREEN | pygame.NOFRAME)
     except Exception:
         try:
             screen = pygame.display.set_mode((W, H))
         except Exception as exc:
             print(f"Cannot open display: {exc}", flush=True)
+            if PREVIEW:
+                return
             while is_provisioning():
                 time.sleep(2)
             return
@@ -77,27 +88,15 @@ def main() -> None:
         f_step = pygame.font.Font(_bold, 15)
         f_label = pygame.font.Font(_normal, 13)
         f_value = pygame.font.Font(_bold, 17)
-        f_hint = pygame.font.Font(_normal, 12)
     except Exception:
         f_title = pygame.font.SysFont("sans", 22, bold=True)
         f_step = pygame.font.SysFont("sans", 15, bold=True)
         f_label = pygame.font.SysFont("sans", 13)
         f_value = pygame.font.SysFont("sans", 17, bold=True)
-        f_hint = pygame.font.SysFont("sans", 12)
 
-    STEP1_LINES = (
-        "1. On your phone, join the Wi‑Fi shown here →",
-        "   (stay on it if it warns “no internet”)",
-    )
-    STEP2_LINE = "2. Scan the QR code to enter your home Wi‑Fi"
-
-    footer_h = f_hint.get_height() + 6
-    instr_h = (
-        sum(f_step.get_height() + 2 for _ in STEP1_LINES)
-        + f_step.get_height()
-        + footer_h
-        + 8
-    )
+    STEPS_GAP = 6
+    INSTR_LINES = 2
+    instr_h = INSTR_LINES * (f_step.get_height() + STEPS_GAP) + 8
     QR_SIZE = min(H - instr_h - 20, 188)
     qr_x = 8
     qr_y = max(6, (H - instr_h - QR_SIZE) // 2)
@@ -138,17 +137,16 @@ def main() -> None:
         y += f_label.get_height() + 2
         screen.blit(f_value.render(AP_PASSWORD, True, WHITE), (RX, y))
 
-        y_instr = H - 8
-        hint = f_hint.render(f"or open {PORTAL_SETUP_URL} in your browser", True, MUTED)
-        y_instr -= hint.get_height()
-        screen.blit(hint, hint.get_rect(midtop=(W // 2, y_instr)))
-        y_instr -= 4
-
-        for line in reversed((STEP2_LINE, *reversed(STEP1_LINES))):
+        lines = (
+            f"1. Join the {shown_ssid} network",
+            f"2. Scan QR code or navigate to {PORTAL_SETUP_URL}",
+        )
+        total_h = len(lines) * f_step.get_height() + (len(lines) - 1) * STEPS_GAP
+        y_instr = H - 8 - total_h
+        for line in lines:
             surf = f_step.render(line, True, WHITE)
-            y_instr -= surf.get_height()
             screen.blit(surf, surf.get_rect(midtop=(W // 2, y_instr)))
-            y_instr -= 2
+            y_instr += surf.get_height() + STEPS_GAP
 
         pygame.display.flip()
 
@@ -159,7 +157,8 @@ def main() -> None:
                 pygame.event.post(pygame.event.Event(pygame.QUIT))
                 return
 
-    threading.Thread(target=_watch, daemon=True).start()
+    if not PREVIEW:
+        threading.Thread(target=_watch, daemon=True).start()
 
     _sync_ssid()
     clock = pygame.time.Clock()
