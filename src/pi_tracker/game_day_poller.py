@@ -7,6 +7,7 @@ import threading
 import time
 from datetime import date
 
+from . import playback
 from .mlb_http import fetch_live_feed_v11
 from .mlb_live_feed import angels_won, game_is_final, live_feed_to_state_patch
 from .mlb_schedule import (
@@ -18,7 +19,6 @@ from .mlb_schedule import (
 )
 from .schedule_poller import refresh_idle_schedule
 from .state import SharedGameState
-from . import playback
 
 log = logging.getLogger(__name__)
 

@@ -37,14 +37,8 @@ configure_sdl()
 
 import pygame
 
-from . import config
-from .assets import AssetManager, _repo_font
-from .mlb_http import ANGELS_TEAM_ID as TRACKED_TEAM_ID
-from .mlb_schedule import try_restore_final_scene_for_today
-from .state import SharedGameState
-from .team_config import tracked_team_abbr, tracked_team_name
-from . import mouse_hide
-from . import playback
+from . import config, mouse_hide, playback
+from .assets import AssetManager
 from .gpio_leds import cleanup_gpio, init_gpio, is_muted, set_win_led
 from .mlb_highlights import (
     HighlightDownloader,
@@ -55,7 +49,11 @@ from .mlb_highlights import (
     seed_idle_recap_from_schedule,
     sync_highlight_downloader,
 )
+from .mlb_http import ANGELS_TEAM_ID as TRACKED_TEAM_ID
+from .mlb_schedule import try_restore_final_scene_for_today
 from .scenes import FinalLossScene, FinalWinScene, IdleScene, LiveScene
+from .state import SharedGameState
+from .team_config import tracked_team_abbr, tracked_team_name
 
 
 def _demo_opponent() -> tuple[int, str, str]:

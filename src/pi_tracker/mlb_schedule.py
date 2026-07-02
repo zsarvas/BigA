@@ -6,7 +6,8 @@ import os
 from datetime import date, datetime, timedelta, timezone
 from typing import Any
 
-from .mlb_http import ANGELS_TEAM_ID, FINAL_DETAILED, LIVE_DETAILED, api_get as _get
+from .mlb_http import ANGELS_TEAM_ID, FINAL_DETAILED, LIVE_DETAILED
+from .mlb_http import api_get as _get
 
 # Skip when picking the next game to advertise on idle
 _SKIP_DETAILED = {

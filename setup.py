@@ -290,7 +290,7 @@ def _configure_deploy_key(repo: str) -> None:
     if current != ssh_url:
         run(f"git -C {repo} remote set-url origin {ssh_url}", "switching remote to SSH")
     else:
-        print(f"  → remote already set to SSH")
+        print("  → remote already set to SSH")
 
     # Lock down key permissions
     run(f"chmod 600 {key_path}", "locking deploy key permissions")
@@ -311,7 +311,7 @@ def _install_auto_update_cron(repo: str) -> None:
     existing = result.stdout if result.returncode == 0 else ""
 
     if script in existing:
-        print(f"  → cron job already present, skipping")
+        print("  → cron job already present, skipping")
         return
 
     new_crontab = existing.rstrip("\n") + ("\n" if existing else "") + cron_entry + "\n"

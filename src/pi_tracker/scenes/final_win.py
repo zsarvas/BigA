@@ -1,16 +1,19 @@
 from __future__ import annotations
 
-from typing import Any
+from typing import TYPE_CHECKING, Any
 
 import pygame
 
+if TYPE_CHECKING:
+    from pathlib import Path
+
 from .. import config
 from ..assets import AssetManager, animation_ms
-from ..mlb_http import ANGELS_TEAM_ID as TRACKED_TEAM_ID
 from ..mlb_highlights import game_folder_has_playable_clips, is_likely_playable_game_clip
+from ..mlb_http import ANGELS_TEAM_ID as TRACKED_TEAM_ID
+from ._clip_player import ClipPlayerMixin
 from .final_score_row import draw_score_with_flanking_logos
 from .linescore_table import draw_linescore_table_centered
-from ._clip_player import ClipPlayerMixin
 
 
 def _game_clip_folder(state: dict) -> "Path | None":
@@ -19,7 +22,6 @@ def _game_clip_folder(state: dict) -> "Path | None":
 
     Uses a fast size-based check (no ffprobe) so the main draw loop stays smooth.
     """
-    from pathlib import Path  # noqa: PLC0415
 
     pk = state.get("live_game_pk")
     if pk:

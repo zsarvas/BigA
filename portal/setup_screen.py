@@ -9,7 +9,6 @@ Two-step flow (WiFi QR cannot open the captive portal reliably):
 """
 
 import os
-import sys
 import threading
 import time
 
@@ -35,9 +34,9 @@ def _make_qr_surface(url: str, qr_size: int):
 
 def main() -> None:
     try:
+        import PIL.Image  # noqa: F401
         import pygame
         import qrcode  # noqa: F401 — availability check
-        import PIL.Image  # noqa: F401
     except ImportError:
         print("qrcode / pillow / pygame not available — setup screen cannot render", flush=True)
         while is_provisioning():

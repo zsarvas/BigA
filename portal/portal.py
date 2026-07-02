@@ -24,18 +24,17 @@ import time
 from pathlib import Path
 
 import qrcode
-from flask import Flask, jsonify, redirect, render_template, request, send_file, url_for
-
 from captive import (
     PORTAL_HTTP_URL,
     PORTAL_IP,
     PORTAL_SETUP_URL,
     ap_ssid,
 )
+from flask import Flask, jsonify, redirect, render_template, request, send_file, url_for
 from wifi_store import (
     append_network,
-    enter_provisioning,
     ensure_ssh_running,
+    enter_provisioning,
     has_networks,
     is_provisioning,
     network_needs_password,

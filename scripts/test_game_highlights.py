@@ -38,7 +38,6 @@ from pathlib import Path
 REPO_ROOT = Path(__file__).resolve().parent.parent
 sys.path.insert(0, str(REPO_ROOT / "src"))
 
-from pi_tracker import config  # noqa: E402
 from pi_tracker.mlb_highlights import (  # noqa: E402
     fetch_highlight_clips,
     game_highlights_dir,
@@ -48,6 +47,7 @@ from pi_tracker.mlb_highlights import (  # noqa: E402
 def _find_recent_game_pk() -> int | None:
     """Return game_pk for the most recent finished Angels game with highlights."""
     import datetime
+
     import requests
 
     today = datetime.date.today()

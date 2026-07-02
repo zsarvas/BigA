@@ -5,9 +5,9 @@ from __future__ import annotations
 import logging
 import threading
 
+from . import playback
 from .mlb_schedule import fetch_and_format_next_game
 from .state import SharedGameState
-from . import playback
 
 log = logging.getLogger(__name__)
 

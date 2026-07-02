@@ -29,8 +29,7 @@ from typing import Any
 
 import requests
 
-from . import config
-from . import playback
+from . import config, playback
 
 log = logging.getLogger(__name__)
 

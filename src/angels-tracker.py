@@ -5,11 +5,12 @@ Fetches today's Angels game and polls for live updates every 2 minutes.
 No API key or registration needed — MLB Stats API is free and open.
 """
 
-import requests
-import time
 import os
 import sys
-from datetime import datetime, timezone
+import time
+from datetime import datetime
+
+import requests
 
 BASE_URL = "https://statsapi.mlb.com"
 ANGELS_TEAM_ID = 108
@@ -125,8 +126,7 @@ def print_decisions(decisions: dict):
     for role, label in [("winner", "W"), ("loser", "L"), ("save", "SV")]:
         p = decisions.get(role)
         if p:
-            name    = p.get("fullName", "?")
-            stats   = p.get("stats", [])
+            name = p.get("fullName", "?")
             # stats not always present in schedule hydration; just show name
             print(f"  {label}: {name}")
 
@@ -142,7 +142,6 @@ def display_preview(game: dict):
 
     # Parse game time to local-ish display
     try:
-        from datetime import timezone as tz
         game_dt = datetime.fromisoformat(gd.replace("Z", "+00:00"))
         local_t = game_dt.astimezone().strftime("%I:%M %p %Z")
     except Exception:

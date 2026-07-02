@@ -1,0 +1,36 @@
+name: PR Checks
+
+on:
+  pull_request:
+    branches: [main]
+
+jobs:
+  lint:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+
+      # Pin ruff so CI results are reproducible and don't drift when new rules ship.
+      - name: Install linters
+        run: pip install ruff==0.15.20 mypy
+
+      # Blocking: uses ruff.toml at the repo root (select E,F,W,I; ignore E501).
+      - name: Ruff lint
+        run: ruff check .
+
+      # Advisory for now — the existing tree isn't fully ruff-formatted yet.
+      # Flip to blocking (drop continue-on-error) after a one-time `ruff format .`.
+      - name: Ruff format check
+        run: ruff format --check .
+        continue-on-error: true
+
+      # Advisory for now — GPIO/pygame libs lack stubs, so this is noisy.
+      # Tighten once type coverage improves.
+      - name: Type check
+        run: mypy src/ --ignore-missing-imports
+        continue-on-error: true

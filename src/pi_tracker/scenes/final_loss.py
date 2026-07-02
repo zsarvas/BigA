@@ -6,10 +6,10 @@ import pygame
 
 from .. import config
 from ..assets import AssetManager
-from .final_score_row import draw_score_with_flanking_logos
-from .linescore_table import draw_linescore_table_centered
 from ._clip_player import ClipPlayerMixin
+from .final_score_row import draw_score_with_flanking_logos
 from .final_win import _game_clip_folder
+from .linescore_table import draw_linescore_table_centered
 
 
 class FinalLossScene(ClipPlayerMixin):

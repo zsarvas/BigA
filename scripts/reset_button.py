@@ -28,8 +28,8 @@ AP_CON_NAME = "biga-ap"
 
 sys.path.insert(0, str(PORTAL_DIR))
 from wifi_store import (  # noqa: E402
-    enter_provisioning,
     ensure_ssh_running,
+    enter_provisioning,
     has_networks,
     prepare_ap_provisioning_mode,
 )

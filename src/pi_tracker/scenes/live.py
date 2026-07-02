@@ -1,19 +1,18 @@
 from __future__ import annotations
 
+import logging
 import textwrap
 from pathlib import Path
 from typing import Any
 
 import pygame
 
-import logging
-
 from .. import config
 from ..assets import AssetManager, StreamingGif, scale_surface
 from ..drawing.diamond import draw_diamond
-from .linescore_table import compute_linescore_geometry, draw_linescore_table_centered
-from ._clip_player import _playable_clip_paths, game_highlights_blocked
 from ..highlight_meta import ended_half_before_break, pick_break_highlight
+from ._clip_player import _playable_clip_paths, game_highlights_blocked
+from .linescore_table import compute_linescore_geometry, draw_linescore_table_centered
 
 log = logging.getLogger(__name__)
 

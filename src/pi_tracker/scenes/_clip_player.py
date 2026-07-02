@@ -13,13 +13,10 @@ from __future__ import annotations
 import random
 import re
 from pathlib import Path
-from typing import Any
 
-from .. import config
-from .. import playback
+from .. import config, playback
 from ..mlb_highlights import (
     condensed_games_enabled,
-    game_folder_has_playable_clips,
     is_condensed_game_clip,
     is_game_highlight_file,
     is_playable_highlight_mp4,
