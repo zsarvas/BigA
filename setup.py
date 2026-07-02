@@ -303,6 +303,29 @@ def _install_auto_update_cron(repo: str) -> None:
     print(f"  → cron job installed: {cron_entry}")
 
 
+def _install_nightly_reboot_cron() -> None:
+    """Install a nightly full reboot at 4:30 AM (idempotent).
+
+    Runs 30 min after the 4:00 AM auto-update so any git pull finishes first;
+    the reboot then boots the fresh code and clears memory on the Pi Zero 2W.
+    """
+    marker = "# biga-nightly-reboot"
+    cron_entry = f"30 4 * * * /sbin/shutdown -r now  {marker}"
+    result = subprocess.run(["crontab", "-l"], capture_output=True, text=True, check=False)
+    existing = result.stdout if result.returncode == 0 else ""
+
+    if marker in existing:
+        print("  → nightly reboot cron already present, skipping")
+        return
+
+    new_crontab = existing.rstrip("\n") + ("\n" if existing else "") + cron_entry + "\n"
+    proc = subprocess.run(["crontab", "-"], input=new_crontab, text=True, check=False)
+    if proc.returncode != 0:
+        print("  ✗ Failed to write nightly reboot crontab")
+        sys.exit(1)
+    print(f"  → nightly reboot installed: {cron_entry}")
+
+
 def _install_splash(repo: str, boot_dir: str) -> None:
     """Install Plymouth theme + quiet boot cmdline (idempotent)."""
     theme_dir = "/usr/share/plymouth/themes/biga"
@@ -533,6 +556,7 @@ run("sudo systemctl mask autovt@tty2.service", "masking autovt on tty2")
 print("\n[9/13] Configuring auto-update (cron + deploy key)...")
 _configure_deploy_key(REPO)
 _install_auto_update_cron(REPO)
+_install_nightly_reboot_cron()
 print("  → update log: /var/log/biga_update.log")
 
 # 10. boot splash (Plymouth theme + quiet cmdline)

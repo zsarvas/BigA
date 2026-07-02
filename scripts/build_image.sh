@@ -159,10 +159,18 @@ shrink_image() {
         fi
 
         local lima_instance="biga-builder"
+        # Lima's Ubuntu template defaults to a 100GiB sparse VM disk. We only need
+        # ~2× the captured image for staging; cap at 32GiB so ~/.lima/ stays small.
+        local lima_disk_gb=$(( (needed_bytes / 1073741824) + 2 ))
+        if [ "$lima_disk_gb" -lt 16 ]; then lima_disk_gb=16; fi
+        if [ "$lima_disk_gb" -gt 32 ]; then lima_disk_gb=32; fi
+
         if ! limactl list 2>/dev/null | grep -q "^${lima_instance}"; then
-            info "Creating Lima VM '${lima_instance}' (first time ~3 min)..."
-            limactl start --name="$lima_instance" template:ubuntu \
-                --set='.mounts[0].writable = true'
+            info "Creating Lima VM '${lima_instance}' (${lima_disk_gb}GiB disk, first time ~3 min)..."
+            limactl create --name="$lima_instance" template:ubuntu \
+                --disk="$lima_disk_gb" \
+                --mount-writable
+            limactl start "$lima_instance"
         elif ! limactl list 2>/dev/null | grep -q "^${lima_instance}.*Running"; then
             limactl start "$lima_instance"
         fi
@@ -171,15 +179,17 @@ shrink_image() {
         curl -fsSL "$pishrink_url" -o "$pishrink_local"
         chmod +x "$pishrink_local"
 
-        local lima_img="/var/tmp/biga-shrink.img"
+        # Stage on the VM's native disk as root. User-owned copies under /var/tmp
+        # caused pishrink's final truncate to fail with "Permission denied".
+        local lima_img="/root/biga-shrink.img"
         sudo chown "$(whoami)" "$OUT_DIR/$IMG_NAME"
 
-        info "Copying image into Lima native disk…"
-        limactl shell "$lima_instance" -- cp "$OUT_DIR/$IMG_NAME" "$lima_img"
+        info "Copying image into Lima VM disk…"
+        limactl shell "$lima_instance" -- sudo cp "$OUT_DIR/$IMG_NAME" "$lima_img"
 
         info "Running pishrink…"
         if ! limactl shell "$lima_instance" -- sudo bash "$pishrink_local" -s "$lima_img"; then
-            limactl shell "$lima_instance" -- rm -f "$lima_img"
+            limactl shell "$lima_instance" -- sudo rm -f "$lima_img"
             rm -f "$pishrink_local"
             echo ""
             echo "  pishrink failed — the .img capture may be truncated or corrupt."
@@ -191,8 +201,9 @@ shrink_image() {
         fi
 
         info "Copying shrunk image back…"
-        limactl shell "$lima_instance" -- cp "$lima_img" "$OUT_DIR/$IMG_NAME"
-        limactl shell "$lima_instance" -- rm -f "$lima_img"
+        limactl shell "$lima_instance" -- sudo cp "$lima_img" "$OUT_DIR/$IMG_NAME"
+        sudo chown "$(whoami)" "$OUT_DIR/$IMG_NAME"
+        limactl shell "$lima_instance" -- sudo rm -f "$lima_img"
         rm -f "$pishrink_local"
         info "Shrunk: $(du -h "$OUT_DIR/$IMG_NAME" | cut -f1)"
         return
