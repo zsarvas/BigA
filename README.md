@@ -422,6 +422,10 @@ The workflow downloads Raspberry Pi OS Lite, runs `python3 setup.py --image-buil
 emulated ARM environment, strips host-specific state, compresses the image, and publishes a GitHub
 release tagged `v<version>` with the asset `biga-v<version>-<build_date>.img.xz`.
 
+Before running the workflow, configure repository secret `BIGA_PI_PASSWORD` with the password for
+the baked-in `pi` account (for BigA devices, `angels`). The workflow fails fast if the secret is
+missing.
+
 **Cutting a release:** bump `VERSION` (and `BUILD_DATE`) in `config.py`, merge to `main`, then run
 the workflow with the same `version`. Because `VERSION` travels with the code, the value shown
 on-device (`config.version_string()`, e.g. `v1.0.0 (2026.07.02)`) always matches what's installed —
