@@ -1,13 +1,28 @@
 name: Build golden image
 
 on:
-  push:
-    branches: [main]
   workflow_dispatch:
+    inputs:
+      version:
+        description: 'Version number (e.g. 1.0.0)'
+        required: true
+        type: string
+      release_type:
+        description: 'Release type'
+        required: true
+        type: choice
+        options:
+          - patch
+          - minor
+          - major
+      notes:
+        description: 'Release notes'
+        required: false
+        type: string
 
 concurrency:
   group: build-image
-  cancel-in-progress: true
+  cancel-in-progress: false
 
 jobs:
   build:
@@ -18,8 +33,28 @@ jobs:
     steps:
       - uses: actions/checkout@v4
 
-      - name: Compute version
-        run: echo "VERSION=v$(date +%Y.%m.%d).${{ github.run_number }}" >> "$GITHUB_ENV"
+      - name: Resolve and validate version
+        run: |
+          INPUT="${{ github.event.inputs.version }}"
+          if ! echo "$INPUT" | grep -Eq '^[0-9]+\.[0-9]+\.[0-9]+$'; then
+            echo "::error::version '$INPUT' is not semver (X.Y.Z)"; exit 1
+          fi
+          eval "$(python3 - <<'PY'
+import re, pathlib
+t = pathlib.Path('src/pi_tracker/config.py').read_text()
+def g(k):
+    m = re.search(rf'^{k}\s*=\s*"([^"]+)"', t, re.M)
+    return m.group(1) if m else ''
+print(f'CONFIG_VERSION={g("VERSION")}')
+print(f'CONFIG_BUILD_DATE={g("BUILD_DATE")}')
+PY
+)"
+          if [ "$INPUT" != "$CONFIG_VERSION" ]; then
+            echo "::error::input version '$INPUT' != config.py VERSION '$CONFIG_VERSION' — bump src/pi_tracker/config.py first"; exit 1
+          fi
+          echo "VERSION=$CONFIG_VERSION" >> "$GITHUB_ENV"
+          echo "BUILD_DATE=$CONFIG_BUILD_DATE" >> "$GITHUB_ENV"
+          echo "IMG_NAME=biga-v${CONFIG_VERSION}-${CONFIG_BUILD_DATE}.img" >> "$GITHUB_ENV"
 
       - name: Build image
         id: build
@@ -41,13 +76,18 @@ jobs:
 
       - name: Compress
         run: |
-          mv "${{ steps.build.outputs.image }}" "biga-$VERSION.img"
-          xz -T0 -9 "biga-$VERSION.img"
+          mv "${{ steps.build.outputs.image }}" "$IMG_NAME"
+          xz -T0 -9 "$IMG_NAME"
 
       - name: Create GitHub release
         uses: softprops/action-gh-release@v2
         with:
-          tag_name: ${{ env.VERSION }}
-          name: BigA Golden Image ${{ env.VERSION }}
-          files: biga-*.img.xz
+          tag_name: v${{ github.event.inputs.version }}
+          name: BigA v${{ github.event.inputs.version }} (${{ env.BUILD_DATE }})
+          body: |
+            **Release type:** ${{ github.event.inputs.release_type }}
+            **Build date:** ${{ env.BUILD_DATE }}
+
+            ${{ github.event.inputs.notes }}
+          files: ${{ env.IMG_NAME }}.xz
           generate_release_notes: true
