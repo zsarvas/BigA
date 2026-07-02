@@ -407,7 +407,21 @@ straight to the Angels splash screen with everything pre-installed — no `setup
 > The app, services, splash screen, auto-update cron, provisioning portal, and reset button are
 > all pre-configured.
 
-### Building a new golden image
+### How golden images are built
+
+**Primary path — CI (automatic):** every merge to `main` triggers
+[`.github/workflows/build-image.yml`](.github/workflows/build-image.yml). The workflow downloads
+Raspberry Pi OS Lite, runs `python3 setup.py --image-build` inside an emulated ARM environment,
+strips host-specific state, compresses the image, and publishes a GitHub release
+(`vYYYY.MM.DD.<run_number>`).
+
+**Developers on a live Pi:** clone the repo and run `sudo python3 setup.py` to install or
+reconfigure without reflashing. `setup.py` is the source of truth for what goes into the image;
+CI just runs it with `--image-build` to skip hardware/live-system steps.
+
+### Manual fallback (SD card capture)
+
+Use this only if CI is unavailable or you need a one-off image from a physical golden Pi.
 
 **Step 1 — Prepare the golden Pi** (run on the Pi as root):
 
@@ -425,9 +439,10 @@ removes any saved WiFi credentials, and shuts down cleanly.
 ./scripts/build_image.sh disk4 v1.2   # non-interactive
 ```
 
-Requires **Docker Desktop** (for pishrink on macOS) and the **`gh` CLI** for release upload.
-The script will `dd` the card, shrink it with [PiShrink](https://github.com/Drewsif/PiShrink),
-compress with `xz`, and offer to create a GitHub release and upload the asset automatically.
+On macOS, requires **Lima** (`brew install lima`) for pishrink and the **`gh` CLI** for release
+upload. On Linux, pishrink runs natively. The script will `dd` the card, shrink it with
+[PiShrink](https://github.com/Drewsif/PiShrink), compress with `xz`, and offer to create a
+GitHub release and upload the asset automatically.
 
 What gets stripped from the image before publishing:
 - SSH host keys (regenerated uniquely on each first boot)

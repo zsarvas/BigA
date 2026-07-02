@@ -1,3 +1,4 @@
+import argparse
 import glob
 import os
 import re
@@ -5,6 +6,14 @@ import subprocess
 import sys
 
 REPO = os.path.dirname(os.path.abspath(__file__))
+
+_parser = argparse.ArgumentParser(description="BigA setup script")
+_parser.add_argument(
+    "--image-build",
+    action="store_true",
+    help="CI/image build mode: skip hardware-specific and live-system steps",
+)
+IMAGE_BUILD = _parser.parse_args().image_build
 # Bookworm + KMS is the target. Use mzp351hv00tr-old.txt for legacy Bullseye/fbcon images.
 DEFAULT_PANEL_INCLUDE = os.environ.get("BIGA_PANEL_INCLUDE", "mzp351hv00tr-new.txt")
 
@@ -16,6 +25,16 @@ def run(cmd, desc=None):
     if result.returncode != 0:
         print(f"  ✗ Failed: {cmd}")
         sys.exit(1)
+
+
+def sysctl(action: str, unit: str = "", *, desc: str | None = None) -> None:
+    """systemctl wrapper; skip live actions during offline image builds."""
+    if IMAGE_BUILD and action in {"start", "restart", "stop", "daemon-reload"}:
+        label = f"systemctl {action} {unit}".strip()
+        print(f"  → [image-build] skip: {label}")
+        return
+    cmd = f"sudo systemctl {action} {unit}".strip()
+    run(cmd, desc)
 
 
 def _pip_supports_break_system() -> bool:
@@ -435,6 +454,8 @@ def _install_panel_config(boot_dir: str, config_path: str) -> None:
 
 print("=" * 50)
 print("  BigA Angels Tracker — Setup")
+if IMAGE_BUILD:
+    print("  (image-build mode)")
 print("=" * 50)
 
 # 1. apt deps
@@ -468,7 +489,16 @@ run("sudo usermod -a -G video pi", "adding pi to video group")
 
 # 4. timezone
 print("\n[4/13] Setting timezone...")
-run("sudo timedatectl set-timezone America/Los_Angeles", "timezone → America/Los_Angeles")
+if IMAGE_BUILD:
+    run(
+        "sudo ln -sf /usr/share/zoneinfo/America/Los_Angeles /etc/localtime",
+        "timezone → America/Los_Angeles (symlink)",
+    )
+    with open("/tmp/biga-timezone", "w", encoding="utf-8") as _tz:
+        _tz.write("America/Los_Angeles\n")
+    run("sudo cp /tmp/biga-timezone /etc/timezone", "writing /etc/timezone")
+else:
+    run("sudo timedatectl set-timezone America/Los_Angeles", "timezone → America/Los_Angeles")
 
 # 5. display drivers
 print("\n[5/13] Installing display drivers...")
@@ -533,8 +563,8 @@ run(
 # Ensure SSH is enabled and running — this is the only remote access method.
 boot_dir, _ = _boot_paths()
 run(f"sudo touch {boot_dir}/ssh", "ensuring SSH boot flag on firmware partition")
-run("sudo systemctl enable ssh", "enabling SSH")
-run("sudo systemctl start ssh", "starting SSH")
+sysctl("enable", "ssh", desc="enabling SSH")
+sysctl("start", "ssh", desc="starting SSH")
 # Imager/cloud-init already configured the Pi; disable cloud-init so later reboots
 # don't race boot mounts or re-run first-boot modules (shows "boot stage config" on screen).
 run(
@@ -542,15 +572,15 @@ run(
     "disabling cloud-init after setup",
 )
 
-run("sudo systemctl daemon-reload", "reloading systemd")
-run("sudo systemctl enable biga", "enabling biga service")
+sysctl("daemon-reload", desc="reloading systemd")
+sysctl("enable", "biga", desc="enabling biga service")
 # Mask getty on both tty1 and tty2.
 # Plymouth exits to tty1; masking it prevents a login flash before openvt switches to tty2.
 # This Pi is a dedicated appliance — SSH is the only console access needed.
-run("sudo systemctl mask getty@tty1.service", "masking getty on tty1")
-run("sudo systemctl mask autovt@tty1.service", "masking autovt on tty1")
-run("sudo systemctl mask getty@tty2.service", "masking getty on tty2")
-run("sudo systemctl mask autovt@tty2.service", "masking autovt on tty2")
+sysctl("mask", "getty@tty1.service", desc="masking getty on tty1")
+sysctl("mask", "autovt@tty1.service", desc="masking autovt on tty1")
+sysctl("mask", "getty@tty2.service", desc="masking getty on tty2")
+sysctl("mask", "autovt@tty2.service", desc="masking autovt on tty2")
 
 # 9. auto-update cron + deploy key SSH config
 print("\n[9/13] Configuring auto-update (cron + deploy key)...")
@@ -570,8 +600,8 @@ run(
     f"sudo cp {portal_service_src} /etc/systemd/system/biga-portal.service",
     "copying portal service file",
 )
-run("sudo systemctl daemon-reload", "reloading systemd for portal")
-run("sudo systemctl enable biga-portal", "enabling biga-portal service")
+sysctl("daemon-reload", desc="reloading systemd for portal")
+sysctl("enable", "biga-portal", desc="enabling biga-portal service")
 print("  → portal log: /var/log/biga-portal.log")
 print("  → runs on port 80 while in AP mode")
 
@@ -589,8 +619,8 @@ run(
     f"sudo cp {setup_screen_src} /etc/systemd/system/biga-setup-screen.service",
     "copying setup screen service file",
 )
-run("sudo systemctl daemon-reload", "reloading systemd for setup screen")
-run("sudo systemctl enable biga-setup-screen", "enabling biga-setup-screen service")
+sysctl("daemon-reload", desc="reloading systemd for setup screen")
+sysctl("enable", "biga-setup-screen", desc="enabling biga-setup-screen service")
 print("  → setup screen shows QR code on tty2 during AP provisioning")
 
 # 12. Factory reset button monitor (GPIO 27)
@@ -602,8 +632,8 @@ run(
     f"sudo cp {reset_service_src} /etc/systemd/system/biga-reset.service",
     "copying reset service file",
 )
-run("sudo systemctl daemon-reload", "reloading systemd for reset button")
-run("sudo systemctl enable biga-reset", "enabling biga-reset service")
+sysctl("daemon-reload", desc="reloading systemd for reset button")
+sysctl("enable", "biga-reset", desc="enabling biga-reset service")
 print("  → GPIO BCM 26 — hold 5 s to add another WiFi network")
 print("  → reset log: /var/log/biga-reset.log")
 
@@ -613,30 +643,41 @@ run(
     "copying connectivity service file",
 )
 run("chmod +x " + os.path.join(REPO, "scripts", "check_wifi_connectivity.py"), "making connectivity check executable")
-run("sudo systemctl daemon-reload", "reloading systemd for connectivity")
-run("sudo systemctl enable biga-connectivity", "enabling biga-connectivity service")
+sysctl("daemon-reload", desc="reloading systemd for connectivity")
+sysctl("enable", "biga-connectivity", desc="enabling biga-connectivity service")
 print("  → boot syncs saved WiFi to NetworkManager (QR setup via reset button only)")
 
 # 13. AP mode setup (NetworkManager profile + firstboot service)
 # If the Pi is already connected to a WiFi network (e.g. flashed with creds for
 # development), write wifi_creds.json now so the portal/setup-screen don't start
 # and take over the network after reboot.
-print("\n  Checking for existing WiFi connection...")
-_seed_wifi_creds_from_nm()
+if not IMAGE_BUILD:
+    print("\n  Checking for existing WiFi connection...")
+    _seed_wifi_creds_from_nm()
 print("\n[13/13] Setting up AP mode...")
 run(f"chmod +x {os.path.join(REPO, 'scripts', 'setup_ap.sh')}", "making setup_ap.sh executable")
-run(f"sudo bash {os.path.join(REPO, 'scripts', 'setup_ap.sh')}", "creating biga-ap NM profile")
+if IMAGE_BUILD:
+    print("  → [image-build] skip: setup_ap.sh (biga-firstboot runs on first boot)")
+else:
+    run(f"sudo bash {os.path.join(REPO, 'scripts', 'setup_ap.sh')}", "creating biga-ap NM profile")
 firstboot_src = os.path.join(REPO, "scripts", "biga-firstboot.service")
 run(
     f"sudo cp {firstboot_src} /etc/systemd/system/biga-firstboot.service",
     "copying firstboot service",
 )
-run("sudo systemctl daemon-reload", "reloading systemd for firstboot")
-run("sudo systemctl enable biga-firstboot", "enabling biga-firstboot service")
-print("  → AP profile created (nmcli con show biga-ap)")
-print("  → firstboot service regenerates SSID from MAC on each new Pi")
+sysctl("daemon-reload", desc="reloading systemd for firstboot")
+sysctl("enable", "biga-firstboot", desc="enabling biga-firstboot service")
+if IMAGE_BUILD:
+    print("  → firstboot service creates AP profile from MAC on each new Pi")
+else:
+    print("  → AP profile created (nmcli con show biga-ap)")
+    print("  → firstboot service regenerates SSID from MAC on each new Pi")
 
 print("\n" + "=" * 50)
-print("  Setup complete! Rebooting in 5 seconds...")
+if IMAGE_BUILD:
+    print("  Setup complete! (image-build — no reboot)")
+else:
+    print("  Setup complete! Rebooting in 5 seconds...")
+    print("=" * 50)
+    run("sleep 5 && sudo reboot")
 print("=" * 50)
-run("sleep 5 && sudo reboot")
