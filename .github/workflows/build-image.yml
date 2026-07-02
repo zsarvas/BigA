@@ -1,0 +1,53 @@
+name: Build golden image
+
+on:
+  push:
+    branches: [main]
+  workflow_dispatch:
+
+concurrency:
+  group: build-image
+  cancel-in-progress: true
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Compute version
+        run: echo "VERSION=v$(date +%Y.%m.%d).${{ github.run_number }}" >> "$GITHUB_ENV"
+
+      - name: Build image
+        id: build
+        uses: pguyot/arm-runner-action@v2
+        with:
+          base_image: raspios_lite_arm64:latest
+          image_additional_mb: 2048
+          copy_repository_path: /home/pi/BigA
+          optimize_image: true
+          commands: |
+            cd /home/pi/BigA
+            python3 setup.py --image-build
+            # golden prep (image equivalent of prep_golden.sh)
+            truncate -s 0 /etc/machine-id || true
+            rm -f /etc/ssh/ssh_host_* || true
+            rm -rf /home/pi/BigA/src/pi_tracker/assets/highlights/* || true
+            rm -f /root/.bash_history /home/pi/.bash_history || true
+            rm -f /etc/biga/wifi_creds.json /etc/biga/provisioning_active /etc/biga/.firstboot_done || true
+
+      - name: Compress
+        run: |
+          mv "${{ steps.build.outputs.image }}" "biga-$VERSION.img"
+          xz -T0 -9 "biga-$VERSION.img"
+
+      - name: Create GitHub release
+        uses: softprops/action-gh-release@v2
+        with:
+          tag_name: ${{ env.VERSION }}
+          name: BigA Golden Image ${{ env.VERSION }}
+          files: biga-*.img.xz
+          generate_release_notes: true
