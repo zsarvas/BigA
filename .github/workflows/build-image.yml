@@ -48,6 +48,13 @@ jobs:
           echo "BUILD_DATE=$CONFIG_BUILD_DATE" >> "$GITHUB_ENV"
           echo "IMG_NAME=biga-v${CONFIG_VERSION}-${CONFIG_BUILD_DATE}.img" >> "$GITHUB_ENV"
 
+      - name: Validate Pi password secret
+        run: |
+          if [ -z "${{ secrets.BIGA_PI_PASSWORD }}" ]; then
+            echo "::error::Missing required repository secret BIGA_PI_PASSWORD"; exit 1
+          fi
+          echo "BIGA_PI_PASSWORD=${{ secrets.BIGA_PI_PASSWORD }}" >> "$GITHUB_ENV"
+
       - name: Build image
         id: build
         uses: pguyot/arm-runner-action@v2
@@ -56,15 +63,35 @@ jobs:
           image_additional_mb: 2048
           copy_repository_path: /home/pi/BigA
           optimize_image: true
+          import_github_env: true
           commands: |
             cd /home/pi/BigA
             python3 setup.py --image-build
-            # golden prep (image equivalent of prep_golden.sh)
+            # --- golden prep (image equivalent of prep_golden.sh) ---
             truncate -s 0 /etc/machine-id || true
             rm -f /etc/ssh/ssh_host_* || true
             rm -rf /home/pi/BigA/src/pi_tracker/assets/highlights/* || true
             rm -f /root/.bash_history /home/pi/.bash_history || true
             rm -f /etc/biga/wifi_creds.json /etc/biga/provisioning_active /etc/biga/.firstboot_done || true
+            # --- disable Bookworm first-boot user wizard (userconf-pi) ---
+            # userconfig.service runs unconditionally on first boot and, with no
+            # userconf.txt present, pops a "Please enter new username" prompt on the
+            # HDMI console. BigA already ships the 'pi' user and drives the console
+            # itself, so mask it and clean up the bits it would otherwise handle.
+            # SSH (our remote access) stays enabled via sshd.service.
+            systemctl mask userconfig.service 2>/dev/null || true
+            rm -f /etc/systemd/system/getty@tty8.service.d/userconfsetup.conf
+            # userconf-pi drops an sshd rule that blocks login with "no valid user
+            # has been set up" until the wizard runs; masking skips its cleanup,
+            # so remove it ourselves.
+            rm -f /etc/ssh/sshd_config.d/rename_user.conf
+            # Bake in the appliance identity that Imager's advanced settings used to
+            # provide on manual flashes: user 'pi', password from BIGA_PI_PASSWORD,
+            # hostname 'biga'.
+            printf 'pi:%s\n' "$BIGA_PI_PASSWORD" | chpasswd
+            # hostnamectl needs a running systemd, so write the files directly.
+            echo 'biga' > /etc/hostname
+            sed -i 's/127.0.1.1.*/127.0.1.1\tbiga/' /etc/hosts || true
 
       - name: Compress
         run: |
