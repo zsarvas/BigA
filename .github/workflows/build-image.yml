@@ -39,16 +39,8 @@ jobs:
           if ! echo "$INPUT" | grep -Eq '^[0-9]+\.[0-9]+\.[0-9]+$'; then
             echo "::error::version '$INPUT' is not semver (X.Y.Z)"; exit 1
           fi
-          eval "$(python3 - <<'PY'
-import re, pathlib
-t = pathlib.Path('src/pi_tracker/config.py').read_text()
-def g(k):
-    m = re.search(rf'^{k}\s*=\s*"([^"]+)"', t, re.M)
-    return m.group(1) if m else ''
-print(f'CONFIG_VERSION={g("VERSION")}')
-print(f'CONFIG_BUILD_DATE={g("BUILD_DATE")}')
-PY
-)"
+          CONFIG_VERSION=$(sed -n 's/^VERSION = "\(.*\)"/\1/p' src/pi_tracker/config.py)
+          CONFIG_BUILD_DATE=$(sed -n 's/^BUILD_DATE = "\(.*\)"/\1/p' src/pi_tracker/config.py)
           if [ "$INPUT" != "$CONFIG_VERSION" ]; then
             echo "::error::input version '$INPUT' != config.py VERSION '$CONFIG_VERSION' — bump src/pi_tracker/config.py first"; exit 1
           fi
