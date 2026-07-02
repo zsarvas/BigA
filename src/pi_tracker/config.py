@@ -17,6 +17,19 @@ REPO_ROOT = Path(__file__).resolve().parent.parent.parent
 LOGOS_DIR = REPO_ROOT / "logos"
 ASSETS_DIR = Path(__file__).resolve().parent / "assets"
 
+# Release identity. VERSION is semver; BUILD_DATE is the golden-image build date.
+# VERSION reflects the running code and is carried forward by OTA pulls, so the
+# value shown on-device always matches what's installed. The build-image workflow
+# validates its `version` input against VERSION (and fails on mismatch), so bump
+# both here in the same commit you cut a release from.
+VERSION = "1.0.0"
+BUILD_DATE = "2026.07.02"
+
+
+def version_string() -> str:
+    """Human-readable release string, e.g. ``v1.0.0 (2026.07.02)``."""
+    return f"v{VERSION} ({BUILD_DATE})"
+
 
 def _env_positive_int(name: str, default: int) -> int:
     raw = os.environ.get(name, "").strip()

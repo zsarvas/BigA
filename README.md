@@ -409,11 +409,23 @@ straight to the Angels splash screen with everything pre-installed — no `setup
 
 ### How golden images are built
 
-**Primary path — CI (automatic):** every merge to `main` triggers
-[`.github/workflows/build-image.yml`](.github/workflows/build-image.yml). The workflow downloads
-Raspberry Pi OS Lite, runs `python3 setup.py --image-build` inside an emulated ARM environment,
-strips host-specific state, compresses the image, and publishes a GitHub release
-(`vYYYY.MM.DD.<run_number>`).
+**Primary path — CI (manual, versioned):** the
+[`.github/workflows/build-image.yml`](.github/workflows/build-image.yml) workflow is triggered by
+hand from **Actions → Build golden image → Run workflow**. It takes three inputs:
+
+- `version` — semver, e.g. `1.0.0` (must match `VERSION` in
+  [`src/pi_tracker/config.py`](src/pi_tracker/config.py); the build fails on mismatch)
+- `release_type` — `patch` / `minor` / `major` (recorded in the release notes)
+- `notes` — optional free-text release notes
+
+The workflow downloads Raspberry Pi OS Lite, runs `python3 setup.py --image-build` inside an
+emulated ARM environment, strips host-specific state, compresses the image, and publishes a GitHub
+release tagged `v<version>` with the asset `biga-v<version>-<build_date>.img.xz`.
+
+**Cutting a release:** bump `VERSION` (and `BUILD_DATE`) in `config.py`, merge to `main`, then run
+the workflow with the same `version`. Because `VERSION` travels with the code, the value shown
+on-device (`config.version_string()`, e.g. `v1.0.0 (2026.07.02)`) always matches what's installed —
+including after an OTA auto-update.
 
 **Developers on a live Pi:** clone the repo and run `sudo python3 setup.py` to install or
 reconfigure without reflashing. `setup.py` is the source of truth for what goes into the image;
