@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import logging
 import threading
+from datetime import datetime, timezone
 
 from .mlb_schedule import fetch_and_format_next_game
 from .state import SharedGameState
@@ -12,10 +13,15 @@ from . import playback
 log = logging.getLogger(__name__)
 
 POLL_INTERVAL_SEC = 20 * 60
+# After a failed poll, retry soon instead of waiting the full interval so a
+# transient MLB API blip clears the on-screen banner within ~a minute.
+ERROR_RETRY_SEC = 60
 
 
 def _poll_once(state: SharedGameState) -> None:
     patch = fetch_and_format_next_game()
+    if patch.get("schedule_status") in ("ok", "none"):
+        patch["schedule_updated_at"] = datetime.now(timezone.utc).astimezone().isoformat()
     state.update(patch)
 
 
@@ -42,7 +48,11 @@ def idle_schedule_loop(state: SharedGameState, stop: threading.Event) -> None:
             break
         snap = state.snapshot()
         if str(snap.get("scene", "idle")) == "idle":
-            if stop.wait(POLL_INTERVAL_SEC):
+            # Retry quickly while in an error state so a transient failure heals
+            # fast; otherwise use the normal long refresh interval.
+            errored = str(snap.get("schedule_status", "")) == "error"
+            wait = ERROR_RETRY_SEC if errored else POLL_INTERVAL_SEC
+            if stop.wait(wait):
                 break
             if stop.is_set():
                 break
