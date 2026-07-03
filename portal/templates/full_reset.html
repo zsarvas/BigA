@@ -1,0 +1,40 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>Factory Reset — BigA</title>
+  <style>
+    *, *::before, *::after { box-sizing: border-box; margin: 0; padding: 0; }
+    :root {
+      --red:   #BA0021;
+      --gold:  #C4A84F;
+      --white: #FFFFFF;
+      --bg:    #0a0f1e;
+      --muted: #6b7f99;
+    }
+    body {
+      font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
+      background: var(--bg);
+      color: var(--white);
+      min-height: 100dvh;
+      display: flex;
+      flex-direction: column;
+      align-items: center;
+      justify-content: center;
+      padding: 24px 16px;
+      text-align: center;
+    }
+    h1 { font-size: 1.5rem; font-weight: 800; margin-bottom: 12px; }
+    h1 span { color: var(--red); }
+    p { font-size: 0.9rem; color: var(--muted); max-width: 320px; line-height: 1.6; }
+  </style>
+</head>
+<body>
+  <h1>Full <span>reset</span></h1>
+  <p>
+    Erasing saved WiFi, game state, and highlights. The scoreboard will reboot
+    into setup mode on <strong>{{ ap_ssid }}</strong> in about a minute.
+  </p>
+</body>
+</html>

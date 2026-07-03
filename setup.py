@@ -463,6 +463,7 @@ print("\n[1/13] Installing system packages...")
 run("sudo apt update -q")
 run(
     "sudo apt install -y "
+    "git "  # required by scripts/update_biga.sh OTA auto-update; raspios-lite has no git
     "python3-pip "
     "python3-pygame "
     "fonts-dejavu-core "
@@ -623,8 +624,8 @@ sysctl("daemon-reload", desc="reloading systemd for setup screen")
 sysctl("enable", "biga-setup-screen", desc="enabling biga-setup-screen service")
 print("  → setup screen shows QR code on tty2 during AP provisioning")
 
-# 12. Factory reset button monitor (GPIO 27)
-print("\n[12/13] Installing factory reset button monitor...")
+# 12. Reset button monitor (GPIO 26)
+print("\n[12/13] Installing reset button monitor...")
 reset_script = os.path.join(REPO, "scripts", "reset_button.py")
 reset_service_src = os.path.join(REPO, "scripts", "biga-reset.service")
 run(f"chmod +x {reset_script}", "making reset_button.py executable")
@@ -634,8 +635,8 @@ run(
 )
 sysctl("daemon-reload", desc="reloading systemd for reset button")
 sysctl("enable", "biga-reset", desc="enabling biga-reset service")
-print("  → GPIO BCM 26 — hold 5 s to add another WiFi network")
-print("  → reset log: /var/log/biga-reset.log")
+print("  → GPIO BCM 26 — hold 5 s (release) for WiFi reset, 10 s for full factory reset")
+print("  → NeoPixel ring shows hold progress; reset log: /var/log/biga-reset.log")
 
 connectivity_service_src = os.path.join(REPO, "scripts", "biga-connectivity.service")
 run(

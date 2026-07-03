@@ -406,7 +406,7 @@ def connect_saved_networks(timeout: float = 45) -> bool:
 
 
 def wipe_all_networks() -> None:
-    """Full factory wipe — golden image prep only."""
+    """Remove all saved WiFi networks and NM profiles (full factory reset)."""
     for net in load_networks():
         _delete_nm_profile(_con_name_for_ssid(str(net.get("ssid", ""))))
     _delete_nm_profile("biga-client")

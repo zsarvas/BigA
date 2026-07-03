@@ -261,7 +261,7 @@ Flash to a microSD card with [Raspberry Pi Imager](https://www.raspberrypi.com/s
 **After flashing:**
 - Insert card, power on — Angels splash screen appears automatically
 - The \`biga\` service starts on boot
-- Factory reset: hold GPIO 26 for 5 seconds
+- Reset button (GPIO 26): hold 5 s (release) for WiFi reset; 10 s for full factory reset
 
 **Image size:** $size
 EOF

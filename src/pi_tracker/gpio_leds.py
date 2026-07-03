@@ -76,6 +76,7 @@ _WAIT_SEC = 0.030
 
 RED = (255, 0, 0)
 WHITE = (255, 255, 255)
+GOLD = (196, 168, 79)
 OFF = (0, 0, 0)
 
 _lock = threading.RLock()
@@ -87,6 +88,16 @@ _win_active = False
 _anim_thread: threading.Thread | None = None
 _anim_stop = threading.Event()
 _last_init_error: str = ""
+
+# Reset-button hold progress (biga-reset service; exclusive with win animation).
+_reset_hold_sec = 0.0
+_reset_hold_lock = threading.Lock()
+_reset_feedback_stop = threading.Event()
+_reset_feedback_thread: threading.Thread | None = None
+_RESET_SOFT_SEC = _env_int("BIGA_RESET_HOLD_SOFT", 5, lo=1, hi=60)
+_RESET_FULL_SEC = _env_int("BIGA_RESET_HOLD_FULL", 10, lo=2, hi=120)
+if _RESET_FULL_SEC <= _RESET_SOFT_SEC:
+    _RESET_FULL_SEC = _RESET_SOFT_SEC + 5
 
 # ---------------------------------------------------------------------------
 # Mute button
@@ -291,10 +302,100 @@ def _animate_loop(stop: threading.Event) -> None:
 
 def _start_anim_thread(name: str) -> None:
     global _anim_thread
+    _stop_reset_hold_feedback()
     _anim_stop.clear()
     t = threading.Thread(target=_animate_loop, args=(_anim_stop,), name=name, daemon=True)
     _anim_thread = t
     t.start()
+
+
+def _stop_win_animation() -> None:
+    """Stop the win-scene thread without tearing down the strip."""
+    global _anim_thread, _win_active
+    _anim_stop.set()
+    t = _anim_thread
+    _anim_thread = None
+    if t is not None:
+        t.join(timeout=2.0)
+    _fill_blocking(OFF)
+    _win_active = False
+
+
+def _reset_feedback_loop(stop: threading.Event) -> None:
+    """
+    Blink the ring while the reset button is held.
+
+    0–soft: slow gold pulse (WiFi reset coming).
+    soft–full: fast gold/red alternation (release for WiFi, keep holding for full).
+    ≥ full: solid red pulse (full reset firing).
+    """
+    while not stop.is_set():
+        with _reset_hold_lock:
+            held = _reset_hold_sec
+        if held >= _RESET_FULL_SEC:
+            on = int(time.monotonic() * 8) % 2 == 0
+            _fill_blocking(RED if on else OFF)
+            stop.wait(0.08)
+            continue
+        if held >= _RESET_SOFT_SEC:
+            period = 0.14
+            on = int(time.monotonic() / period) % 2 == 0
+            color = GOLD if int(held * 6) % 2 == 0 else RED
+            _fill_blocking(color if on else OFF)
+            stop.wait(period / 2)
+            continue
+        period = 0.45
+        on = int(time.monotonic() / period) % 2 == 0
+        _fill_blocking(GOLD if on else OFF)
+        stop.wait(period / 2)
+
+
+def set_reset_hold_seconds(held: float) -> None:
+    """Update hold duration for the reset-button feedback thread."""
+    with _reset_hold_lock:
+        global _reset_hold_sec
+        _reset_hold_sec = max(0.0, held)
+
+
+def begin_reset_hold_feedback() -> None:
+    """Take over the NeoPixel ring for reset-button progress (stops win anim)."""
+    global _reset_feedback_thread
+    if _LED_DEBUG or _LED_WIN_DEBUG:
+        return
+    with _lock:
+        _stop_win_animation()
+        if not _initialized:
+            init_gpio()
+        if _view is None:
+            return
+        _stop_reset_hold_feedback()
+        set_reset_hold_seconds(0.0)
+        _reset_feedback_stop.clear()
+        t = threading.Thread(
+            target=_reset_feedback_loop,
+            args=(_reset_feedback_stop,),
+            name="reset-hold-leds",
+            daemon=True,
+        )
+        _reset_feedback_thread = t
+        t.start()
+
+
+def _stop_reset_hold_feedback() -> None:
+    global _reset_feedback_thread
+    _reset_feedback_stop.set()
+    t = _reset_feedback_thread
+    _reset_feedback_thread = None
+    if t is not None:
+        t.join(timeout=1.0)
+    set_reset_hold_seconds(0.0)
+
+
+def end_reset_hold_feedback() -> None:
+    """Turn off reset-hold feedback and release the strip."""
+    with _lock:
+        _stop_reset_hold_feedback()
+        _fill_blocking(OFF)
 
 
 def init_gpio() -> None:

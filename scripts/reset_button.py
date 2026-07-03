@@ -1,38 +1,49 @@
 #!/usr/bin/env python3
 """
-Factory reset button monitor.
+Reset button monitor (GPIO BCM 26, active-low).
 
-Watches GPIO BCM 26 (active-low, internal pull-up).
-Hold the button for HOLD_SECONDS to enter **add-network** provisioning:
-  1. Keep saved WiFi networks (up to 7); show QR / portal to add another.
-  2. Reboot — releases the display/DRM and starts portal + setup screen.
+Hold timing (release unless noted):
+  ~2 s  — NeoPixel ring shows progress (stops biga to access the strip).
+  5 s   — release → soft reset (WiFi / add-network; keeps game state).
+  10 s  — auto → full factory reset (WiFi + game state + highlights).
+
+NeoPixel feedback:
+  0–5 s: slow gold pulse (WiFi reset coming).
+  5–10 s: fast gold/red blink (release for WiFi, keep holding for full reset).
+  ≥10 s: rapid red pulse (full reset).
 
 Env vars
-  BIGA_RESET_PIN    BCM pin number (default: 26)
-  BIGA_RESET_HOLD   Seconds to hold for reset (default: 5)
+  BIGA_RESET_PIN          BCM pin (default: 26)
+  BIGA_RESET_HOLD_SOFT    Soft-reset threshold seconds (default: 5)
+  BIGA_RESET_HOLD_FULL    Full-reset threshold seconds (default: 10)
+  BIGA_RESET_LED_TAKEOVER Seconds before stopping biga for LED feedback (default: 2)
 """
+
+from __future__ import annotations
 
 import logging
 import os
-import subprocess
 import sys
+import threading
 import time
 from pathlib import Path
 
 RESET_PIN = int(os.environ.get("BIGA_RESET_PIN", 26))
-HOLD_SECONDS = int(os.environ.get("BIGA_RESET_HOLD", 5))
-FIRSTBOOT_SENTINEL = Path("/etc/biga/.firstboot_done")
-SETUP_AP = Path("/home/pi/BigA/scripts/setup_ap.sh")
-PORTAL_DIR = Path("/home/pi/BigA/portal")
-AP_CON_NAME = "biga-ap"
+SOFT_HOLD_SEC = float(os.environ.get("BIGA_RESET_HOLD_SOFT", "5"))
+FULL_HOLD_SEC = float(os.environ.get("BIGA_RESET_HOLD_FULL", "10"))
+LED_TAKEOVER_SEC = float(os.environ.get("BIGA_RESET_LED_TAKEOVER", "2"))
+
+if FULL_HOLD_SEC <= SOFT_HOLD_SEC:
+    FULL_HOLD_SEC = SOFT_HOLD_SEC + 5.0
+
+REPO = Path("/home/pi/BigA")
+SRC_DIR = REPO / "src"
+PORTAL_DIR = REPO / "portal"
 
 sys.path.insert(0, str(PORTAL_DIR))
-from wifi_store import (  # noqa: E402
-    enter_provisioning,
-    ensure_ssh_running,
-    has_networks,
-    prepare_ap_provisioning_mode,
-)
+sys.path.insert(0, str(SRC_DIR))
+
+from reset_actions import perform_full_reset, perform_soft_reset  # noqa: E402
 
 logging.basicConfig(
     level=logging.INFO,
@@ -47,87 +58,159 @@ log = logging.getLogger("reset_button")
 
 try:
     from gpiozero import Button
+
     _GPIO_AVAILABLE = True
 except Exception:
     _GPIO_AVAILABLE = False
     log.warning("gpiozero not available — running in stub mode (no GPIO)")
 
+_leds_available = False
+try:
+    from pi_tracker.gpio_leds import (  # noqa: E402
+        begin_reset_hold_feedback,
+        end_reset_hold_feedback,
+        set_reset_hold_seconds,
+    )
 
-def _run(cmd: list[str], *, label: str = "") -> subprocess.CompletedProcess[str]:
-    result = subprocess.run(cmd, capture_output=True, text=True, check=False)
-    if result.returncode == 0:
-        log.info("%s → OK", label or " ".join(cmd))
-    else:
-        err = (result.stderr or result.stdout or "").strip()
-        log.error("%s failed: %s", label or " ".join(cmd), err)
-    return result
+    _leds_available = True
+except Exception as exc:
+    log.warning("NeoPixel feedback unavailable: %s", exc)
+
+_hold_lock = threading.Lock()
+_pressed_at: float | None = None
+_biga_stopped = False
+_poll_thread: threading.Thread | None = None
+_reset_in_progress = False
 
 
 def _service(action: str, name: str) -> None:
-    _run(["systemctl", action, name], label=f"systemctl {action} {name}")
+    import subprocess
 
-
-def _recreate_ap_profile() -> None:
-    """Rebuild biga-ap from the current wlan0 MAC so SSID/QR stay in sync."""
-    FIRSTBOOT_SENTINEL.unlink(missing_ok=True)
-    _run(["nmcli", "connection", "down", AP_CON_NAME], label="nmcli down biga-ap")
-    if SETUP_AP.is_file():
-        _run(["bash", str(SETUP_AP)], label="setup_ap.sh")
-    else:
-        log.error("setup_ap.sh missing at %s", SETUP_AP)
-
-
-def _shutdown_leds() -> None:
-    """Turn off win-scene NeoPixels after biga exits (strip holds last frame otherwise)."""
-    src = Path("/home/pi/BigA/src")
-    if not (src / "pi_tracker" / "gpio_leds.py").is_file():
-        log.debug("gpio_leds not found — skip LED shutdown")
-        return
-    script = (
-        "import sys; "
-        f"sys.path.insert(0, {str(src)!r}); "
-        "from pi_tracker.gpio_leds import cleanup_gpio, init_gpio, set_win_led; "
-        "init_gpio(); set_win_led(False); cleanup_gpio()"
+    subprocess.run(
+        ["systemctl", action, name],
+        capture_output=True,
+        text=True,
+        check=False,
     )
-    _run([sys.executable, "-c", script], label="shutdown NeoPixels")
 
 
-def _reboot(delay_sec: float = 3.0) -> None:
-    log.info("Rebooting in %.0fs (clean display + provisioning services)…", delay_sec)
-    time.sleep(delay_sec)
-    _run(["sync"], label="sync")
-    _run(["systemctl", "reboot"], label="systemctl reboot")
-
-
-def factory_reset() -> None:
-    log.info("Add-network provisioning triggered (GPIO %d held %ds).", RESET_PIN, HOLD_SECONDS)
-
-    enter_provisioning()
-    if has_networks():
-        log.info("Keeping existing saved networks — portal will append another.")
-    else:
-        log.info("No saved networks yet — first-time setup.")
-
-    _recreate_ap_profile()
-
-    # Drop home WiFi before reboot so the next boot does not race NM autoconnect.
-    prepare_ap_provisioning_mode()
-    ensure_ssh_running()
-
-    # Stop scoreboard before reboot — it holds DRM and GPIO 19 NeoPixels.
+def _stop_biga_for_leds() -> None:
+    global _biga_stopped
+    if _biga_stopped:
+        return
+    log.info("Stopping biga for reset-button NeoPixel feedback…")
     _service("stop", "biga")
-    _service("stop", "biga-setup-screen")
-    _service("stop", "biga-portal")
+    _biga_stopped = True
+    time.sleep(0.4)
 
-    time.sleep(0.75)
-    _shutdown_leds()
 
-    _reboot()
+def _restart_biga_if_needed() -> None:
+    global _biga_stopped
+    if not _biga_stopped:
+        return
+    log.info("Reset cancelled — restarting biga.")
+    _service("start", "biga")
+    _biga_stopped = False
+
+
+def _end_led_feedback() -> None:
+    if not _leds_available:
+        return
+    try:
+        end_reset_hold_feedback()
+    except Exception as exc:
+        log.debug("end_reset_hold_feedback: %s", exc)
+
+
+def _update_led_feedback(held: float) -> None:
+    if not _leds_available:
+        return
+    try:
+        set_reset_hold_seconds(held)
+    except Exception as exc:
+        log.debug("set_reset_hold_seconds: %s", exc)
+
+
+def _begin_led_feedback() -> None:
+    if not _leds_available:
+        return
+    try:
+        begin_reset_hold_feedback()
+    except Exception as exc:
+        log.warning("begin_reset_hold_feedback failed: %s", exc)
+
+
+def _on_press() -> None:
+    global _pressed_at, _poll_thread, _biga_stopped, _reset_in_progress
+    with _hold_lock:
+        if _reset_in_progress:
+            return
+        _pressed_at = time.monotonic()
+        _biga_stopped = False
+        if _poll_thread is None or not _poll_thread.is_alive():
+            _poll_thread = threading.Thread(target=_hold_poll_loop, daemon=True)
+            _poll_thread.start()
+
+
+def _hold_poll_loop() -> None:
+    global _pressed_at, _reset_in_progress
+    btn = _button
+    while True:
+        if not btn.is_pressed:
+            break
+        with _hold_lock:
+            start = _pressed_at
+        if start is None:
+            return
+        held = time.monotonic() - start
+
+        if held >= LED_TAKEOVER_SEC and not _biga_stopped:
+            _stop_biga_for_leds()
+            _begin_led_feedback()
+
+        if _biga_stopped:
+            _update_led_feedback(held)
+
+        if held >= FULL_HOLD_SEC:
+            with _hold_lock:
+                _reset_in_progress = True
+            _end_led_feedback()
+            log.info("Full reset triggered at %.1fs hold.", held)
+            perform_full_reset()
+            return
+
+        time.sleep(0.05)
+
+    with _hold_lock:
+        start = _pressed_at
+        _pressed_at = None
+    if start is None:
+        return
+
+    held = time.monotonic() - start
+    _end_led_feedback()
+
+    if held < SOFT_HOLD_SEC:
+        log.debug("Button released at %.1fs — below soft threshold, no action.", held)
+        _restart_biga_if_needed()
+        return
+
+    if held < FULL_HOLD_SEC:
+        with _hold_lock:
+            _reset_in_progress = True
+        log.info("Soft reset triggered at %.1fs hold (release).", held)
+        perform_soft_reset()
+        return
 
 
 def _run_stub() -> None:
-    """No-op loop when GPIO is unavailable (dev/Mac environment)."""
-    log.info("Stub mode — GPIO %d monitor inactive. Press Ctrl-C to exit.", RESET_PIN)
+    log.info(
+        "Stub mode — GPIO %d monitor inactive. "
+        "Soft=%.0fs full=%.0fs. Press Ctrl-C to exit.",
+        RESET_PIN,
+        SOFT_HOLD_SEC,
+        FULL_HOLD_SEC,
+    )
     try:
         while True:
             time.sleep(60)
@@ -135,15 +218,25 @@ def _run_stub() -> None:
         pass
 
 
+_button: Button | None = None
+
+
 def main() -> None:
+    global _button
     if not _GPIO_AVAILABLE:
         _run_stub()
         return
 
-    log.info("Monitoring GPIO BCM %d — hold %ds to factory reset.", RESET_PIN, HOLD_SECONDS)
+    log.info(
+        "Monitoring GPIO BCM %d — hold %.0fs (release) for WiFi reset, "
+        "%.0fs for full factory reset.",
+        RESET_PIN,
+        SOFT_HOLD_SEC,
+        FULL_HOLD_SEC,
+    )
 
-    btn = Button(RESET_PIN, pull_up=True, hold_time=HOLD_SECONDS, bounce_time=0.05)
-    btn.when_held = factory_reset
+    _button = Button(RESET_PIN, pull_up=True, bounce_time=0.05)
+    _button.when_pressed = _on_press
 
     try:
         while True:
@@ -151,7 +244,8 @@ def main() -> None:
     except KeyboardInterrupt:
         log.info("Shutting down.")
     finally:
-        btn.close()
+        _end_led_feedback()
+        _button.close()
 
 
 if __name__ == "__main__":
