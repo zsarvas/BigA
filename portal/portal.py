@@ -40,7 +40,6 @@ from wifi_store import (
     has_networks,
     is_provisioning,
     network_needs_password,
-    verify_wifi_connection,
 )
 
 # ---------------------------------------------------------------------------
@@ -102,23 +101,25 @@ def scan_networks() -> list[dict]:
 
 def connect_wifi(ssid: str, password: str, *, security: str = "") -> tuple[bool, str]:
     """
-    Validate credentials, verify a real NM join, then persist on success.
+    Persist credentials and let the reboot join them.
+
+    We deliberately do *not* verify the join live: wlan0 is a single radio, so
+    testing the home network tears down the AP and drops the phone mid-request —
+    the user never sees success or failure. Instead we save the creds (without
+    touching wlan0, so the AP stays up long enough to serve the success page)
+    and reboot. On boot, ``check_wifi_connectivity`` connects, or returns to the
+    QR setup screen if the credentials turn out to be wrong.
     """
     if network_needs_password(security) and not password:
         return False, "Password is required for this network."
 
-    log.info("Verifying WiFi join to %r before saving credentials", ssid)
-    ok, err = verify_wifi_connection(ssid, password)
-    if not ok:
-        return False, err
-
-    log.info("Saving connection profile for %r", ssid)
+    log.info("Saving credentials for %r (join happens on reboot)", ssid)
     try:
-        append_network(ssid, password)
+        append_network(ssid, password, sync_nm=False)
     except Exception as exc:
         log.warning("append_network failed: %s", exc)
         return False, str(exc) or "Failed to save network."
-    return True, "Connected."
+    return True, "Saved."
 
 
 def wipe_creds() -> None:
@@ -136,13 +137,17 @@ def provisioned() -> bool:
     return has_networks() and not is_provisioning()
 
 
+SUCCESS_REBOOT_DELAY_SEC = 8
+
+
 def _switch_to_client_mode() -> None:
     """
     Reboot the Pi after a short delay so the success page can load.
-    On reboot, NM auto-connects the biga-client profile, biga starts cleanly.
+    On reboot, ``check_wifi_connectivity`` recreates the NM profiles from the
+    saved credentials and joins the home network before biga starts.
     """
     def _run() -> None:
-        time.sleep(4)
+        time.sleep(SUCCESS_REBOOT_DELAY_SEC)
         ensure_ssh_running()
         log.info("Rebooting to apply WiFi credentials…")
         subprocess.run(["reboot"])
