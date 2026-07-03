@@ -188,6 +188,20 @@ class ClipPlayerMixin:
         self.__init_cp()
         self._cp_next_play_ms = 1
 
+    def _cp_notify_played(self) -> None:
+        """
+        Call after app.py finishes mpv playback so the next gap is measured from
+        the clip's END, not its start.
+
+        The play timer is set when a clip is *queued* (before mpv), but
+        ``pygame.time.get_ticks()`` keeps advancing while mpv runs with pygame
+        suspended.  For clips as long as (or longer than) the gap, the timer is
+        already expired on return and the next clip fires instantly — the scene
+        never gets shown.  Resetting to 0 re-arms a full gap on the next tick.
+        """
+        self.__init_cp()
+        self._cp_next_play_ms = 0
+
     def _cp_tick(
         self,
         folder: Path | None,
