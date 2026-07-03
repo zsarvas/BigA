@@ -135,9 +135,11 @@ class IdleScene(ClipPlayerMixin):
             y = _blit_wrapped_center(
                 screen, assets.font_ui, "Schedule unavailable", y, config.GRAY, 44
             )
-            err = str(state.get("schedule_error", "")).strip()
-            if err:
-                y = _blit_wrapped_center(screen, assets.font_small, err, y + 4, (200, 80, 80), 52)
+            # Keep the raw exception in the logs only — show a calm retry note on
+            # screen so a transient MLB API blip doesn't paint a scary stack-y error.
+            y = _blit_wrapped_center(
+                screen, assets.font_small, "Retrying shortly…", y + 4, config.GRAY, 52
+            )
         elif status == "none":
             y = _blit_wrapped_center(
                 screen,
