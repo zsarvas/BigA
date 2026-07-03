@@ -261,6 +261,60 @@
       letter-spacing: 0.04em;
       opacity: 0.8;
     }
+
+    .advanced {
+      width: 100%;
+      max-width: 420px;
+      margin-top: 20px;
+      border: 1px solid var(--border);
+      border-radius: 12px;
+      background: var(--card);
+      padding: 14px 16px;
+    }
+    .advanced summary {
+      cursor: pointer;
+      font-size: 0.8rem;
+      font-weight: 700;
+      letter-spacing: 0.06em;
+      text-transform: uppercase;
+      color: var(--muted);
+    }
+    .advanced-body {
+      margin-top: 14px;
+      text-align: left;
+    }
+    .advanced-warning {
+      font-size: 0.78rem;
+      color: var(--muted);
+      line-height: 1.5;
+      margin: 10px 0 14px;
+    }
+    .advanced-warning strong { color: var(--white); }
+    .confirm-label {
+      display: flex;
+      align-items: flex-start;
+      gap: 10px;
+      font-size: 0.85rem;
+      line-height: 1.4;
+      cursor: pointer;
+    }
+    .confirm-label input { margin-top: 3px; flex-shrink: 0; }
+    .danger-btn {
+      width: 100%;
+      margin-top: 14px;
+      padding: 12px;
+      background: transparent;
+      color: var(--red);
+      border: 1.5px solid var(--red);
+      border-radius: 10px;
+      font-size: 0.9rem;
+      font-weight: 700;
+      cursor: pointer;
+    }
+    .danger-btn:disabled {
+      opacity: 0.45;
+      cursor: not-allowed;
+    }
   </style>
 </head>
 <body>
@@ -326,6 +380,27 @@
     </form>
   </div>
 
+  <details class="advanced">
+    <summary>Advanced</summary>
+    <div class="advanced-body">
+      <p class="advanced-warning">
+        <strong>Full factory reset</strong> erases saved WiFi networks, game state,
+        and downloaded highlights. Use only if the scoreboard is stuck or showing
+        wrong game data. To add another WiFi network without erasing game data,
+        use the physical reset button (hold ~5 seconds).
+      </p>
+      <form method="POST" action="/reset/full" id="full-reset-form">
+        <label class="confirm-label">
+          <input type="checkbox" name="confirm_full" value="1" id="confirm-full" />
+          Also erase saved game state and downloaded highlights
+        </label>
+        <button type="submit" class="danger-btn" id="full-reset-btn" disabled>
+          Full factory reset
+        </button>
+      </form>
+    </div>
+  </details>
+
   <p class="footer-note">
     Your credentials are stored only on this device and used solely to connect to your network.
     {% if mac_address %}<br /><span class="mac">Device MAC: {{ mac_address }}</span>{% endif %}
@@ -366,6 +441,32 @@
       btn.disabled = true;
       btn.textContent = "Saving… restarting BigA";
     });
+
+    const confirmFull = document.getElementById("confirm-full");
+    const fullResetBtn = document.getElementById("full-reset-btn");
+    const fullResetForm = document.getElementById("full-reset-form");
+    if (confirmFull && fullResetBtn) {
+      confirmFull.addEventListener("change", () => {
+        fullResetBtn.disabled = !confirmFull.checked;
+      });
+    }
+    if (fullResetForm && fullResetBtn) {
+      fullResetForm.addEventListener("submit", function (e) {
+        if (!confirmFull || !confirmFull.checked) {
+          e.preventDefault();
+          alert("Check the box to confirm a full factory reset.");
+          return;
+        }
+        if (!confirm(
+          "Full factory reset will erase WiFi, game state, and highlights. Continue?"
+        )) {
+          e.preventDefault();
+          return;
+        }
+        fullResetBtn.disabled = true;
+        fullResetBtn.textContent = "Resetting…";
+      });
+    }
   </script>
 
 </body>

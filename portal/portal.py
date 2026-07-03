@@ -33,6 +33,7 @@ from captive import (
     ap_ssid,
     wlan_mac,
 )
+from reset_actions import perform_full_reset
 from wifi_store import (
     append_network,
     enter_provisioning,
@@ -241,13 +242,36 @@ def status():
 
 
 @app.route("/reset", methods=["POST"])
-def factory_reset():
+def soft_reset_route():
     """
-    Wipe credentials and restore AP mode.
-    Phase 3: this same logic runs from the physical reset button GPIO handler.
+    In-portal add-network provisioning (keeps saved WiFi + game state).
+    Does not reboot — user is already on the captive portal.
     """
     wipe_creds()
     return redirect(url_for("index"))
+
+
+@app.route("/reset/full", methods=["POST"])
+def full_factory_reset_route():
+    """
+    Full factory reset from the portal (checkbox + confirm).
+    Wipes WiFi, game state, and highlights, then reboots into provisioning.
+    """
+    if not request.form.get("confirm_full"):
+        networks = scan_networks()
+        return render_template(
+            "index.html",
+            networks=networks,
+            ap_ssid=ap_ssid(),
+            mac_address=wlan_mac(),
+            error="Check the box to confirm a full factory reset.",
+        )
+
+    def _run() -> None:
+        perform_full_reset()
+
+    threading.Thread(target=_run, daemon=True).start()
+    return render_template("full_reset.html", ap_ssid=ap_ssid())
 
 
 # ---------------------------------------------------------------------------

@@ -9,7 +9,9 @@ ExecStart=/usr/bin/python3 /home/pi/BigA/scripts/reset_button.py
 Restart=on-failure
 RestartSec=5
 Environment=BIGA_RESET_PIN=26
-Environment=BIGA_RESET_HOLD=5
+Environment=BIGA_RESET_HOLD_SOFT=5
+Environment=BIGA_RESET_HOLD_FULL=10
+Environment=BIGA_RESET_LED_TAKEOVER=2
 StandardOutput=append:/var/log/biga-reset.log
 StandardError=append:/var/log/biga-reset.log
 
