@@ -71,6 +71,10 @@ jobs:
             truncate -s 0 /etc/machine-id || true
             rm -f /etc/ssh/ssh_host_* || true
             rm -rf /home/pi/BigA/src/pi_tracker/assets/highlights/* || true
+            # Persisted game state must not ship in the image, or first boot
+            # restores a stale win/loss scene + old live_game_pk and replays a
+            # months-old game's highlights instead of showing idle.
+            rm -f /home/pi/BigA/.biga_game_state.json /home/pi/BigA/.biga_game_state.tmp || true
             rm -f /root/.bash_history /home/pi/.bash_history || true
             rm -f /etc/biga/wifi_creds.json /etc/biga/provisioning_active /etc/biga/.firstboot_done || true
             # --- disable Bookworm first-boot user wizard (userconf-pi) ---
