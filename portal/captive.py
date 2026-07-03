@@ -14,6 +14,17 @@ WLAN_INTERFACE = "wlan0"
 AP_CON_NAME = "biga-ap"
 
 
+def wlan_mac() -> str:
+    """Hardware MAC for wlan0 (uppercase colon-separated), or empty if unavailable."""
+    override = os.environ.get("BIGA_WLAN_MAC", "").strip()
+    if override:
+        return override.upper()
+    try:
+        return Path(f"/sys/class/net/{WLAN_INTERFACE}/address").read_text().strip().upper()
+    except OSError:
+        return ""
+
+
 def ap_ssid() -> str:
     """
     SSID clients should join — always read from the live NM ``biga-ap`` profile
