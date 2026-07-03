@@ -254,6 +254,13 @@
       text-align: center;
       max-width: 320px;
     }
+    .footer-note .mac {
+      display: inline-block;
+      margin-top: 6px;
+      font-variant-numeric: tabular-nums;
+      letter-spacing: 0.04em;
+      opacity: 0.8;
+    }
   </style>
 </head>
 <body>
@@ -321,6 +328,7 @@
 
   <p class="footer-note">
     Your credentials are stored only on this device and used solely to connect to your network.
+    {% if mac_address %}<br /><span class="mac">Device MAC: {{ mac_address }}</span>{% endif %}
   </p>
 
   <script>

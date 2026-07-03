@@ -3,31 +3,34 @@
 BigA Setup Screen
 Shown on the Pi's display while in AP provisioning mode.
 
-Two-step flow (WiFi QR cannot open the captive portal reliably):
-  1. User joins the BigA-XXXX network using the password on screen.
-  2. User scans the QR code → http://biga.setup → WiFi credential portal.
+  1. User scans the Wi‑Fi QR (or joins BigA-XXXX manually using password on screen).
+  2. User opens a browser and goes to biga.setup to enter home Wi‑Fi credentials.
 """
 
 import os
-import sys
 import threading
 import time
 
-from captive import PORTAL_SETUP_URL, ap_ssid
+from captive import PORTAL_HOSTNAME, ap_ssid, wifi_qr_string, wlan_mac
 from wifi_store import is_provisioning
 
 AP_PASSWORD = os.environ.get("BIGA_AP_PASSWORD", "bigasetup")
 PREVIEW = os.environ.get("BIGA_SETUP_PREVIEW", "").lower() in ("1", "true", "yes")
 
+INSTR_LINES = (
+    "Scan QR to join Wi‑Fi",
+    f"Open a browser and go to {PORTAL_HOSTNAME}",
+)
 
-def _make_qr_surface(url: str, qr_size: int):
-    """Build a pygame surface for the portal URL QR code."""
+
+def _make_qr_surface(payload: str, qr_size: int):
+    """Build a pygame surface for a QR payload (Wi‑Fi join string or URL)."""
     import PIL.Image as PilImage
     import pygame
     import qrcode
 
     qr = qrcode.QRCode(box_size=4, border=2)
-    qr.add_data(url)
+    qr.add_data(payload)
     qr.make(fit=True)
     qr_pil = qr.make_image(fill_color="black", back_color="white").convert("RGB")
     qr_scaled = qr_pil.resize((qr_size, qr_size), PilImage.NEAREST)
@@ -85,40 +88,49 @@ def main() -> None:
     _normal = "/usr/share/fonts/truetype/dejavu/DejaVuSans.ttf"
     try:
         f_title = pygame.font.Font(_bold, 22)
-        f_step = pygame.font.Font(_bold, 15)
+        f_step = pygame.font.Font(_bold, 14)
         f_label = pygame.font.Font(_normal, 13)
         f_value = pygame.font.Font(_bold, 17)
+        f_mac = pygame.font.Font(_normal, 11)
     except Exception:
         f_title = pygame.font.SysFont("sans", 22, bold=True)
-        f_step = pygame.font.SysFont("sans", 15, bold=True)
+        f_step = pygame.font.SysFont("sans", 14, bold=True)
         f_label = pygame.font.SysFont("sans", 13)
         f_value = pygame.font.SysFont("sans", 17, bold=True)
+        f_mac = pygame.font.SysFont("sans", 11)
 
-    STEPS_GAP = 6
-    INSTR_LINES = 2
-    instr_h = INSTR_LINES * (f_step.get_height() + STEPS_GAP) + 8
-    QR_SIZE = min(H - instr_h - 20, 188)
+    STEPS_GAP = 5
+    footer_h = f_mac.get_height() + 6
+    instr_h = len(INSTR_LINES) * (f_step.get_height() + STEPS_GAP) + footer_h + 8
+    QR_SIZE = min(H - instr_h - 16, 188)
     qr_x = 8
     qr_y = max(6, (H - instr_h - QR_SIZE) // 2)
     RX = qr_x + QR_SIZE + 14
     RW = W - RX - 8
 
     shown_ssid = ""
-    qr_surf = _make_qr_surface(PORTAL_SETUP_URL, QR_SIZE)
+    qr_payload = ""
+    qr_surf = None
 
     def _sync_ssid() -> None:
-        nonlocal shown_ssid
-        shown_ssid = ap_ssid()
+        nonlocal shown_ssid, qr_payload, qr_surf
+        ssid = ap_ssid()
+        shown_ssid = ssid
+        payload = wifi_qr_string(ssid, AP_PASSWORD)
+        if payload != qr_payload:
+            qr_payload = payload
+            qr_surf = _make_qr_surface(payload, QR_SIZE)
 
     def draw() -> None:
         screen.fill(BG)
-        pygame.draw.rect(
-            screen,
-            WHITE,
-            (qr_x - 6, qr_y - 6, QR_SIZE + 12, QR_SIZE + 12),
-            border_radius=8,
-        )
-        screen.blit(qr_surf, (qr_x, qr_y))
+        if qr_surf is not None:
+            pygame.draw.rect(
+                screen,
+                WHITE,
+                (qr_x - 6, qr_y - 6, QR_SIZE + 12, QR_SIZE + 12),
+                border_radius=8,
+            )
+            screen.blit(qr_surf, (qr_x, qr_y))
 
         y = 18
         ts = f_title.render("BigA  Setup", True, WHITE)
@@ -137,13 +149,14 @@ def main() -> None:
         y += f_label.get_height() + 2
         screen.blit(f_value.render(AP_PASSWORD, True, WHITE), (RX, y))
 
-        lines = (
-            f"1. Join the {shown_ssid} network",
-            f"2. Scan QR code or navigate to {PORTAL_SETUP_URL}",
-        )
-        total_h = len(lines) * f_step.get_height() + (len(lines) - 1) * STEPS_GAP
-        y_instr = H - 8 - total_h
-        for line in lines:
+        mac = wlan_mac()
+        if mac:
+            mac_surf = f_mac.render(f"MAC {mac}", True, MUTED)
+            screen.blit(mac_surf, mac_surf.get_rect(midbottom=(W // 2, H - 4)))
+
+        total_h = len(INSTR_LINES) * f_step.get_height() + (len(INSTR_LINES) - 1) * STEPS_GAP
+        y_instr = H - footer_h - total_h
+        for line in INSTR_LINES:
             surf = f_step.render(line, True, WHITE)
             screen.blit(surf, surf.get_rect(midtop=(W // 2, y_instr)))
             y_instr += surf.get_height() + STEPS_GAP

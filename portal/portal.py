@@ -31,6 +31,7 @@ from captive import (
     PORTAL_IP,
     PORTAL_SETUP_URL,
     ap_ssid,
+    wlan_mac,
 )
 from wifi_store import (
     append_network,
@@ -174,7 +175,9 @@ def captive_portal_check():
 @app.route("/")
 def index():
     networks = scan_networks()
-    return render_template("index.html", networks=networks, ap_ssid=ap_ssid())
+    return render_template(
+        "index.html", networks=networks, ap_ssid=ap_ssid(), mac_address=wlan_mac()
+    )
 
 
 @app.route("/connect", methods=["POST"])
@@ -188,6 +191,7 @@ def connect():
             "index.html",
             networks=networks,
             ap_ssid=ap_ssid(),
+            mac_address=wlan_mac(),
             error="Please select a network.",
         )
 
@@ -202,6 +206,7 @@ def connect():
         "index.html",
         networks=scan_networks(),
         ap_ssid=ap_ssid(),
+        mac_address=wlan_mac(),
         selected_ssid=ssid,
         error=message,
     )

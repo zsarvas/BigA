@@ -21,6 +21,7 @@ PORTAL = REPO / "portal"
 
 os.environ["BIGA_SETUP_PREVIEW"] = "1"
 os.environ.setdefault("BIGA_AP_SSID", "BigA-DEMO")
+os.environ.setdefault("BIGA_WLAN_MAC", "DC:A6:32:12:34:56")
 
 sys.path.insert(0, str(PORTAL))
 
