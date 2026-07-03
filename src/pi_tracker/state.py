@@ -152,6 +152,7 @@ class SharedGameState:
             "live_last_play_id": "",
             "schedule_status": "loading",
             "schedule_error": "",
+            "schedule_updated_at": "",
             "next_game_date_display": "",
             "next_game_time_display": "",
             "next_game_matchup": "",

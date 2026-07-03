@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import textwrap
+from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any
 
@@ -15,6 +16,26 @@ from ._clip_player import ClipPlayerMixin, _playable_clip_paths
 # Small logo beside "vs / @ …" on idle (hero logo is the tracked franchise).
 IDLE_OPPONENT_LOGO_SIZE = (config.layout_size(28), config.layout_size(28))
 MATCHUP_LOGO_GAP = 8
+
+
+def _format_schedule_updated(raw: str) -> str:
+    """Human-readable 'Last updated …' from ISO timestamp in state."""
+    text = raw.strip()
+    if not text:
+        return ""
+    try:
+        dt = datetime.fromisoformat(text)
+        if dt.tzinfo is None:
+            dt = dt.replace(tzinfo=timezone.utc)
+        local = dt.astimezone()
+        day = local.strftime("%a, %b %d").replace(" 0", " ")
+        clock = local.strftime("%I:%M %p").lstrip("0")
+        tz = (local.tzname() or "").strip()
+        if tz:
+            return f"Last updated {day} · {clock} {tz}"
+        return f"Last updated {day} · {clock}"
+    except ValueError:
+        return ""
 
 
 def _blit_wrapped_center(
@@ -133,10 +154,11 @@ class IdleScene(ClipPlayerMixin):
             )
         elif status == "error":
             y = _blit_wrapped_center(
-                screen, assets.font_ui, "Schedule unavailable", y, config.GRAY, 44
+                screen, assets.font_ui, "Connection lost", y, config.GRAY, 44
             )
-            # Keep the raw exception in the logs only — show a calm retry note on
-            # screen so a transient MLB API blip doesn't paint a scary stack-y error.
+            last = _format_schedule_updated(str(state.get("schedule_updated_at", "")))
+            if last:
+                y = _blit_wrapped_center(screen, assets.font_small, last, y + 4, config.GRAY, 52)
             y = _blit_wrapped_center(
                 screen, assets.font_small, "Retrying shortly…", y + 4, config.GRAY, 52
             )

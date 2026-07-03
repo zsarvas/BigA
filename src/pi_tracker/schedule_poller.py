@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import logging
 import threading
+from datetime import datetime, timezone
 
 from .mlb_schedule import fetch_and_format_next_game
 from .state import SharedGameState
@@ -19,6 +20,8 @@ ERROR_RETRY_SEC = 60
 
 def _poll_once(state: SharedGameState) -> None:
     patch = fetch_and_format_next_game()
+    if patch.get("schedule_status") in ("ok", "none"):
+        patch["schedule_updated_at"] = datetime.now(timezone.utc).astimezone().isoformat()
     state.update(patch)
 
 
