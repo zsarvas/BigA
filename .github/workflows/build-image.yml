@@ -89,6 +89,12 @@ jobs:
             # provide on manual flashes: user 'pi', password from BIGA_PI_PASSWORD,
             # hostname 'biga'.
             printf 'pi:%s\n' "$BIGA_PI_PASSWORD" | chpasswd
+            # The base image ships 'pi' with /usr/sbin/nologin; userconfig.service
+            # normally restores /bin/bash on first boot via cancel-rename. Since we
+            # mask that service, set the login shell explicitly or SSH auth succeeds
+            # but the session closes with "This account is currently not available".
+            usermod -s /bin/bash pi
+            passwd -u pi 2>/dev/null || true
             # hostnamectl needs a running systemd, so write the files directly.
             echo 'biga' > /etc/hostname
             sed -i 's/127.0.1.1.*/127.0.1.1\tbiga/' /etc/hosts || true

@@ -703,6 +703,10 @@ def main() -> None:
                     else:
                         scene._pending_clip = None  # type: ignore[attr-defined]
                         screen = _play_mpv(pending, screen, display_flags)
+                        # Re-arm the gap from the clip's END so the score scene is
+                        # shown between clips (get_ticks advances during mpv).
+                        if hasattr(scene, "_cp_notify_played"):
+                            scene._cp_notify_played()  # type: ignore[attr-defined]
 
             # Boost tick rate for pygame-rendered GIFs (live events, win/loss backgrounds).
             if getattr(scene, "_anim", None) or scene_key in ("win", "loss"):
