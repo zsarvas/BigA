@@ -4,9 +4,14 @@ Boot-time WiFi prep — sync saved networks to NetworkManager profiles.
 
 A device that has *never* been provisioned (no saved networks at all, e.g. a
 fresh golden-image flash) automatically enters AP provisioning so the QR setup
-portal appears on first boot. Once networks are saved, provisioning is only
-re-entered via the reset button (GPIO 26) — we never auto-provision merely
-because the internet is down or WiFi is slow, to avoid flapping.
+portal appears on first boot.
+
+When networks *are* saved, we sync them to NetworkManager and try to join. If
+none associate/get a DHCP lease (bad password just entered in the portal, or
+every saved network is out of range) we re-enter AP provisioning so the QR
+setup screen returns. We only fall back on association/DHCP failure — an
+associated network with a working LAN but no internet still gets an IP, so a
+mere outage never re-provisions and we don't flap.
 """
 
 from __future__ import annotations
@@ -20,6 +25,7 @@ _PORTAL_DIR = Path(__file__).resolve().parent.parent / "portal"
 sys.path.insert(0, str(_PORTAL_DIR))
 
 from wifi_store import (  # noqa: E402
+    connect_saved_networks,
     ensure_ssh_running,
     enter_provisioning,
     has_networks,
@@ -57,6 +63,17 @@ def main() -> int:
     networks = load_networks()
     sync_nm_profiles(networks)
     log.info("synced %d saved network(s) to NetworkManager", len(networks))
+
+    if connect_saved_networks():
+        log.info("joined a saved WiFi network")
+        return 0
+
+    log.warning(
+        "could not join any saved network (wrong password or out of range) — "
+        "re-entering AP provisioning so the QR setup screen returns"
+    )
+    enter_provisioning()
+    prepare_ap_provisioning_mode()
     return 0
 
 

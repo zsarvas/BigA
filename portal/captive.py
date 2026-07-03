@@ -51,18 +51,3 @@ def ap_ssid() -> str:
         return f"BigA-{mac.replace(':', '').upper()[-4:]}"
     except OSError:
         return "BigA-Setup"
-
-
-def wifi_qr_string(ssid: str, password: str) -> str:
-    """WIFI: QR payload with required escaping for SSID/password special chars."""
-
-    def esc(value: str) -> str:
-        return (
-            value.replace("\\", "\\\\")
-            .replace(";", "\\;")
-            .replace(":", "\\:")
-            .replace(",", "\\,")
-            .replace('"', '\\"')
-        )
-
-    return f"WIFI:T:WPA;S:{esc(ssid)};P:{esc(password)};;"

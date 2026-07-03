@@ -3,47 +3,59 @@
 BigA Setup Screen
 Shown on the Pi's display while in AP provisioning mode.
 
-  1. User scans the Wi‑Fi QR (or joins BigA-XXXX manually using password on screen).
-  2. User opens a browser and goes to biga.setup to enter home Wi‑Fi credentials.
+  1. User manually joins the BigA-XXXX Wi‑Fi (SSID + password on screen).
+  2. The captive portal usually opens automatically; hints cover offline join
+     and navigating to biga.setup if it does not.
 """
 
 import os
 import threading
 import time
+from pathlib import Path
 
-from captive import PORTAL_HOSTNAME, ap_ssid, wifi_qr_string, wlan_mac
+from captive import PORTAL_HOSTNAME, ap_ssid, wlan_mac
 from wifi_store import is_provisioning
 
 AP_PASSWORD = os.environ.get("BIGA_AP_PASSWORD", "bigasetup")
 PREVIEW = os.environ.get("BIGA_SETUP_PREVIEW", "").lower() in ("1", "true", "yes")
 
-INSTR_LINES = (
-    "Scan QR to join Wi‑Fi",
-    f"Open a browser and go to {PORTAL_HOSTNAME}",
+LOGO_PATH = Path(
+    os.environ.get(
+        "BIGA_SETUP_LOGO",
+        str(Path(__file__).resolve().parent.parent / "logos" / "s-l1200.png"),
+    )
 )
 
 
-def _make_qr_surface(payload: str, qr_size: int):
-    """Build a pygame surface for a QR payload (Wi‑Fi join string or URL)."""
+def _instr_lines(ssid: str) -> tuple[tuple[str, bool], ...]:
+    """(text, primary) — primary lines use the step font; hints are smaller."""
+    name = ssid or "BigA-Setup"
+    return (
+        (f"Join the {name} network", True),
+        ("If prompted, join without internet", False),
+        (f"If setup doesn't open, go to {PORTAL_HOSTNAME}", False),
+    )
+
+
+def _load_logo_surface(logo_path: Path, size: int):
+    """Load and scale the setup logo to a square, transparency preserved."""
     import PIL.Image as PilImage
     import pygame
-    import qrcode
 
-    qr = qrcode.QRCode(box_size=4, border=2)
-    qr.add_data(payload)
-    qr.make(fit=True)
-    qr_pil = qr.make_image(fill_color="black", back_color="white").convert("RGB")
-    qr_scaled = qr_pil.resize((qr_size, qr_size), PilImage.NEAREST)
-    return pygame.image.fromstring(qr_scaled.tobytes(), qr_scaled.size, "RGB")
+    img = PilImage.open(logo_path).convert("RGBA")
+    img.thumbnail((size, size), PilImage.LANCZOS)
+    w, h = img.size
+    canvas = PilImage.new("RGBA", (size, size), (0, 0, 0, 0))
+    canvas.paste(img, ((size - w) // 2, (size - h) // 2), img)
+    return pygame.image.fromstring(canvas.tobytes(), canvas.size, "RGBA").convert_alpha()
 
 
 def main() -> None:
     try:
         import pygame
-        import qrcode  # noqa: F401 — availability check
         import PIL.Image  # noqa: F401
     except ImportError:
-        print("qrcode / pillow / pygame not available — setup screen cannot render", flush=True)
+        print("pillow / pygame not available — setup screen cannot render", flush=True)
         if PREVIEW:
             return
         while is_provisioning():
@@ -89,48 +101,52 @@ def main() -> None:
     try:
         f_title = pygame.font.Font(_bold, 22)
         f_step = pygame.font.Font(_bold, 14)
+        f_hint = pygame.font.Font(_normal, 11)
         f_label = pygame.font.Font(_normal, 13)
         f_value = pygame.font.Font(_bold, 17)
         f_mac = pygame.font.Font(_normal, 11)
     except Exception:
         f_title = pygame.font.SysFont("sans", 22, bold=True)
         f_step = pygame.font.SysFont("sans", 14, bold=True)
+        f_hint = pygame.font.SysFont("sans", 11)
         f_label = pygame.font.SysFont("sans", 13)
         f_value = pygame.font.SysFont("sans", 17, bold=True)
         f_mac = pygame.font.SysFont("sans", 11)
 
     STEPS_GAP = 5
     footer_h = f_mac.get_height() + 6
-    instr_h = len(INSTR_LINES) * (f_step.get_height() + STEPS_GAP) + footer_h + 8
-    QR_SIZE = min(H - instr_h - 16, 188)
-    qr_x = 8
-    qr_y = max(6, (H - instr_h - QR_SIZE) // 2)
-    RX = qr_x + QR_SIZE + 14
+    instr_h = (
+        f_step.get_height()
+        + 2 * (STEPS_GAP + f_hint.get_height())
+        + footer_h
+        + 8
+    )
+    LOGO_SIZE = min(H - instr_h - 16, 188)
+    logo_x = 8
+    logo_y = max(6, (H - instr_h - LOGO_SIZE) // 2)
+    RX = logo_x + LOGO_SIZE + 14
     RW = W - RX - 8
 
     shown_ssid = ""
-    qr_payload = ""
-    qr_surf = None
+    logo_surf = None
+
+    def _load_logo() -> None:
+        nonlocal logo_surf
+        if not LOGO_PATH.is_file():
+            return
+        try:
+            logo_surf = _load_logo_surface(LOGO_PATH, LOGO_SIZE)
+        except Exception as exc:
+            print(f"Cannot load setup logo {LOGO_PATH}: {exc}", flush=True)
 
     def _sync_ssid() -> None:
-        nonlocal shown_ssid, qr_payload, qr_surf
-        ssid = ap_ssid()
-        shown_ssid = ssid
-        payload = wifi_qr_string(ssid, AP_PASSWORD)
-        if payload != qr_payload:
-            qr_payload = payload
-            qr_surf = _make_qr_surface(payload, QR_SIZE)
+        nonlocal shown_ssid
+        shown_ssid = ap_ssid()
 
     def draw() -> None:
         screen.fill(BG)
-        if qr_surf is not None:
-            pygame.draw.rect(
-                screen,
-                WHITE,
-                (qr_x - 6, qr_y - 6, QR_SIZE + 12, QR_SIZE + 12),
-                border_radius=8,
-            )
-            screen.blit(qr_surf, (qr_x, qr_y))
+        if logo_surf is not None:
+            screen.blit(logo_surf, (logo_x, logo_y))
 
         y = 18
         ts = f_title.render("BigA  Setup", True, WHITE)
@@ -154,10 +170,13 @@ def main() -> None:
             mac_surf = f_mac.render(f"MAC {mac}", True, MUTED)
             screen.blit(mac_surf, mac_surf.get_rect(midbottom=(W // 2, H - 4)))
 
-        total_h = len(INSTR_LINES) * f_step.get_height() + (len(INSTR_LINES) - 1) * STEPS_GAP
+        lines = _instr_lines(shown_ssid)
+        total_h = f_step.get_height() + 2 * (STEPS_GAP + f_hint.get_height())
         y_instr = H - footer_h - total_h
-        for line in INSTR_LINES:
-            surf = f_step.render(line, True, WHITE)
+        for text, primary in lines:
+            font = f_step if primary else f_hint
+            color = WHITE if primary else MUTED
+            surf = font.render(text, True, color)
             screen.blit(surf, surf.get_rect(midtop=(W // 2, y_instr)))
             y_instr += surf.get_height() + STEPS_GAP
 
@@ -173,6 +192,7 @@ def main() -> None:
     if not PREVIEW:
         threading.Thread(target=_watch, daemon=True).start()
 
+    _load_logo()
     _sync_ssid()
     clock = pygame.time.Clock()
     poll_ticks = 0

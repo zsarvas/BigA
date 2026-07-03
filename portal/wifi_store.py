@@ -231,95 +231,15 @@ def network_needs_password(security: str) -> bool:
     return bool(s and s != "--")
 
 
-def restore_ap_mode() -> None:
-    """Bring ``biga-ap`` back after a failed client join during provisioning."""
-    prepare_ap_provisioning_mode()
-
-
-def verify_wifi_connection(
-    ssid: str,
-    password: str,
-    *,
-    wait_sec: float = 30,
-) -> tuple[bool, str]:
+def append_network(ssid: str, password: str, *, sync_nm: bool = True) -> None:
     """
-    Join *ssid* from AP mode and wait for a home-LAN DHCP address.
+    Add or refresh *ssid* (moves to front). Trim to ``MAX_NETWORKS`` oldest.
 
-    On failure, restores ``biga-ap`` so the captive portal stays reachable.
-    On success, leaves wlan0 on the client network (portal reboots shortly).
+    ``sync_nm=False`` skips creating NetworkManager profiles here. The portal
+    uses this so saving credentials never touches ``wlan0`` (which would tear
+    down the AP and drop the phone before the success page loads). Boot-time
+    ``check_wifi_connectivity`` re-creates the profiles from disk instead.
     """
-    ssid = ssid.strip()
-    subprocess.run(
-        ["nmcli", "connection", "down", AP_CON_NAME],
-        capture_output=True,
-        check=False,
-    )
-    subprocess.run(
-        ["nmcli", "device", "disconnect", WLAN_INTERFACE],
-        capture_output=True,
-        check=False,
-    )
-    time.sleep(0.5)
-
-    cmd = [
-        "nmcli",
-        "-w",
-        str(int(wait_sec)),
-        "device",
-        "wifi",
-        "connect",
-        ssid,
-        "ifname",
-        WLAN_INTERFACE,
-    ]
-    if password:
-        cmd.extend(["password", password])
-
-    try:
-        result = subprocess.run(
-            cmd,
-            capture_output=True,
-            text=True,
-            timeout=wait_sec + 10,
-            check=False,
-        )
-    except subprocess.TimeoutExpired:
-        restore_ap_mode()
-        return False, "Connection timed out — check password and signal."
-
-    if result.returncode != 0:
-        restore_ap_mode()
-        err = (result.stderr or result.stdout or "").strip()
-        tail = err.splitlines()[-1] if err else "Could not connect."
-        if "secrets were required" in err.lower() or "password" in err.lower():
-            return False, "Password required or incorrect."
-        return False, tail
-
-    deadline = time.monotonic() + 15
-    while time.monotonic() < deadline:
-        ip_proc = subprocess.run(
-            ["nmcli", "-g", "IP4.ADDRESS", "device", "show", WLAN_INTERFACE],
-            capture_output=True,
-            text=True,
-            check=False,
-        )
-        ip = (ip_proc.stdout or "").strip().split("/", 1)[0]
-        if ip and not ip.startswith("192.168.4."):
-            log.info("verified WiFi join to %r — got %s", ssid, ip)
-            return True, ""
-        time.sleep(1)
-
-    subprocess.run(
-        ["nmcli", "device", "disconnect", WLAN_INTERFACE],
-        capture_output=True,
-        check=False,
-    )
-    restore_ap_mode()
-    return False, "Joined network but did not receive an IP address."
-
-
-def append_network(ssid: str, password: str) -> None:
-    """Add or refresh *ssid* (moves to front). Trim to ``MAX_NETWORKS`` oldest."""
     ssid = ssid.strip()
     networks = [n for n in load_networks() if n.get("ssid") != ssid]
     networks.insert(
@@ -329,15 +249,17 @@ def append_network(ssid: str, password: str) -> None:
     if len(networks) > MAX_NETWORKS:
         dropped = networks[MAX_NETWORKS:]
         networks = networks[:MAX_NETWORKS]
-        for net in dropped:
-            _delete_nm_profile(_con_name_for_ssid(str(net.get("ssid", ""))))
+        if sync_nm:
+            for net in dropped:
+                _delete_nm_profile(_con_name_for_ssid(str(net.get("ssid", ""))))
         log.info(
             "trimmed %d old network(s); keeping %d",
             len(dropped),
             len(networks),
         )
     save_networks(networks)
-    sync_nm_profiles(networks)
+    if sync_nm:
+        sync_nm_profiles(networks)
     exit_provisioning()
 
 
@@ -438,6 +360,49 @@ def bring_up_connection(con_name: str) -> bool:
         )
         return False
     return True
+
+
+def wlan_has_client_ip() -> bool:
+    """True when wlan0 holds a routable (non-AP) IPv4 lease."""
+    proc = subprocess.run(
+        ["nmcli", "-g", "IP4.ADDRESS", "device", "show", WLAN_INTERFACE],
+        capture_output=True,
+        text=True,
+        check=False,
+    )
+    ip = (proc.stdout or "").strip().split("/", 1)[0]
+    return bool(ip and not ip.startswith("192.168.4."))
+
+
+def connect_saved_networks(timeout: float = 45) -> bool:
+    """
+    Join a saved network on boot. Returns True once wlan0 gets a non-AP lease.
+
+    First give NetworkManager time to autoconnect, then explicitly bring up each
+    saved profile (newest first). A False result means the credentials are bad or
+    every saved network is out of range — the caller re-enters AP provisioning.
+    Note: this only fails on association/DHCP failure, not on "internet down"
+    (an associated network still yields a LAN IP), so it won't flap on outages.
+    """
+    names = [con for _, con in saved_connection_names()]
+    if not names:
+        return False
+
+    deadline = time.monotonic() + timeout
+    while time.monotonic() < deadline:
+        if wlan_has_client_ip():
+            return True
+        time.sleep(2)
+
+    for con_name in names:
+        if not bring_up_connection(con_name):
+            continue
+        end = time.monotonic() + 12
+        while time.monotonic() < end:
+            if wlan_has_client_ip():
+                return True
+            time.sleep(1)
+    return wlan_has_client_ip()
 
 
 def wipe_all_networks() -> None:

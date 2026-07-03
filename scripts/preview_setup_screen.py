@@ -6,7 +6,7 @@ Usage:
   python3 scripts/preview_setup_screen.py
   BIGA_AP_SSID=BigA-AB12 python3 scripts/preview_setup_screen.py
 
-Requires: pygame, qrcode, pillow (pip install pygame qrcode pillow)
+Requires: pygame, pillow (pip install pygame pillow)
 Press Escape or close the window to quit.
 """
 
