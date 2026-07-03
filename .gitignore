@@ -11,5 +11,13 @@ src/pi_tracker/assets/*.mp4
 *.img.xz
 pishrink.sh
 
+# Persisted runtime game state (win/loss + live_game_pk). Must never be
+# committed or baked into the golden image, or a fresh device boots into a
+# stale final scene and replays an old game's highlights.
+.biga_game_state.json
+.biga_game_state.tmp
+# Downloaded per-game highlight clips (runtime only).
+src/pi_tracker/assets/highlights/
+
 # Replay tracker runtime logs (Pi experiment data)
 logs/replay_tracker/

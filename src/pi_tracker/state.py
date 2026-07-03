@@ -48,20 +48,33 @@ def _env_tracked_home() -> tuple[int, str, str]:
 
 
 def _expire_stale_final_scene(data: dict[str, Any]) -> None:
-    """Win/loss from a prior calendar day should not survive a reboot."""
+    """
+    Win/loss from a prior calendar day should not survive a reboot.
+
+    A restored final scene with no valid ``final_display_date`` is treated as
+    stale too: every real final stamps that field, so a blank/garbage one means
+    leftover or baked-in state — drop to idle rather than pin a fresh device on
+    an old game.
+    """
     scene = str(data.get("scene", "idle"))
     if scene not in ("win", "loss"):
         return
+
+    def _drop_to_idle() -> None:
+        data["scene"] = "idle"
+        data["final_display_date"] = ""
+
     raw = data.get("final_display_date")
     if not raw or not isinstance(raw, str):
+        _drop_to_idle()
         return
     try:
         locked = date.fromisoformat(raw.strip())
     except ValueError:
+        _drop_to_idle()
         return
     if date.today() > locked:
-        data["scene"] = "idle"
-        data["final_display_date"] = ""
+        _drop_to_idle()
 
 
 def _load_persisted() -> dict[str, Any]:
