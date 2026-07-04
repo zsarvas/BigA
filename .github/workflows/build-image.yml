@@ -77,6 +77,12 @@ jobs:
             rm -f /home/pi/BigA/.biga_game_state.json /home/pi/BigA/.biga_game_state.tmp || true
             rm -f /root/.bash_history /home/pi/.bash_history || true
             rm -f /etc/biga/wifi_creds.json /etc/biga/provisioning_active /etc/biga/.firstboot_done || true
+            # Pi Zero 2W has no RTC — first boot uses fake-hwclock until NTP. Seed
+            # with BUILD_DATE (noon America/Los_Angeles) so date.today() is near
+            # real time during WiFi provisioning, not the arm-runner session clock
+            # from when the image was built (which can be weeks stale on flash).
+            BUILD_DAY="$(echo "$BUILD_DATE" | tr '.' '-')"
+            printf '%s\n' "${BUILD_DAY}T12:00:00-07:00" > /etc/fake-hwclock.data
             # --- disable Bookworm first-boot user wizard (userconf-pi) ---
             # userconfig.service runs unconditionally on first boot and, with no
             # userconf.txt present, pops a "Please enter new username" prompt on the

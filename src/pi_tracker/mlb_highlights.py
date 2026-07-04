@@ -218,12 +218,17 @@ def seed_idle_recap_from_schedule(state: Any) -> bool:
     """
     from datetime import date
 
+    from .clock import clock_is_synchronized
     from .mlb_schedule import (
         fetch_angels_schedule_for_date,
         fetch_angels_schedule_lookback,
         find_most_recent_final_angels_game,
         find_todays_scoreboard_angels_game,
     )
+
+    if not clock_is_synchronized():
+        log.info("idle recap seed: skip — system clock not yet NTP-synced")
+        return False
 
     snap = state.snapshot()
     if str(snap.get("scene", "idle")) != "idle":

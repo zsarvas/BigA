@@ -7,6 +7,7 @@ import threading
 import time
 from datetime import date
 
+from .clock import clock_is_synchronized
 from .mlb_http import fetch_live_feed_v11
 from .mlb_live_feed import angels_won, game_is_final, live_feed_to_state_patch
 from .mlb_schedule import (
@@ -111,6 +112,22 @@ def game_day_loop(state: SharedGameState, stop: threading.Event) -> None:
         snap = state.snapshot()
         scene = str(snap.get("scene", "idle"))
         wait = 5.0
+
+        # Pi Zero has no RTC: until NTP syncs, date.today() may be days/weeks
+        # stale, which would lock an old game's final scene and download its
+        # highlights. Hold on idle (never live/final) until the clock is sane.
+        if not clock_is_synchronized():
+            log.info("clock not NTP-synced yet — deferring schedule/final logic")
+            if scene != "idle":
+                # Drop any restored/stale final until the clock is trustworthy;
+                # it will be re-locked correctly once NTP syncs.
+                state.update(scene="idle", final_display_date="", idle_subtitle="Syncing clock…")
+            else:
+                state.update(idle_subtitle="Syncing clock…")  # not a persisted key
+            if stop.wait(IDLE_WATCH_SEC):
+                break
+            continue
+
         try:
             if scene == "idle":
                 wait = IDLE_WATCH_SEC

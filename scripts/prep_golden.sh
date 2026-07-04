@@ -42,6 +42,7 @@ rm -rf /tmp/* /var/tmp/* 2>/dev/null || true
 echo "[5/9] Removing saved WiFi credentials..."
 rm -f /etc/biga/wifi_creds.json
 rm -f /etc/biga/provisioning_active
+rm -f /home/pi/BigA/.biga_game_state.json /home/pi/BigA/.biga_game_state.tmp
 # NOTE: /etc/biga/deploy_key is intentionally preserved — it is the
 # read-only SSH deploy key that lets the Pi pull from the private repo.
 
@@ -77,6 +78,10 @@ rm -f /etc/ssh/ssh_host_*
 echo "[8/9] Resetting machine-id..."
 truncate -s 0 /etc/machine-id
 rm -f /var/lib/dbus/machine-id  # symlink on modern systemd; harmless if missing
+
+# fake-hwclock — Pi Zero has no RTC; seed near now so pre-NTP date.today() is sane
+echo "  → seeding fake-hwclock for first boot…"
+TZ=America/Los_Angeles date -Iseconds > /etc/fake-hwclock.data
 
 # Shell histories
 echo "[9/9] Clearing shell histories..."
