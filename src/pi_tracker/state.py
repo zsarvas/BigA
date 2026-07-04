@@ -64,6 +64,16 @@ def _expire_stale_final_scene(data: dict[str, Any]) -> None:
         data["scene"] = "idle"
         data["final_display_date"] = ""
 
+    # Pi Zero has no RTC: if the clock hasn't NTP-synced yet, today's date is
+    # unreliable, so we can't trust a restored final. Defer to idle — the game
+    # day poller re-locks a genuine final once the clock is correct.
+    from .clock import clock_is_synchronized
+
+    if not clock_is_synchronized():
+        log.info("clock not synced at restore — deferring final scene to idle")
+        _drop_to_idle()
+        return
+
     raw = data.get("final_display_date")
     if not raw or not isinstance(raw, str):
         _drop_to_idle()

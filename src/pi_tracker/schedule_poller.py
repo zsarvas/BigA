@@ -6,6 +6,7 @@ import logging
 import threading
 from datetime import datetime, timezone
 
+from .clock import clock_is_synchronized
 from .mlb_schedule import fetch_and_format_next_game
 from .state import SharedGameState
 from . import playback
@@ -16,6 +17,9 @@ POLL_INTERVAL_SEC = 20 * 60
 # After a failed poll, retry soon instead of waiting the full interval so a
 # transient MLB API blip clears the on-screen banner within ~a minute.
 ERROR_RETRY_SEC = 60
+# While the clock is still stale (no NTP yet), recheck often so the idle screen
+# fills in as soon as the date is trustworthy.
+CLOCK_WAIT_RETRY_SEC = 10
 
 
 def _poll_once(state: SharedGameState) -> None:
@@ -27,6 +31,11 @@ def _poll_once(state: SharedGameState) -> None:
 
 def refresh_idle_schedule(state: SharedGameState) -> None:
     """Fetch next-game fields (idle scene only)."""
+    if not clock_is_synchronized():
+        # date.today() is unreliable pre-NTP; a fetch now would query the wrong
+        # day's schedule. Show a neutral status and let the loop retry soon.
+        state.update(schedule_status="loading", idle_subtitle="Syncing clock…")
+        return
     try:
         _poll_once(state)
     except Exception as e:  # noqa: BLE001
@@ -48,10 +57,14 @@ def idle_schedule_loop(state: SharedGameState, stop: threading.Event) -> None:
             break
         snap = state.snapshot()
         if str(snap.get("scene", "idle")) == "idle":
-            # Retry quickly while in an error state so a transient failure heals
-            # fast; otherwise use the normal long refresh interval.
-            errored = str(snap.get("schedule_status", "")) == "error"
-            wait = ERROR_RETRY_SEC if errored else POLL_INTERVAL_SEC
+            # Retry quickly while waiting on NTP or in an error state so the idle
+            # screen fills in fast; otherwise use the normal long refresh interval.
+            if not clock_is_synchronized():
+                wait = CLOCK_WAIT_RETRY_SEC
+            elif str(snap.get("schedule_status", "")) == "error":
+                wait = ERROR_RETRY_SEC
+            else:
+                wait = POLL_INTERVAL_SEC
             if stop.wait(wait):
                 break
             if stop.is_set():
