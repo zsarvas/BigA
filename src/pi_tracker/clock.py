@@ -12,6 +12,7 @@ downloading its highlights. Every date-based decision must wait for this.
 from __future__ import annotations
 
 import logging
+import platform
 import subprocess
 import time
 from pathlib import Path
@@ -27,17 +28,27 @@ _synced_cached = False
 
 
 def clock_is_synchronized() -> bool:
-    """True once the system clock has been NTP-synchronized this boot."""
+    """
+    True once the system clock is trustworthy for ``date.today()`` decisions.
+
+    On macOS / Windows (dev machines) the OS clock is always NTP-managed — skip
+    the Linux-only checks. On Linux (Pi) we require systemd-timesyncd or
+    timedatectl to report NTP sync so stale fake-hwclock boots do not lock the
+    wrong game day.
+    """
     global _synced_cached
     if _synced_cached:
+        return True
+
+    if platform.system() != "Linux":
+        _synced_cached = True
         return True
 
     if _SYNC_FLAG.exists():
         _synced_cached = True
         return True
 
-    # Fallback for non-timesyncd setups (chrony/ntpd) or when the flag path
-    # differs: ask timedatectl directly.
+    # Fallback for chrony/ntpd or when the flag path differs.
     try:
         out = subprocess.run(
             ["timedatectl", "show", "-p", "NTPSynchronized", "--value"],
