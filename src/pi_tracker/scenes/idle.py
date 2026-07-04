@@ -149,8 +149,13 @@ class IdleScene(ClipPlayerMixin):
         status = str(state.get("schedule_status", "loading"))
 
         if status == "loading":
+            subtitle = str(state.get("idle_subtitle", "")).strip()
+            if "syncing clock" in subtitle.lower():
+                loading_msg = "Syncing clock…"
+            else:
+                loading_msg = "Loading schedule…"
             y = _blit_wrapped_center(
-                screen, assets.font_ui, "Loading schedule…", y, config.GRAY, 44
+                screen, assets.font_ui, loading_msg, y, config.GRAY, 44
             )
         elif status == "error":
             y = _blit_wrapped_center(

@@ -1353,6 +1353,15 @@ def sync_highlight_downloader(
             playback.reset_download_busy()
         return None, 0
 
+    from .clock import clock_is_synchronized
+
+    if not clock_is_synchronized():
+        if downloader is not None:
+            downloader.stop()
+            downloader.join()
+            playback.reset_download_busy()
+        return None, 0
+
     pk = resolve_highlight_game_pk(snap)
     if not pk:
         if downloader is not None:
