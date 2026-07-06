@@ -1,0 +1,9 @@
+[Unit]
+Description=Run BigA OTA update a few minutes after boot
+
+[Timer]
+OnBootSec=3min
+Persistent=true
+
+[Install]
+WantedBy=timers.target

@@ -1,0 +1,14 @@
+[Unit]
+Description=BigA deferred OTA update (post-boot network retry)
+After=network-online.target biga.service
+Wants=network-online.target
+
+[Service]
+Type=oneshot
+Environment=BIGA_UPDATE_CONTEXT=boot-timer
+Environment=BIGA_UPDATE_MAX_WAIT_SEC=120
+Environment=BIGA_UPDATE_FETCH_RETRIES=5
+ExecStart=/bin/bash /home/pi/BigA/scripts/update_biga.sh
+
+[Install]
+WantedBy=multi-user.target
