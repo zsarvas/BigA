@@ -322,6 +322,19 @@ def _install_auto_update_cron(repo: str) -> None:
     print(f"  → cron job installed: {cron_entry}")
 
 
+def _install_boot_update_timer(repo: str) -> None:
+    """Deferred OTA retry ~3 min after boot when WiFi/DNS are usually up."""
+    for name in ("biga-update-boot.service", "biga-update-boot.timer"):
+        src = os.path.join(repo, "scripts", name)
+        if not os.path.isfile(src):
+            print(f"  ✗ boot update unit not found: {src}")
+            sys.exit(1)
+        run(f"sudo cp {src} /etc/systemd/system/{name}", f"installing {name}")
+    sysctl("daemon-reload", desc="reloading systemd for boot update timer")
+    sysctl("enable", "biga-update-boot.timer", desc="enabling boot update timer")
+    print("  → boot OTA retry: biga-update-boot.timer (OnBootSec=3min)")
+
+
 def _install_nightly_reboot_cron() -> None:
     """Install a nightly full reboot at 4:30 AM (idempotent).
 
@@ -587,6 +600,7 @@ sysctl("mask", "autovt@tty2.service", desc="masking autovt on tty2")
 print("\n[9/13] Configuring auto-update (cron + deploy key)...")
 _configure_deploy_key(REPO)
 _install_auto_update_cron(REPO)
+_install_boot_update_timer(REPO)
 _install_nightly_reboot_cron()
 print("  → update log: /var/log/biga_update.log")
 

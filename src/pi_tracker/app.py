@@ -45,6 +45,7 @@ from .state import SharedGameState
 from .team_config import tracked_team_abbr, tracked_team_name
 from . import mouse_hide
 from . import playback
+from . import drm_health
 from .gpio_leds import cleanup_gpio, init_gpio, is_muted, set_win_led
 from .mlb_highlights import (
     HighlightDownloader,
@@ -320,6 +321,7 @@ def _configure_logging() -> None:
 _MPV_LOG = Path("/tmp/biga-mpv.log")
 # Brief pause after mpv exits so vo=drm releases KMS master before pygame KMSDRM init.
 _MPV_DRM_HANDOFF_SEC = 0.2
+_drm_monitor: drm_health.DrmHealthMonitor | None = None
 
 
 def _filter_valid_clip_paths(paths: list[Path], *, validate: bool = True) -> list[Path]:
@@ -444,6 +446,9 @@ def _play_mpv_sequence(
     pygame.display.init()
     screen = _finalize_display(pygame.display.set_mode(size, flags))
     mouse_hide.handoff_from_mpv(screen, fill=config.BLACK)
+    if _drm_monitor is not None:
+        _drm_monitor.note_mpv_finished()
+        _drm_monitor.check_after_mpv(mpv_playback_active=False)
     return screen
 
 
@@ -588,6 +593,9 @@ def main() -> None:
         seed_idle_recap_from_schedule(state)
     running = True
     loop_start = time.monotonic()
+    global _drm_monitor
+    _drm_monitor = drm_health.DrmHealthMonitor(boot_monotonic=loop_start)
+    drm_monitor = _drm_monitor
     frame_i = 0
     try:
         while running:
@@ -715,6 +723,7 @@ def main() -> None:
                 tick_fps = config.FPS
             clock.tick(tick_fps)
             frame_i += 1
+            drm_monitor.tick(mpv_playback_active=playback.is_active())
     finally:
         set_win_led(False)
         cleanup_gpio()
