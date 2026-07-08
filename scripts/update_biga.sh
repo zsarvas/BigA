@@ -18,6 +18,7 @@ CONTEXT="${BIGA_UPDATE_CONTEXT:-manual}"
 MAX_WAIT_SEC="${BIGA_UPDATE_MAX_WAIT_SEC:-90}"
 FETCH_RETRIES="${BIGA_UPDATE_FETCH_RETRIES:-3}"
 SLEEP_SEC="${BIGA_UPDATE_RETRY_SLEEP_SEC:-10}"
+GIT=(git -c "safe.directory=$REPO_DIR")
 
 # ExecStartPre: don't block boot for long — timer retries later.
 if [ "$CONTEXT" = "boot-pre" ] && [ -z "${BIGA_UPDATE_MAX_WAIT_SEC+x}" ]; then
@@ -61,7 +62,7 @@ git_fetch_with_retries() {
     local try=1
     while [ "$try" -le "$FETCH_RETRIES" ]; do
         log "git fetch origin main (try $try/$FETCH_RETRIES)..."
-        if git fetch origin main >> "$LOG_FILE" 2>&1; then
+        if "${GIT[@]}" fetch origin main >> "$LOG_FILE" 2>&1; then
             return 0
         fi
         log "git fetch failed on try $try/$FETCH_RETRIES"
@@ -101,8 +102,8 @@ if ! git_fetch_with_retries; then
     exit 1
 fi
 
-LOCAL=$(git rev-parse HEAD)
-REMOTE=$(git rev-parse origin/main)
+LOCAL=$("${GIT[@]}" rev-parse HEAD)
+REMOTE=$("${GIT[@]}" rev-parse origin/main)
 
 if [ "$LOCAL" = "$REMOTE" ]; then
     log "Already up to date ($LOCAL). No action taken."
@@ -112,7 +113,7 @@ fi
 log "Update found: $LOCAL -> $REMOTE"
 
 # Hard reset to origin — the Pi is a deployment target, never a dev machine.
-if ! git reset --hard origin/main >> "$LOG_FILE" 2>&1; then
+if ! "${GIT[@]}" reset --hard origin/main >> "$LOG_FILE" 2>&1; then
     log "ERROR: git reset --hard failed. Service not restarted."
     exit 1
 fi
