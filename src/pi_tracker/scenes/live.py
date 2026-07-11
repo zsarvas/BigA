@@ -285,7 +285,6 @@ class LiveScene:
                             if self._break_prefer_tiered:
                                 self._break_prefer_tiered = False
                             if path is not None:
-                                self._played_clips.add(path.name)
                                 self._pending_clip = path
                                 log.info(
                                     "half-inning break: queued %s (ended %s%s)",
@@ -313,7 +312,13 @@ class LiveScene:
             log.debug("no live animation GIF for event=%s", event)
             return False
         try:
-            anim = StreamingGif(path, size)
+            # Letterbox (no crop) — strikeout is square; TroutHR is 16:9 on a 3:2 panel.
+            anim = StreamingGif(
+                path,
+                size,
+                fit="contain",
+                min_frame_ms=config.LIVE_ANIM_MIN_FRAME_MS,
+            )
             if not anim.ok:
                 return False
             surf, dur = anim.decode(0)

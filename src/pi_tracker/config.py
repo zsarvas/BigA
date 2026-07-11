@@ -122,9 +122,11 @@ STATE_PATH = Path(
 #   hit.gif       out.gif         stolen_base.gif
 LIVE_ANIMATIONS_DIR = ASSETS_DIR / "live_animations"
 
-# How long (ms) to hold the animation on-screen after the GIF loops once.
-# Set to 0 to play exactly once and immediately cut back to the scoreboard.
-LIVE_ANIM_HOLD_MS = _env_clamp_int("BIGA_LIVE_ANIM_HOLD_MS", 0, lo=0, hi=10_000)
+# How long (ms) to hold the last GIF frame on-screen after one play-through.
+# Short event GIFs (e.g. TroutHR ~1s) need a beat so they aren't a blink.
+LIVE_ANIM_HOLD_MS = _env_clamp_int("BIGA_LIVE_ANIM_HOLD_MS", 2000, lo=0, hi=10_000)
+# Floor for per-frame delay when a GIF omits duration metadata (TroutHR).
+LIVE_ANIM_MIN_FRAME_MS = _env_clamp_int("BIGA_LIVE_ANIM_MIN_FRAME_MS", 100, lo=40, hi=500)
 
 # Frame rate while a GIF animation is playing (pygame-rendered, not mpv).
 HIGHLIGHT_FPS = _env_clamp_int("BIGA_HIGHLIGHT_FPS", 24, lo=FPS, hi=60)

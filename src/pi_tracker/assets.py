@@ -187,10 +187,23 @@ class StreamingGif:
 
     Keeps the Pillow image handle open and decodes/cover-scales the requested frame on
     demand. Resident memory is ~one frame, unlike ``GifAnimation`` which preloads all.
+
+    *fit*:
+      ``"cover"``   — fill the panel (may crop); good for stadium-style full-bleed clips
+      ``"contain"`` — letterbox inside the panel (no crop); better for square event GIFs
     """
 
-    def __init__(self, path: Path, size: tuple[int, int]) -> None:
+    def __init__(
+        self,
+        path: Path,
+        size: tuple[int, int],
+        *,
+        fit: str = "cover",
+        min_frame_ms: int = 0,
+    ) -> None:
         self.size = size
+        self.fit = fit if fit in ("cover", "contain") else "cover"
+        self.min_frame_ms = max(0, int(min_frame_ms))
         self.n_frames = 0
         self.ok = False
         self._im = None
@@ -220,12 +233,22 @@ class StreamingGif:
         rgba = self._im.convert("RGBA")
         surf = pygame.image.fromstring(rgba.tobytes(), rgba.size, "RGBA")
         if surf.get_size() != self.size:
-            surf = _cover_scale(surf, self.size)
+            if self.fit == "contain":
+                # Opaque black letterbox — live scoreboard draws on top.
+                boxed = _letterbox_logo(surf, self.size)
+                out = pygame.Surface(self.size)
+                out.fill((0, 0, 0))
+                out.blit(boxed, (0, 0))
+                surf = out
+            else:
+                surf = _cover_scale(surf, self.size)
         try:
             surf = surf.convert()  # opaque display format: faster blit, smaller resident frame
         except pygame.error:
             pass
         dur = int(self._im.info.get("duration", 83)) or 83
+        if self.min_frame_ms:
+            dur = max(dur, self.min_frame_ms)
         return surf, dur
 
 
