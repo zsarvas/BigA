@@ -358,29 +358,33 @@ def _hold_now_showing(
     path: Path,
     *,
     should_abort: Callable[[], bool] | None = None,
-) -> bool:
+) -> str:
     """
     Show the NOW SHOWING card for ``_NOW_SHOWING_HOLD_SEC``.
 
-    Returns False if *should_abort* becomes true mid-hold (e.g. next half
-    starts during a live break reel) — caller must skip mpv and resume UI.
+    Returns:
+      ``"ok"``     — hold finished; safe to start mpv
+      ``"abort"``  — *should_abort* became true (e.g. next half started)
+      ``"quit"``   — user asked to exit (QUIT / Escape)
     """
     _draw_now_showing(screen, clip_title_from_path(path))
     deadline = time.monotonic() + max(0.0, _NOW_SHOWING_HOLD_SEC)
     while time.monotonic() < deadline:
         if should_abort is not None and should_abort():
             logging.info("now-showing aborted before mpv: %s", path.name)
-            return False
+            return "abort"
         for event in pygame.event.get():
             if event.type == pygame.QUIT:
-                return False
+                logging.info("now-showing quit requested during %s", path.name)
+                return "quit"
             if event.type == pygame.KEYDOWN and event.key == pygame.K_ESCAPE:
-                return False
+                logging.info("now-showing escape during %s", path.name)
+                return "quit"
         time.sleep(_NOW_SHOWING_POLL_SEC)
     if should_abort is not None and should_abort():
         logging.info("now-showing aborted before mpv: %s", path.name)
-        return False
-    return True
+        return "abort"
+    return "ok"
 
 
 def _filter_valid_clip_paths(paths: list[Path], *, validate: bool = True) -> list[Path]:
@@ -431,8 +435,9 @@ def _mpv_cmd(w: int, h: int, *, on_pi: bool) -> list[str]:
         cmd += ["--hwdec=auto", "--fs", "--panscan=1.0"]
     if is_muted():
         cmd.append("--no-audio")
-    else:
+    elif on_pi:
         cmd.append("--ao=alsa,null")
+    # Desktop (Mac/Linux): let mpv pick CoreAudio/Pulse/etc.
     return cmd
 
 
@@ -527,11 +532,18 @@ def _play_live_break_reel(
     screen: pygame.Surface,
     flags: int,
     first_path: Path,
-) -> "pygame.Surface":
-    """Play ready highlight clips one at a time until the half-inning break ends."""
+) -> tuple["pygame.Surface", str]:
+    """
+    Play ready highlight clips one at a time until the half-inning break ends.
+
+    Once a title card / clip starts, it always finishes — we only stop *queueing
+    the next* clip after play resumes. Returns ``(screen, status)`` where status
+    is ``"ok"``, ``"abort"`` (break over after a clip), or ``"quit"``.
+    """
     playback.set_live_break_priority(True)
     scene._pending_clip = None  # type: ignore[attr-defined]
     pending: Path | None = first_path
+    status = "ok"
 
     def _break_over() -> bool:
         return not scene.in_inning_break(state.snapshot())  # type: ignore[attr-defined]
@@ -540,6 +552,7 @@ def _play_live_break_reel(
         while True:
             if pending is None:
                 snap = state.snapshot()
+                # Don't start another clip once live play has resumed.
                 if not scene.in_inning_break(snap):  # type: ignore[attr-defined]
                     break
                 scene._maybe_queue_clip(snap)  # type: ignore[attr-defined]
@@ -548,26 +561,38 @@ def _play_live_break_reel(
                 if pending is None:
                     break
 
-            # One clip per mpv run — ready .mp4 on disk, skip ffprobe re-check.
             batch = _filter_valid_clip_paths([pending], validate=False)
             clip = batch[0] if batch else None
-            pending = None
             if clip is None:
-                logging.warning("break reel: clip missing on disk")
+                logging.warning("break reel: skipping unreadable clip %s", pending.name)
+                played = getattr(scene, "_played_clips", None)
+                if isinstance(played, set):
+                    played.add(pending.name)
+                pending = None
                 continue
+            pending = None
 
-            # Title card runs on pygame; abort if the next half starts mid-hold.
-            if not _hold_now_showing(screen, clip, should_abort=_break_over):
+            # Finish the full NOW SHOWING card even if the next half has started.
+            hold = _hold_now_showing(screen, clip)
+            if hold != "ok":
+                status = hold
                 break
 
+            played = getattr(scene, "_played_clips", None)
+            if isinstance(played, set):
+                played.add(clip.name)
+
+            # Always finish the video once started.
             screen = _play_mpv_sequence([clip], screen, flags, validate=False)
 
             if _break_over():
+                status = "abort"
                 break
     finally:
         playback.set_live_break_priority(False)
+        scene._pending_clip = None  # type: ignore[attr-defined]
 
-    return screen
+    return screen, status
 
 
 def _flash_boot_logo(screen: pygame.Surface) -> None:
@@ -784,13 +809,18 @@ def main() -> None:
                 )
                 if in_break or not playback.is_transcode_busy() or clip_ready:
                     if in_break:
-                        screen = _play_live_break_reel(
+                        screen, reel_status = _play_live_break_reel(
                             scene, state, screen, display_flags, pending
                         )
+                        if reel_status == "quit":
+                            running = False
                     else:
                         scene._pending_clip = None  # type: ignore[attr-defined]
-                        if _hold_now_showing(screen, pending):
+                        hold = _hold_now_showing(screen, pending)
+                        if hold == "ok":
                             screen = _play_mpv(pending, screen, display_flags)
+                        elif hold == "quit":
+                            running = False
                         # Re-arm the gap from the clip's END so the score scene is
                         # shown between clips (get_ticks advances during mpv).
                         if hasattr(scene, "_cp_notify_played"):
