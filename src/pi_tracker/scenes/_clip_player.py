@@ -23,6 +23,7 @@ from ..mlb_highlights import (
     is_condensed_game_clip,
     is_game_highlight_file,
     is_playable_highlight_mp4,
+    is_skip_highlight_path,
     sweep_incomplete_highlights,
 )
 
@@ -115,11 +116,13 @@ def _rand_gap_ms() -> int:
 
 
 def _playable_clip_paths(folder: Path) -> list[Path]:
-    """Finished .mp4 clips only — skip in-progress temps and oversized game pulls."""
+    """Finished .mp4 clips only — skip temps, oversized pulls, and interview fluff."""
     out: list[Path] = []
     for p in folder.glob("*.mp4"):
         low = p.name.lower()
         if ".raw" in low or ".tmp" in low:
+            continue
+        if is_skip_highlight_path(p):
             continue
         if is_game_highlight_file(p) and not is_playable_highlight_mp4(p):
             continue

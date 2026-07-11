@@ -22,8 +22,10 @@ import os
 import platform
 import subprocess
 import sys
+import textwrap
 import threading
 import time
+from collections.abc import Callable
 from pathlib import Path
 
 from .embedded_shim import install_fc_list_stub_if_needed
@@ -38,14 +40,10 @@ configure_sdl()
 import pygame
 
 from . import config
-from .assets import AssetManager, _repo_font
-from .mlb_http import ANGELS_TEAM_ID as TRACKED_TEAM_ID
-from .mlb_schedule import try_restore_final_scene_for_today
-from .state import SharedGameState
-from .team_config import tracked_team_abbr, tracked_team_name
 from . import mouse_hide
 from . import playback
 from . import drm_health
+from .assets import AssetManager, _repo_font
 from .gpio_leds import cleanup_gpio, init_gpio, is_muted, set_win_led
 from .mlb_highlights import (
     HighlightDownloader,
@@ -56,7 +54,12 @@ from .mlb_highlights import (
     seed_idle_recap_from_schedule,
     sync_highlight_downloader,
 )
+from .mlb_http import ANGELS_TEAM_ID as TRACKED_TEAM_ID
+from .mlb_schedule import try_restore_final_scene_for_today
 from .scenes import FinalLossScene, FinalWinScene, IdleScene, LiveScene
+from .scenes._clip_player import clip_title_from_path
+from .state import SharedGameState
+from .team_config import tracked_team_abbr, tracked_team_name
 
 
 def _demo_opponent() -> tuple[int, str, str]:
@@ -322,11 +325,72 @@ _MPV_LOG = Path("/tmp/biga-mpv.log")
 # Brief pause after mpv exits so vo=drm releases KMS master before pygame KMSDRM init.
 _MPV_DRM_HANDOFF_SEC = 0.2
 _drm_monitor: drm_health.DrmHealthMonitor | None = None
+# Hold the "NOW SHOWING" card before handing the display to mpv.
+_NOW_SHOWING_HOLD_SEC = float(os.environ.get("BIGA_NOW_SHOWING_SEC", "10"))
+_NOW_SHOWING_POLL_SEC = 0.25
+
+
+def _draw_now_showing(screen: pygame.Surface, title: str) -> None:
+    """Full-screen interstitial: NOW SHOWING + sanitized clip title."""
+    w, h = screen.get_size()
+    screen.fill(config.BLACK)
+    label_font = _repo_font(config.layout_size(22))
+    title_font = _repo_font(config.layout_size(16))
+
+    label = label_font.render("NOW SHOWING", True, (255, 50, 50))
+    screen.blit(label, label.get_rect(midtop=(w // 2, int(h * 0.28))))
+
+    max_chars = max(12, w // max(8, title_font.size("M")[0]))
+    lines = textwrap.wrap(title, width=max_chars)[:3] or [title]
+    y = int(h * 0.48)
+    for line in lines:
+        surf = title_font.render(line, True, config.WHITE)
+        screen.blit(surf, surf.get_rect(midtop=(w // 2, y)))
+        y += surf.get_height() + 4
+
+    mouse_hide.apply(screen)
+    pygame.display.flip()
+    mouse_hide.apply(screen)
+
+
+def _hold_now_showing(
+    screen: pygame.Surface,
+    path: Path,
+    *,
+    should_abort: Callable[[], bool] | None = None,
+) -> bool:
+    """
+    Show the NOW SHOWING card for ``_NOW_SHOWING_HOLD_SEC``.
+
+    Returns False if *should_abort* becomes true mid-hold (e.g. next half
+    starts during a live break reel) — caller must skip mpv and resume UI.
+    """
+    _draw_now_showing(screen, clip_title_from_path(path))
+    deadline = time.monotonic() + max(0.0, _NOW_SHOWING_HOLD_SEC)
+    while time.monotonic() < deadline:
+        if should_abort is not None and should_abort():
+            logging.info("now-showing aborted before mpv: %s", path.name)
+            return False
+        for event in pygame.event.get():
+            if event.type == pygame.QUIT:
+                return False
+            if event.type == pygame.KEYDOWN and event.key == pygame.K_ESCAPE:
+                return False
+        time.sleep(_NOW_SHOWING_POLL_SEC)
+    if should_abort is not None and should_abort():
+        logging.info("now-showing aborted before mpv: %s", path.name)
+        return False
+    return True
 
 
 def _filter_valid_clip_paths(paths: list[Path], *, validate: bool = True) -> list[Path]:
+    from .mlb_highlights import is_skip_highlight_path
+
     good: list[Path] = []
     for path in paths:
+        if is_skip_highlight_path(path):
+            logging.info("skipping interview/fluff clip: %s", path.name)
+            continue
         if validate and path.suffix.lower() == ".mp4":
             if not is_valid_highlight_mp4(path):
                 logging.warning("skipping corrupt highlight clip: %s", path.name)
@@ -469,6 +533,9 @@ def _play_live_break_reel(
     scene._pending_clip = None  # type: ignore[attr-defined]
     pending: Path | None = first_path
 
+    def _break_over() -> bool:
+        return not scene.in_inning_break(state.snapshot())  # type: ignore[attr-defined]
+
     try:
         while True:
             if pending is None:
@@ -483,14 +550,19 @@ def _play_live_break_reel(
 
             # One clip per mpv run — ready .mp4 on disk, skip ffprobe re-check.
             batch = _filter_valid_clip_paths([pending], validate=False)
+            clip = batch[0] if batch else None
             pending = None
-            if not batch:
+            if clip is None:
                 logging.warning("break reel: clip missing on disk")
                 continue
 
-            screen = _play_mpv_sequence(batch, screen, flags, validate=False)
+            # Title card runs on pygame; abort if the next half starts mid-hold.
+            if not _hold_now_showing(screen, clip, should_abort=_break_over):
+                break
 
-            if not scene.in_inning_break(state.snapshot()):  # type: ignore[attr-defined]
+            screen = _play_mpv_sequence([clip], screen, flags, validate=False)
+
+            if _break_over():
                 break
     finally:
         playback.set_live_break_priority(False)
@@ -710,7 +782,8 @@ def main() -> None:
                         )
                     else:
                         scene._pending_clip = None  # type: ignore[attr-defined]
-                        screen = _play_mpv(pending, screen, display_flags)
+                        if _hold_now_showing(screen, pending):
+                            screen = _play_mpv(pending, screen, display_flags)
                         # Re-arm the gap from the clip's END so the score scene is
                         # shown between clips (get_ticks advances during mpv).
                         if hasattr(scene, "_cp_notify_played"):

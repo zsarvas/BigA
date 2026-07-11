@@ -57,14 +57,54 @@ def _chown_for_pi(path: Path) -> None:
     except (KeyError, OSError):
         pass
 
-# Blurb substrings for non-play content we skip downloading.
+# Blurb / filename substrings for non-play content we skip (interviews, pregame
+# fluff). Analysis / "breaking down" clips are kept — they're often useful.
 _SKIP_PATTERNS = (
+    "interview",
+    "talks ",
+    " talks",
+    " joins ",
+    "sits down",
+    "chat with",
+    "one-on-one",
+    "one on one",
+    "press conference",
+    "media availability",
+    "postgame with",
+    "postgame interview",
+    "dugout interview",
+    "clubhouse",
+    "podcast",
+    "on the show",
     "bullpen availability",
     "bench availability",
     "starting lineups",
     "fielding alignment",
     "probable pitchers",
-    "breaking down",
+)
+
+# Same ideas as hyphens (downloaded filenames are slugified blurbs).
+_SKIP_SLUG_PATTERNS = (
+    "interview",
+    "talks-",
+    "-talks-",
+    "-joins-",
+    "sits-down",
+    "chat-with",
+    "one-on-one",
+    "press-conference",
+    "media-availability",
+    "postgame-with",
+    "postgame-interview",
+    "dugout-interview",
+    "clubhouse",
+    "podcast",
+    "on-the-show",
+    "bullpen-availability",
+    "bench-availability",
+    "starting-lineups",
+    "fielding-alignment",
+    "probable-pitchers",
 )
 
 
@@ -83,12 +123,23 @@ def is_condensed_game_clip(path: Path) -> bool:
     return "condensed-game" in stem or stem.startswith("condensed")
 
 
+def is_skip_highlight_blurb(blurb: str) -> bool:
+    """True for interviews / pregame fluff we never want to download or play."""
+    lower = blurb.lower()
+    return any(p in lower for p in _SKIP_PATTERNS)
+
+
+def is_skip_highlight_path(path: Path) -> bool:
+    """True when a slugified filename looks like interview/fluff content."""
+    stem = path.stem.lower().replace("_", "-")
+    return any(p in stem for p in _SKIP_SLUG_PATTERNS)
+
+
 def should_download(blurb: str) -> bool:
     """True when the highlight is worth fetching (default include unless skipped)."""
     if not condensed_games_enabled() and is_condensed_game_blurb(blurb):
         return False
-    lower = blurb.lower()
-    return not any(p in lower for p in _SKIP_PATTERNS)
+    return not is_skip_highlight_blurb(blurb)
 
 
 def _parse_mlb_duration(raw: object) -> int | None:
