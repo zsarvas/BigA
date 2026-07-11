@@ -690,6 +690,13 @@ def main() -> None:
                         state.update(scene="win")
                     elif event.key == pygame.K_4:
                         state.update(scene="loss")
+                    elif event.key == pygame.K_h:
+                        # Demo: Angels HR celebration (GIF bg + halo flash).
+                        state.update(
+                            scene="live",
+                            live_event="homerun",
+                            live_last_play_id=f"demo-hr-{time.time():.0f}",
+                        )
 
             snap = state.snapshot()
             reload_key = (

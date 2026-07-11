@@ -48,6 +48,19 @@ _EVENT_MAP: dict[str, str] = {
 }
 
 
+def _batting_team_id(play: dict[str, Any], away_id: int, home_id: int) -> int:
+    """Team at bat for a completed play (top = away, bottom = home)."""
+    about = play.get("about") or {}
+    if "isTopInning" in about:
+        return away_id if about.get("isTopInning") else home_id
+    half = str(about.get("halfInning") or "").lower()
+    if half == "top":
+        return away_id
+    if half == "bottom":
+        return home_id
+    return 0
+
+
 def _normalise_event(raw: str) -> str:
     """Map an MLB API event string to one of our canned animation names."""
     return _EVENT_MAP.get(raw, "")
@@ -287,8 +300,13 @@ def live_feed_to_state_patch(feed: dict[str, Any]) -> dict[str, Any]:
             last_play = d
         # play_id lets us deduplicate (don't re-fire same event next poll).
         play_id = str(p.get("playId") or p.get("atBatIndex") or "")
-        event_raw = str(result.get("event") or "").lower().replace(" ", "_")
+        event_raw = str(result.get("eventType") or result.get("event") or "").lower().replace(" ", "_")
         live_event = _normalise_event(event_raw)
+        # Halo + HR GIF are for our team only — skip opponent homers.
+        if live_event == "homerun":
+            batting_id = _batting_team_id(p, away_id or 0, home_id or 0)
+            if batting_id and batting_id != ANGELS_TEAM_ID:
+                live_event = ""
         live_last_play_id = play_id
         break
 

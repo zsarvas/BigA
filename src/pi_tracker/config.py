@@ -117,7 +117,8 @@ STATE_PATH = Path(
 # background overlay when the event fires, then reverts to the stadium image.
 #
 # Supported filenames (any missing file is silently skipped):
-#   homerun.gif   strikeout.gif   walk.gif   double.gif   triple.gif
+#   homerun.gif / TroutHR.gif   strikeout.gif / strikeout-struck-out.gif
+#   walk.gif   double.gif   triple.gif
 #   hit.gif       out.gif         stolen_base.gif
 LIVE_ANIMATIONS_DIR = ASSETS_DIR / "live_animations"
 

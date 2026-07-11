@@ -4,6 +4,7 @@ Win-scene NeoPixel animation (racer + theater chase).
 Uses ``rpi_ws281x`` (``requirements-pi.txt``). Public API for ``app.py``:
     init_gpio() / set_win_led(active) / cleanup_gpio()
     is_muted() / set_muted(bool)
+    flash_halo()  — brief red flash on Angels home run
 
 Animation: solid red → white racer ×3 → white theater → red racer ×3 → red theater → repeat.
 
@@ -88,6 +89,11 @@ _win_active = False
 _anim_thread: threading.Thread | None = None
 _anim_stop = threading.Event()
 _last_init_error: str = ""
+_hr_flash_thread: threading.Thread | None = None
+_hr_flash_stop = threading.Event()
+_HR_FLASH_COUNT = _env_int("BIGA_HR_FLASH_COUNT", 4, lo=1, hi=20)
+_HR_FLASH_ON_SEC = float(os.environ.get("BIGA_HR_FLASH_ON_SEC", "0.18") or "0.18")
+_HR_FLASH_OFF_SEC = float(os.environ.get("BIGA_HR_FLASH_OFF_SEC", "0.12") or "0.12")
 
 # Reset-button hold progress (biga-reset service; exclusive with win animation).
 _reset_hold_sec = 0.0
@@ -303,10 +309,83 @@ def _animate_loop(stop: threading.Event) -> None:
 def _start_anim_thread(name: str) -> None:
     global _anim_thread
     _stop_reset_hold_feedback()
+    _stop_hr_flash()
     _anim_stop.clear()
     t = threading.Thread(target=_animate_loop, args=(_anim_stop,), name=name, daemon=True)
     _anim_thread = t
     t.start()
+
+
+def _stop_hr_flash() -> None:
+    global _hr_flash_thread
+    _hr_flash_stop.set()
+    t = _hr_flash_thread
+    _hr_flash_thread = None
+    if t is not None:
+        t.join(timeout=1.0)
+
+
+def _hr_flash_loop(
+    stop: threading.Event,
+    *,
+    flashes: int,
+    on_sec: float,
+    off_sec: float,
+    color: tuple[int, int, int],
+) -> None:
+    try:
+        for _ in range(flashes):
+            if stop.is_set():
+                return
+            _fill_blocking(color)
+            if stop.wait(on_sec):
+                return
+            _fill_blocking(OFF)
+            if stop.wait(off_sec):
+                return
+    except Exception as e:  # noqa: BLE001
+        log.warning("HR halo flash crashed: %s", e)
+    finally:
+        if not _win_active:
+            _fill_blocking(OFF)
+
+
+def flash_halo(
+    *,
+    flashes: int | None = None,
+    on_sec: float | None = None,
+    off_sec: float | None = None,
+    color: tuple[int, int, int] = RED,
+) -> None:
+    """
+    Brief non-blocking halo flash for an Angels home run.
+
+    Skipped while the win-scene animation or LED debug modes are active.
+    """
+    if _LED_DEBUG or _LED_WIN_DEBUG:
+        return
+    n = flashes if flashes is not None else _HR_FLASH_COUNT
+    on = on_sec if on_sec is not None else _HR_FLASH_ON_SEC
+    off = off_sec if off_sec is not None else _HR_FLASH_OFF_SEC
+    global _hr_flash_thread
+    with _lock:
+        if _win_active:
+            return
+        if not _initialized:
+            init_gpio()
+        if _view is None:
+            return
+        _stop_hr_flash()
+        _hr_flash_stop.clear()
+        t = threading.Thread(
+            target=_hr_flash_loop,
+            args=(_hr_flash_stop,),
+            kwargs={"flashes": n, "on_sec": on, "off_sec": off, "color": color},
+            name="hr-halo-flash",
+            daemon=True,
+        )
+        _hr_flash_thread = t
+        t.start()
 
 
 def _stop_win_animation() -> None:
@@ -364,6 +443,7 @@ def begin_reset_hold_feedback() -> None:
         return
     with _lock:
         _stop_win_animation()
+        _stop_hr_flash()
         if not _initialized:
             init_gpio()
         if _view is None:
@@ -490,9 +570,11 @@ def cleanup_gpio() -> None:
     global _strip, _view, _initialized, _win_active, _mute_button
     with _lock:
         _anim_stop.set()
+        _hr_flash_stop.set()
     t = _anim_thread
     if t is not None:
         t.join(timeout=2.0)
+    _stop_hr_flash()
     with _lock:
         _fill_blocking(OFF)
         _strip = None
