@@ -11,11 +11,24 @@ import logging
 from .. import config
 from ..assets import AssetManager, StreamingGif, scale_surface
 from ..drawing.diamond import draw_diamond
+from ..gpio_leds import flash_halo
 from .linescore_table import compute_linescore_geometry, draw_linescore_table_centered
 from ._clip_player import _playable_clip_paths, game_highlights_blocked
 from ..highlight_meta import ended_half_before_break, pick_break_highlight
 
 log = logging.getLogger(__name__)
+
+# Filename aliases under live_animations/ (first match wins).
+_EVENT_GIF_FILES: dict[str, tuple[str, ...]] = {
+    "homerun": ("homerun.gif", "TroutHR.gif", "trouthr.gif"),
+    "strikeout": ("strikeout.gif", "strikeout-struck-out.gif"),
+    "walk": ("walk.gif",),
+    "double": ("double.gif",),
+    "triple": ("triple.gif",),
+    "hit": ("hit.gif",),
+    "out": ("out.gif",),
+    "stolen_base": ("stolen_base.gif",),
+}
 
 # MLB linescore.inningState during commercial breaks (may be brief or skipped).
 _INNING_BREAK_STATES = frozenset({"middle", "between"})
@@ -159,6 +172,7 @@ class LiveScene:
         self._break_prefer_tiered: bool = True
         self._played_clips: set[str] = set()
         self._pending_clip: Path | None = None  # consumed by app.py → mpv
+        self._anim_play_id: str = ""  # last live_last_play_id we started an anim for
 
         # GIF animation state (pygame-rendered, not mpv — short canned overlays)
         self._anim: StreamingGif | None = None
@@ -166,6 +180,7 @@ class LiveScene:
         self._anim_deadline_ms: int = 0
         self._anim_cur: pygame.Surface | None = None
         self._anim_done = True
+        self._anim_event: str = ""
 
     # ------------------------------------------------------------------
     # Half-inning break reel (continuous until the next half starts)
@@ -283,25 +298,38 @@ class LiveScene:
     # Canned GIF animations triggered by in-game events
     # ------------------------------------------------------------------
 
-    def _start_anim(self, event: str, size: tuple[int, int]) -> None:
-        """Load and start a canned GIF for *event* (e.g. "homerun"). No-op if file missing."""
-        path = config.LIVE_ANIMATIONS_DIR / f"{event}.gif"
-        if not path.exists():
-            return
+    def _resolve_event_gif(self, event: str) -> Path | None:
+        names = _EVENT_GIF_FILES.get(event, (f"{event}.gif",))
+        for name in names:
+            path = config.LIVE_ANIMATIONS_DIR / name
+            if path.is_file():
+                return path
+        return None
+
+    def _start_anim(self, event: str, size: tuple[int, int]) -> bool:
+        """Load and start a canned GIF for *event*. Returns True if started."""
+        path = self._resolve_event_gif(event)
+        if path is None:
+            log.debug("no live animation GIF for event=%s", event)
+            return False
         try:
             anim = StreamingGif(path, size)
             if not anim.ok:
-                return
+                return False
             surf, dur = anim.decode(0)
             if surf is None:
-                return
+                return False
             self._anim = anim
             self._anim_frame = 0
             self._anim_deadline_ms = pygame.time.get_ticks() + dur
             self._anim_cur = surf
             self._anim_done = False
-        except Exception:
-            pass
+            self._anim_event = event
+            log.info("live animation started: %s (%s)", event, path.name)
+            return True
+        except Exception as exc:
+            log.warning("live animation failed for %s: %s", event, exc)
+            return False
 
     def _tick_anim(self, screen: pygame.Surface, state: dict[str, Any]) -> bool:
         """
@@ -310,8 +338,12 @@ class LiveScene:
         the scoreboard on top — animations are background replacements).
         """
         event = str(state.get("live_event", "")).strip()
-        if event and not self._anim:
-            self._start_anim(event, screen.get_size())
+        play_id = str(state.get("live_last_play_id", "")).strip()
+        if event and play_id and play_id != self._anim_play_id and not self._anim:
+            self._anim_play_id = play_id
+            if self._start_anim(event, screen.get_size()):
+                if event == "homerun":
+                    flash_halo()
 
         if self._anim_done or self._anim is None:
             return False
@@ -325,6 +357,7 @@ class LiveScene:
                     self._anim = None
                     self._anim_cur = None
                     self._anim_done = True
+                    self._anim_event = ""
                     return False
             else:
                 surf, dur = self._anim.decode(self._anim_frame)
@@ -332,6 +365,7 @@ class LiveScene:
                     self._anim = None
                     self._anim_cur = None
                     self._anim_done = True
+                    self._anim_event = ""
                     return False
                 self._anim_cur = surf
                 self._anim_deadline_ms = now + dur
