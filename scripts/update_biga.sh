@@ -7,6 +7,8 @@
 #   - root cron at 4 AM
 #
 #   0 4 * * * /home/pi/BigA/scripts/update_biga.sh
+#
+# Never prompts for GitHub credentials (public HTTPS or deploy-key SSH).
 
 set -uo pipefail
 
@@ -14,16 +16,35 @@ REPO_DIR="/home/pi/BigA"
 LOG_FILE="/var/log/biga_update.log"
 SERVICE="biga"
 DEPLOY_KEY="/etc/biga/deploy_key"
+HTTPS_ORIGIN="https://github.com/zsarvas/BigA.git"
+SSH_ORIGIN="git@github.com:zsarvas/BigA.git"
 CONTEXT="${BIGA_UPDATE_CONTEXT:-manual}"
 MAX_WAIT_SEC="${BIGA_UPDATE_MAX_WAIT_SEC:-90}"
 FETCH_RETRIES="${BIGA_UPDATE_FETCH_RETRIES:-3}"
 SLEEP_SEC="${BIGA_UPDATE_RETRY_SLEEP_SEC:-10}"
-GIT=(git -c "safe.directory=$REPO_DIR")
+
+# Unattended: never ask for username/password on the console.
+export GIT_TERMINAL_PROMPT=0
+export GIT_ASKPASS=/bin/true
+# Prefer empty askpass over a missing binary on odd images.
+if [ ! -x /bin/true ]; then
+    export GIT_ASKPASS=true
+fi
+
+GIT=(
+    git
+    -c "safe.directory=$REPO_DIR"
+    -c "credential.helper="
+    -c "core.askPass=/bin/true"
+)
 
 # ExecStartPre: don't block boot for long — timer retries later.
-if [ "$CONTEXT" = "boot-pre" ] && [ -z "${BIGA_UPDATE_MAX_WAIT_SEC+x}" ]; then
-    MAX_WAIT_SEC=25
-    FETCH_RETRIES=2
+if [ "$CONTEXT" = "boot-pre" ]; then
+    # Only apply short defaults when the caller did not override.
+    : "${BIGA_UPDATE_MAX_WAIT_SEC:=25}"
+    : "${BIGA_UPDATE_FETCH_RETRIES:=2}"
+    MAX_WAIT_SEC="${BIGA_UPDATE_MAX_WAIT_SEC}"
+    FETCH_RETRIES="${BIGA_UPDATE_FETCH_RETRIES}"
 fi
 
 # Use the deploy key for SSH if present (required for private repos).
@@ -36,7 +57,9 @@ log() {
 }
 
 log_tail() {
-    tail -n 8 "$LOG_FILE" 2>/dev/null | while IFS= read -r line; do
+    # Show only the last git error lines from this run (avoid dumping the whole log).
+    tail -n 12 "$LOG_FILE" 2>/dev/null | grep -E 'fatal:|error:|Username|Authentication|Permission|denied|Could not|unable' \
+        | tail -n 6 | while IFS= read -r line; do
         log "  | $line"
     done
 }
@@ -58,6 +81,35 @@ wait_for_network() {
     return 1
 }
 
+ensure_remote() {
+    local url
+    url=$("${GIT[@]}" remote get-url origin 2>/dev/null || true)
+    if [ -f "$DEPLOY_KEY" ]; then
+        if [ "$url" != "$SSH_ORIGIN" ]; then
+            log "setting origin → $SSH_ORIGIN (deploy key present)"
+            "${GIT[@]}" remote set-url origin "$SSH_ORIGIN" >> "$LOG_FILE" 2>&1 || \
+                "${GIT[@]}" remote add origin "$SSH_ORIGIN" >> "$LOG_FILE" 2>&1 || true
+        fi
+        return 0
+    fi
+    # Public HTTPS — normalize to .git URL (avoids some credential-helper quirks).
+    case "$url" in
+        "$HTTPS_ORIGIN"|"https://github.com/zsarvas/BigA"|"https://github.com/zsarvas/BigA.git")
+            if [ "$url" != "$HTTPS_ORIGIN" ]; then
+                log "normalizing origin → $HTTPS_ORIGIN"
+                "${GIT[@]}" remote set-url origin "$HTTPS_ORIGIN" >> "$LOG_FILE" 2>&1 || true
+            fi
+            ;;
+        "")
+            log "no origin remote — adding $HTTPS_ORIGIN"
+            "${GIT[@]}" remote add origin "$HTTPS_ORIGIN" >> "$LOG_FILE" 2>&1 || true
+            ;;
+        *)
+            log "keeping existing origin: $url"
+            ;;
+    esac
+}
+
 git_fetch_with_retries() {
     local try=1
     while [ "$try" -le "$FETCH_RETRIES" ]; do
@@ -75,6 +127,13 @@ git_fetch_with_retries() {
     return 1
 }
 
+fix_pi_tree() {
+    # Root OTA can leave root-owned files; keep the tree writable for the pi user.
+    if [ "$(id -u)" -eq 0 ] && id pi >/dev/null 2>&1; then
+        chown -R pi:pi "$REPO_DIR" 2>/dev/null || true
+    fi
+}
+
 log "--- update check start (context=$CONTEXT max_wait=${MAX_WAIT_SEC}s) ---"
 
 if ! wait_for_network; then
@@ -86,18 +145,20 @@ if ! wait_for_network; then
 fi
 
 if [ ! -d "$REPO_DIR/.git" ]; then
-    log "ERROR: $REPO_DIR is not a git repo. Aborting."
+    log "ERROR: $REPO_DIR is not a git repo (.git missing). Aborting."
+    log "HINT: golden images keep .git; do not rsync a GitHub tarball over /home/pi/BigA"
     exit 1
 fi
 
 cd "$REPO_DIR"
+ensure_remote
 
 if ! git_fetch_with_retries; then
-    log "ERROR: git fetch failed after $FETCH_RETRIES tries (network/SSH?). Aborting."
+    log "ERROR: git fetch failed after $FETCH_RETRIES tries. Aborting."
     if [ -f "$DEPLOY_KEY" ]; then
         log "deploy key present at $DEPLOY_KEY — check GitHub deploy key access"
     else
-        log "no deploy key at $DEPLOY_KEY — private repo fetch will fail"
+        log "using HTTPS (public). If this keeps failing, check DNS/firewall to github.com"
     fi
     exit 1
 fi
@@ -107,6 +168,7 @@ REMOTE=$("${GIT[@]}" rev-parse origin/main)
 
 if [ "$LOCAL" = "$REMOTE" ]; then
     log "Already up to date ($LOCAL). No action taken."
+    fix_pi_tree
     exit 0
 fi
 
@@ -118,7 +180,16 @@ if ! "${GIT[@]}" reset --hard origin/main >> "$LOG_FILE" 2>&1; then
     exit 1
 fi
 
-log "Pull successful. Restarting $SERVICE service..."
+fix_pi_tree
+
+log "Pull successful ($REMOTE). Restarting $SERVICE service..."
+
+# Avoid restart loop when we are already running as ExecStartPre of biga.
+if [ "$CONTEXT" = "boot-pre" ]; then
+    log "boot-pre: code updated; continuing into ExecStart with new tree"
+    log "--- update complete ---"
+    exit 0
+fi
 
 if systemctl restart "$SERVICE"; then
     log "Service restarted successfully."

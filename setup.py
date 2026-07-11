@@ -253,6 +253,53 @@ def _strip_old_biga_markers(text: str) -> str:
     return re.sub(r"\n{3,}", "\n\n", "\n".join(lines).rstrip()) + "\n"
 
 
+def _configure_ota_git(repo: str) -> None:
+    """
+    Make unattended ``git fetch`` work on golden images (public HTTPS or deploy key).
+
+    Root runs OTA (cron / ExecStartPre). Without these settings, Bookworm git can
+    prompt for a GitHub username on HTTPS and abort when stdin is not a TTY —
+    which looked like "network" failures in /var/log/biga_update.log.
+    """
+    https_url = "https://github.com/zsarvas/BigA.git"
+    run(
+        f"git config --global --add safe.directory {repo}",
+        "allowing root git access to BigA (safe.directory)",
+    )
+    # Idempotent-ish: unset then set so we don't stack duplicates forever.
+    subprocess.run(
+        ["git", "config", "--global", "--unset-all", "credential.helper"],
+        capture_output=True,
+        check=False,
+    )
+    run(
+        "git config --global credential.helper ''",
+        "disabling git credential helper for unattended HTTPS",
+    )
+    run(
+        "git config --global core.askPass /bin/true",
+        "disabling interactive git askpass prompts",
+    )
+    # Normalize origin for public pulls when no deploy key is present.
+    if not os.path.exists("/etc/biga/deploy_key"):
+        current = subprocess.run(
+            ["git", "-C", repo, "-c", f"safe.directory={repo}", "remote", "get-url", "origin"],
+            capture_output=True,
+            text=True,
+            check=False,
+        ).stdout.strip()
+        if current in ("", "https://github.com/zsarvas/BigA", https_url):
+            if current != https_url:
+                run(
+                    f"git -C {repo} -c safe.directory={repo} remote set-url origin {https_url}",
+                    "setting origin to HTTPS .git URL",
+                )
+            else:
+                print(f"  → origin already {https_url}")
+        elif current:
+            print(f"  → leaving origin as {current}")
+
+
 def _configure_deploy_key(repo: str) -> None:
     """
     If a deploy key exists at /etc/biga/deploy_key, switch the git remote to
@@ -283,14 +330,17 @@ def _configure_deploy_key(repo: str) -> None:
 
     # Switch remote to SSH
     current = subprocess.run(
-        ["git", "-C", repo, "remote", "get-url", "origin"],
+        ["git", "-C", repo, "-c", f"safe.directory={repo}", "remote", "get-url", "origin"],
         capture_output=True, text=True, check=False,
     ).stdout.strip()
 
     if current != ssh_url:
-        run(f"git -C {repo} remote set-url origin {ssh_url}", "switching remote to SSH")
+        run(
+            f"git -C {repo} -c safe.directory={repo} remote set-url origin {ssh_url}",
+            "switching remote to SSH",
+        )
     else:
-        print(f"  → remote already set to SSH")
+        print("  → remote already set to SSH")
 
     # Lock down key permissions
     run(f"chmod 600 {key_path}", "locking deploy key permissions")
@@ -598,6 +648,7 @@ sysctl("mask", "autovt@tty2.service", desc="masking autovt on tty2")
 
 # 9. auto-update cron + deploy key SSH config
 print("\n[9/13] Configuring auto-update (cron + deploy key)...")
+_configure_ota_git(REPO)
 _configure_deploy_key(REPO)
 _install_auto_update_cron(REPO)
 _install_boot_update_timer(REPO)
