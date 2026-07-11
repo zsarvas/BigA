@@ -61,7 +61,7 @@ def _env_int(name: str, default: int, lo: int | None = None, hi: int | None = No
 
 _WIN_LED_GPIO = _env_int("BIGA_WIN_LED_GPIO", 19)
 _WIN_LED_COUNT = _env_int("BIGA_WIN_LED_COUNT", 30, lo=1, hi=600)
-_WIN_LED_BRIGHTNESS = _env_int("BIGA_WIN_LED_BRIGHTNESS", 10, lo=0, hi=255)
+_WIN_LED_BRIGHTNESS = _env_int("BIGA_WIN_LED_BRIGHTNESS", 60, lo=0, hi=255)
 _LED_DEBUG = _env_bool("BIGA_LED_DEBUG")
 _LED_DEBUG_COLOR = (255, 255, 255)
 _LED_WIN_DEBUG = _env_bool("BIGA_LED_WIN_DEBUG")
