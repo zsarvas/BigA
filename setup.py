@@ -257,47 +257,81 @@ def _configure_ota_git(repo: str) -> None:
     """
     Make unattended ``git fetch`` work on golden images (public HTTPS or deploy key).
 
-    Root runs OTA (cron / ExecStartPre). Without these settings, Bookworm git can
-    prompt for a GitHub username on HTTPS and abort when stdin is not a TTY —
-    which looked like "network" failures in /var/log/biga_update.log.
+    Prefer ``/etc/gitconfig`` (no HOME dependency) so arm-runner image builds don't
+    fail when ``git config --global`` can't write ``~/.gitconfig``.
+    ``update_biga.sh`` also passes ``-c safe.directory=…`` per-command.
     """
     https_url = "https://github.com/zsarvas/BigA.git"
-    run(
-        f"git config --global --add safe.directory {repo}",
-        "allowing root git access to BigA (safe.directory)",
+    system_gitconfig = "/etc/gitconfig"
+    contents = (
+        "# Managed by BigA setup.py — unattended OTA pulls\n"
+        "[safe]\n"
+        f"\tdirectory = {repo}\n"
+        "\tdirectory = *\n"
+        "[credential]\n"
+        "\thelper = \n"
+        "[core]\n"
+        "\taskPass = /bin/true\n"
     )
-    # Idempotent-ish: unset then set so we don't stack duplicates forever.
-    subprocess.run(
-        ["git", "config", "--global", "--unset-all", "credential.helper"],
-        capture_output=True,
-        check=False,
-    )
-    run(
-        "git config --global credential.helper ''",
-        "disabling git credential helper for unattended HTTPS",
-    )
-    run(
-        "git config --global core.askPass /bin/true",
-        "disabling interactive git askpass prompts",
-    )
-    # Normalize origin for public pulls when no deploy key is present.
-    if not os.path.exists("/etc/biga/deploy_key"):
-        current = subprocess.run(
-            ["git", "-C", repo, "-c", f"safe.directory={repo}", "remote", "get-url", "origin"],
+    try:
+        tmp = "/tmp/biga-gitconfig"
+        with open(tmp, "w", encoding="utf-8") as f:
+            f.write(contents)
+        result = subprocess.run(
+            f"cp {tmp} {system_gitconfig} || sudo cp {tmp} {system_gitconfig}",
+            shell=True,
             capture_output=True,
             text=True,
             check=False,
-        ).stdout.strip()
-        if current in ("", "https://github.com/zsarvas/BigA", https_url):
-            if current != https_url:
-                run(
-                    f"git -C {repo} -c safe.directory={repo} remote set-url origin {https_url}",
-                    "setting origin to HTTPS .git URL",
-                )
+        )
+        if result.returncode == 0:
+            print(f"  → wrote {system_gitconfig} for unattended OTA")
+        else:
+            err = (result.stderr or result.stdout or "").strip()
+            print(f"  → warning: could not write {system_gitconfig}: {err or 'failed'}")
+            print("  → continuing; update_biga.sh passes safe.directory per-command")
+    except OSError as exc:
+        print(f"  → warning: could not write {system_gitconfig}: {exc}")
+        print("  → continuing; update_biga.sh passes safe.directory per-command")
+
+    # Best-effort user global config (may fail in chroot if HOME is unwritable).
+    for cmd, desc in (
+        (f"git config --global --add safe.directory {repo}", "root safe.directory (optional)"),
+        ("git config --global credential.helper ''", "root credential.helper (optional)"),
+        ("git config --global core.askPass /bin/true", "root askPass (optional)"),
+    ):
+        print(f"  → {desc}")
+        result = subprocess.run(cmd, shell=True, capture_output=True, text=True, check=False)
+        if result.returncode != 0:
+            err = (result.stderr or result.stdout or "").strip().splitlines()
+            print(f"  → skip ({err[-1] if err else 'git config failed'})")
+
+    if os.path.exists("/etc/biga/deploy_key"):
+        return
+
+    current = subprocess.run(
+        ["git", "-C", repo, "-c", f"safe.directory={repo}", "remote", "get-url", "origin"],
+        capture_output=True,
+        text=True,
+        check=False,
+    ).stdout.strip()
+    if current in ("", "https://github.com/zsarvas/BigA", https_url):
+        if current != https_url:
+            result = subprocess.run(
+                ["git", "-C", repo, "-c", f"safe.directory={repo}", "remote", "set-url", "origin", https_url],
+                capture_output=True,
+                text=True,
+                check=False,
+            )
+            if result.returncode == 0:
+                print(f"  → origin set to {https_url}")
             else:
-                print(f"  → origin already {https_url}")
-        elif current:
-            print(f"  → leaving origin as {current}")
+                err = (result.stderr or "").strip().splitlines()
+                print(f"  → skip setting origin ({err[-1] if err else 'failed'})")
+        else:
+            print(f"  → origin already {https_url}")
+    elif current:
+        print(f"  → leaving origin as {current}")
 
 
 def _configure_deploy_key(repo: str) -> None:
