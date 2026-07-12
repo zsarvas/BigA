@@ -63,6 +63,7 @@ _SKIP_PATTERNS = (
     "interview",
     "talks ",
     " talks",
+    "talks about",
     " joins ",
     "sits down",
     "chat with",
@@ -76,6 +77,10 @@ _SKIP_PATTERNS = (
     "clubhouse",
     "podcast",
     "on the show",
+    "on his ",
+    "on her ",
+    "return from il",
+    "after return",
     "bullpen availability",
     "bench availability",
     "starting lineups",
@@ -88,6 +93,7 @@ _SKIP_SLUG_PATTERNS = (
     "interview",
     "talks-",
     "-talks-",
+    "talks-about",
     "-joins-",
     "sits-down",
     "chat-with",
@@ -100,12 +106,88 @@ _SKIP_SLUG_PATTERNS = (
     "clubhouse",
     "podcast",
     "on-the-show",
+    "on-his-",
+    "on-her-",
+    "return-from-il",
+    "after-return",
     "bullpen-availability",
     "bench-availability",
     "starting-lineups",
     "fielding-alignment",
     "probable-pitchers",
 )
+
+# Chill on download/transcode when the Pi Zero is under memory pressure or we
+# already have enough playable clips for the reel.
+try:
+    _HL_MIN_AVAILABLE_MB = max(32, int(os.environ.get("BIGA_HL_MIN_AVAILABLE_MB", "90")))
+except ValueError:
+    _HL_MIN_AVAILABLE_MB = 90
+try:
+    _HL_MAX_SWAP_USED_MB = max(16, int(os.environ.get("BIGA_HL_MAX_SWAP_USED_MB", "64")))
+except ValueError:
+    _HL_MAX_SWAP_USED_MB = 64
+try:
+    _HL_MAX_READY = max(4, int(os.environ.get("BIGA_HL_MAX_READY", "12")))
+except ValueError:
+    _HL_MAX_READY = 12
+
+
+def _meminfo_kb() -> dict[str, int]:
+    """Parse selected fields from ``/proc/meminfo`` (kB). Empty on non-Linux."""
+    out: dict[str, int] = {}
+    try:
+        with open("/proc/meminfo", encoding="utf-8") as f:
+            for line in f:
+                parts = line.split()
+                if len(parts) >= 2 and parts[0].endswith(":"):
+                    key = parts[0][:-1]
+                    try:
+                        out[key] = int(parts[1])
+                    except ValueError:
+                        continue
+    except OSError:
+        pass
+    return out
+
+
+def count_ready_highlights(folder: Path) -> int:
+    """Playable finished ``.mp4`` count (skips interview fluff + bad files)."""
+    if not folder.is_dir():
+        return 0
+    n = 0
+    for p in folder.glob("*.mp4"):
+        if is_skip_highlight_path(p):
+            continue
+        if is_valid_highlight_mp4(p):
+            n += 1
+    return n
+
+
+def highlight_work_blocked_reason(folder: Path | None = None) -> str | None:
+    """
+    Why the downloader should skip new download/transcode work, or ``None``.
+
+    Guardrails for the Pi Zero 2W: leave existing replays alone when RAM/swap
+    is tight or we already have plenty of ready clips.
+    """
+    info = _meminfo_kb()
+    if info:
+        avail_kb = info.get("MemAvailable", info.get("MemFree", 0))
+        swap_total = info.get("SwapTotal", 0)
+        swap_free = info.get("SwapFree", 0)
+        swap_used_kb = max(0, swap_total - swap_free)
+        avail_mb = avail_kb // 1024
+        swap_used_mb = swap_used_kb // 1024
+        if avail_mb < _HL_MIN_AVAILABLE_MB:
+            return f"low MemAvailable ({avail_mb}MB < {_HL_MIN_AVAILABLE_MB}MB)"
+        if swap_used_mb >= _HL_MAX_SWAP_USED_MB:
+            return f"swap in use ({swap_used_mb}MB >= {_HL_MAX_SWAP_USED_MB}MB)"
+    if folder is not None:
+        ready = count_ready_highlights(folder)
+        if ready >= _HL_MAX_READY:
+            return f"enough ready clips ({ready} >= {_HL_MAX_READY})"
+    return None
 
 
 def condensed_games_enabled() -> bool:
@@ -794,6 +876,10 @@ def sweep_oversized_highlights(folder: Path, *, started_at: float) -> None:
         return
     if playback.is_active():
         return
+    blocked = highlight_work_blocked_reason(folder)
+    if blocked:
+        log.info("skip oversized re-transcode: %s", blocked)
+        return
     playback.wait_for_transcode_slot()
     for p in sorted(folder.glob("*.mp4")):
         low = p.name.lower()
@@ -902,12 +988,15 @@ def log_highlight_folder_status(folder: Path) -> None:
                 parts.append(p.name)
     busy_dl = playback.is_download_busy()
     busy_tc = playback.is_transcode_busy()
+    blocked = highlight_work_blocked_reason(folder)
+    chill = f" | chill={blocked}" if blocked else ""
     log.info(
-        "highlights/%s: %s | download_busy=%s transcode_busy=%s",
+        "highlights/%s: %s | download_busy=%s transcode_busy=%s%s",
         folder.name,
         ", ".join(parts),
         busy_dl,
         busy_tc,
+        chill,
     )
 
 
@@ -1340,6 +1429,14 @@ class HighlightDownloader:
         sweep_incomplete_highlights(self._dest)
         sweep_oversized_highlights(self._dest, started_at=self._started_at)
         log_highlight_folder_status(self._dest)
+
+        blocked = highlight_work_blocked_reason(self._dest)
+        if blocked:
+            log.info("highlight chill: %s — keeping existing replays", blocked)
+            # Still report API health so the poll interval stays normal when online.
+            _, api_ok = fetch_highlight_clips_result(self.game_pk)
+            return api_ok, False
+
         if not playback.is_download_busy():
             resumed = _resume_orphan_transcodes(self._dest, self._stop)
             if resumed is not None:
@@ -1371,6 +1468,11 @@ class HighlightDownloader:
                 log.debug("skip duplicate URL: %s", clip.get("blurb", "")[:60])
                 self._seen_ids.add(cid)
                 continue
+            # Re-check pressure right before heavy work (swap can climb mid-poll).
+            blocked = highlight_work_blocked_reason(self._dest)
+            if blocked:
+                log.info("highlight chill before download: %s", blocked)
+                return api_ok, False
             playback.wait_while_active(self._stop)
             if self._stop.is_set():
                 return api_ok, False
