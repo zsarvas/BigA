@@ -722,6 +722,13 @@ def main() -> None:
                             live_event="homerun",
                             live_last_play_id=f"demo-hr-{time.time():.0f}",
                         )
+                    elif event.key == pygame.K_k:
+                        # Demo: strikeout GIF background.
+                        state.update(
+                            scene="live",
+                            live_event="strikeout",
+                            live_last_play_id=f"demo-k-{time.time():.0f}",
+                        )
 
             snap = state.snapshot()
             reload_key = (
