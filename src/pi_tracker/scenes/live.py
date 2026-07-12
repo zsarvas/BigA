@@ -30,6 +30,12 @@ _EVENT_GIF_FILES: dict[str, tuple[str, ...]] = {
     "stolen_base": ("stolen_base.gif",),
 }
 
+# How many times each event GIF plays (falls back to config.LIVE_ANIM_LOOPS).
+_EVENT_GIF_LOOPS: dict[str, int] = {
+    "homerun": 5,
+    "strikeout": 2,
+}
+
 # MLB linescore.inningState during commercial breaks (may be brief or skipped).
 _INNING_BREAK_STATES = frozenset({"middle", "between"})
 _UNSET_HALF_KEY: tuple[int, str] | None = None
@@ -181,6 +187,7 @@ class LiveScene:
         self._anim_cur: pygame.Surface | None = None
         self._anim_done = True
         self._anim_event: str = ""
+        self._anim_loops_left: int = 0
 
     # ------------------------------------------------------------------
     # Half-inning break reel (continuous until the next half starts)
@@ -312,7 +319,7 @@ class LiveScene:
             log.debug("no live animation GIF for event=%s", event)
             return False
         try:
-            # Letterbox (no crop) — strikeout is square; TroutHR is 16:9 on a 3:2 panel.
+            # Always letterbox — square strikeout must show the full "K"; cover cropped it.
             anim = StreamingGif(
                 path,
                 size,
@@ -324,13 +331,22 @@ class LiveScene:
             surf, dur = anim.decode(0)
             if surf is None:
                 return False
+            now = pygame.time.get_ticks()
             self._anim = anim
             self._anim_frame = 0
-            self._anim_deadline_ms = pygame.time.get_ticks() + dur
+            self._anim_deadline_ms = now + dur
             self._anim_cur = surf
             self._anim_done = False
             self._anim_event = event
-            log.info("live animation started: %s (%s)", event, path.name)
+            self._anim_loops_left = max(
+                1, int(_EVENT_GIF_LOOPS.get(event, config.LIVE_ANIM_LOOPS))
+            )
+            log.info(
+                "live animation started: %s (%s, fit=contain, loops=%d)",
+                event,
+                path.name,
+                self._anim_loops_left,
+            )
             return True
         except Exception as exc:
             log.warning("live animation failed for %s: %s", event, exc)
@@ -357,23 +373,25 @@ class LiveScene:
         if now >= self._anim_deadline_ms:
             self._anim_frame += 1
             if self._anim_frame >= self._anim.n_frames:
-                # Animation finished — hold for LIVE_ANIM_HOLD_MS then clear.
-                if now >= self._anim_deadline_ms + config.LIVE_ANIM_HOLD_MS:
+                self._anim_loops_left -= 1
+                if self._anim_loops_left <= 0:
                     self._anim = None
                     self._anim_cur = None
                     self._anim_done = True
                     self._anim_event = ""
+                    self._anim_loops_left = 0
                     return False
-            else:
-                surf, dur = self._anim.decode(self._anim_frame)
-                if surf is None:
-                    self._anim = None
-                    self._anim_cur = None
-                    self._anim_done = True
-                    self._anim_event = ""
-                    return False
-                self._anim_cur = surf
-                self._anim_deadline_ms = now + dur
+                self._anim_frame = 0
+            surf, dur = self._anim.decode(self._anim_frame)
+            if surf is None:
+                self._anim = None
+                self._anim_cur = None
+                self._anim_done = True
+                self._anim_event = ""
+                self._anim_loops_left = 0
+                return False
+            self._anim_cur = surf
+            self._anim_deadline_ms = now + dur
 
         if self._anim_cur is not None:
             screen.blit(self._anim_cur, (0, 0))
