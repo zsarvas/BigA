@@ -4,7 +4,7 @@ Win-scene NeoPixel animation (racer + theater chase).
 Uses ``rpi_ws281x`` (``requirements-pi.txt``). Public API for ``app.py``:
     init_gpio() / set_win_led(active) / cleanup_gpio()
     is_muted() / set_muted(bool)
-    flash_halo()  — brief red flash on Angels home run
+    flash_halo()  — two win-sequence cycles on Angels home run, then off
 
 Animation: solid red → white racer ×3 → white theater → red racer ×3 → red theater → repeat.
 
@@ -91,9 +91,7 @@ _anim_stop = threading.Event()
 _last_init_error: str = ""
 _hr_flash_thread: threading.Thread | None = None
 _hr_flash_stop = threading.Event()
-_HR_FLASH_COUNT = _env_int("BIGA_HR_FLASH_COUNT", 4, lo=1, hi=20)
-_HR_FLASH_ON_SEC = float(os.environ.get("BIGA_HR_FLASH_ON_SEC", "0.18") or "0.18")
-_HR_FLASH_OFF_SEC = float(os.environ.get("BIGA_HR_FLASH_OFF_SEC", "0.12") or "0.12")
+_HR_WIN_CYCLES = _env_int("BIGA_HR_WIN_CYCLES", 2, lo=1, hi=10)
 
 # Reset-button hold progress (biga-reset service; exclusive with win animation).
 _reset_hold_sec = 0.0
@@ -325,48 +323,32 @@ def _stop_hr_flash() -> None:
         t.join(timeout=1.0)
 
 
-def _hr_flash_loop(
-    stop: threading.Event,
-    *,
-    flashes: int,
-    on_sec: float,
-    off_sec: float,
-    color: tuple[int, int, int],
-) -> None:
+def _hr_flash_loop(stop: threading.Event, *, cycles: int) -> None:
+    """Run the win LED sequence ``cycles`` times, then clear (unless win scene is up)."""
     try:
-        for _ in range(flashes):
+        if _view is None:
+            return
+        for _ in range(cycles):
             if stop.is_set():
                 return
-            _fill_blocking(color)
-            if stop.wait(on_sec):
-                return
-            _fill_blocking(OFF)
-            if stop.wait(off_sec):
-                return
+            _win_animation_cycle(_view, stop)
     except Exception as e:  # noqa: BLE001
-        log.warning("HR halo flash crashed: %s", e)
+        log.warning("HR win-sequence LED crashed: %s", e)
     finally:
         if not _win_active:
             _fill_blocking(OFF)
 
 
-def flash_halo(
-    *,
-    flashes: int | None = None,
-    on_sec: float | None = None,
-    off_sec: float | None = None,
-    color: tuple[int, int, int] = RED,
-) -> None:
+def flash_halo(*, cycles: int | None = None) -> None:
     """
-    Brief non-blocking halo flash for an Angels home run.
+    Non-blocking HALO celebration for an Angels home run.
 
+    Runs the full win LED sequence a couple of times (default 2), then stops.
     Skipped while the win-scene animation or LED debug modes are active.
     """
     if _LED_DEBUG or _LED_WIN_DEBUG:
         return
-    n = flashes if flashes is not None else _HR_FLASH_COUNT
-    on = on_sec if on_sec is not None else _HR_FLASH_ON_SEC
-    off = off_sec if off_sec is not None else _HR_FLASH_OFF_SEC
+    n = cycles if cycles is not None else _HR_WIN_CYCLES
     global _hr_flash_thread
     with _lock:
         if _win_active:
@@ -375,13 +357,14 @@ def flash_halo(
             init_gpio()
         if _view is None:
             return
+        _stop_reset_hold_feedback()
         _stop_hr_flash()
         _hr_flash_stop.clear()
         t = threading.Thread(
             target=_hr_flash_loop,
             args=(_hr_flash_stop,),
-            kwargs={"flashes": n, "on_sec": on, "off_sec": off, "color": color},
-            name="hr-halo-flash",
+            kwargs={"cycles": n},
+            name="hr-win-leds",
             daemon=True,
         )
         _hr_flash_thread = t
