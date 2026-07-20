@@ -38,6 +38,10 @@ find /var/log -type f \( -name "*.log" -o -name "*.gz" \) -delete 2>/dev/null ||
 echo "[4/9] Clearing temp files..."
 rm -rf /tmp/* /var/tmp/* 2>/dev/null || true
 
+# Remove stale SSH deploy keys from golden images (public repo uses HTTPS OTA).
+# Manual build Pis can re-run scripts/setup_deploy_key.sh and set BIGA_GIT_USE_DEPLOY_KEY=1.
+rm -f /etc/biga/deploy_key /etc/biga/deploy_key.pub 2>/dev/null || true
+
 # WiFi credentials — user provisions via portal on first boot
 echo "[5/9] Removing saved WiFi credentials..."
 rm -f /etc/biga/wifi_creds.json

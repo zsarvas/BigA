@@ -253,6 +253,46 @@ def _strip_old_biga_markers(text: str) -> str:
     return re.sub(r"\n{3,}", "\n\n", "\n".join(lines).rstrip()) + "\n"
 
 
+def _scrub_git_auth(repo: str) -> None:
+    """
+    Anonymous public HTTPS only.
+
+    Actions checkout leaves ``http.https://github.com/.extraheader`` in
+    ``.git/config``; that token dies after the workflow and breaks OTA.
+    """
+    https_url = "https://github.com/zsarvas/BigA.git"
+    scrub = os.path.join(repo, "scripts", "scrub_git_remote.sh")
+    if os.path.isfile(scrub):
+        result = subprocess.run(["bash", scrub, repo], capture_output=True, text=True, check=False)
+        if result.returncode == 0:
+            line = (result.stdout or "").strip().splitlines()[-1:] or [""]
+            print(f"  → {line[0] or 'scrubbed git remote for public HTTPS'}")
+            return
+        err = (result.stderr or result.stdout or "").strip().splitlines()
+        print(f"  → scrub_git_remote.sh warning: {err[-1] if err else 'failed'}")
+
+    git = ["git", "-C", repo, "-c", f"safe.directory={repo}"]
+    current = subprocess.run(
+        [*git, "remote", "get-url", "origin"],
+        capture_output=True,
+        text=True,
+        check=False,
+    ).stdout.strip()
+    if current:
+        subprocess.run([*git, "remote", "set-url", "origin", https_url], check=False)
+    else:
+        subprocess.run([*git, "remote", "add", "origin", https_url], check=False)
+    for key in (
+        "http.https://github.com/.extraheader",
+        "http.https://github.com/.extraHeader",
+        "credential.https://github.com.helper",
+        "credential.helper",
+    ):
+        subprocess.run([*git, "config", "--local", "--unset-all", key], check=False)
+        subprocess.run(["git", "config", "--global", "--unset-all", key], check=False)
+    print(f"  → origin set to {https_url} (was: {current or '<none>'})")
+
+
 def _configure_ota_git(repo: str) -> None:
     """
     Make unattended ``git fetch`` work on golden images (public HTTPS or deploy key).
@@ -306,39 +346,10 @@ def _configure_ota_git(repo: str) -> None:
             err = (result.stderr or result.stdout or "").strip().splitlines()
             print(f"  → skip ({err[-1] if err else 'git config failed'})")
 
-    if os.path.exists("/etc/biga/deploy_key"):
+    if os.path.exists("/etc/biga/deploy_key") and os.environ.get("BIGA_GIT_USE_DEPLOY_KEY", "").strip() == "1":
         return
 
-    # Always force anonymous public HTTPS. Image builds copy an Actions checkout
-    # whose origin may be https://x-access-token:…@github.com/… — that token dies
-    # after the workflow and breaks OTA / git pull on every flashed unit.
-    current = subprocess.run(
-        ["git", "-C", repo, "-c", f"safe.directory={repo}", "remote", "get-url", "origin"],
-        capture_output=True,
-        text=True,
-        check=False,
-    ).stdout.strip()
-    if current != https_url:
-        result = subprocess.run(
-            ["git", "-C", repo, "-c", f"safe.directory={repo}", "remote", "set-url", "origin", https_url],
-            capture_output=True,
-            text=True,
-            check=False,
-        )
-        if result.returncode != 0:
-            result = subprocess.run(
-                ["git", "-C", repo, "-c", f"safe.directory={repo}", "remote", "add", "origin", https_url],
-                capture_output=True,
-                text=True,
-                check=False,
-            )
-        if result.returncode == 0:
-            print(f"  → origin set to {https_url} (was: {current or '<none>'})")
-        else:
-            err = (result.stderr or "").strip().splitlines()
-            print(f"  → skip setting origin ({err[-1] if err else 'failed'})")
-    else:
-        print(f"  → origin already {https_url}")
+    _scrub_git_auth(repo)
 
 
 def _configure_deploy_key(repo: str) -> None:
@@ -349,6 +360,10 @@ def _configure_deploy_key(repo: str) -> None:
     """
     key_path = "/etc/biga/deploy_key"
     ssh_url = "git@github.com:zsarvas/BigA.git"
+
+    if os.environ.get("BIGA_GIT_USE_DEPLOY_KEY", "").strip() != "1":
+        print("  → deploy key SSH disabled (set BIGA_GIT_USE_DEPLOY_KEY=1 to enable)")
+        return
 
     if not os.path.exists(key_path):
         print("  → no deploy key found — skipping SSH remote config (public repo or key not yet set up)")
@@ -396,6 +411,9 @@ def _install_auto_update_cron(repo: str) -> None:
         sys.exit(1)
 
     run(f"chmod +x {script}", f"making {script} executable")
+    scrub = os.path.join(repo, "scripts", "scrub_git_remote.sh")
+    if os.path.isfile(scrub):
+        run(f"chmod +x {scrub}", "making scrub_git_remote.sh executable")
 
     cron_entry = f"0 4 * * * {script}"
     result = subprocess.run(["crontab", "-l"], capture_output=True, text=True, check=False)
