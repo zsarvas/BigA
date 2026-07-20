@@ -69,11 +69,16 @@ jobs:
           import_github_env: true
           commands: |
             cd /home/pi/BigA
+            # Actions checkout poisons .git/config with a dead token in
+            # http.https://github.com/.extraheader — scrub before setup.
+            bash scripts/scrub_git_remote.sh /home/pi/BigA || true
             # Stamp the workflow build day into the image so on-device version
             # matches the .img.xz filename / GitHub release title.
             sed -i "s/^BUILD_DATE = \".*\"/BUILD_DATE = \"$BUILD_DATE\"/" src/pi_tracker/config.py
             grep -E '^VERSION |^BUILD_DATE ' src/pi_tracker/config.py
             python3 setup.py --image-build
+            bash scripts/scrub_git_remote.sh /home/pi/BigA
+            chmod +x scripts/scrub_git_remote.sh scripts/update_biga.sh
             # --- golden prep (image equivalent of prep_golden.sh) ---
             truncate -s 0 /etc/machine-id || true
             rm -f /etc/ssh/ssh_host_* || true
@@ -84,9 +89,7 @@ jobs:
             rm -f /home/pi/BigA/.biga_game_state.json /home/pi/BigA/.biga_game_state.tmp || true
             rm -f /root/.bash_history /home/pi/.bash_history || true
             rm -f /etc/biga/wifi_creds.json /etc/biga/provisioning_active /etc/biga/.firstboot_done || true
-            # Actions checkout remotes often embed a short-lived token; scrub to
-            # anonymous public HTTPS so flashed units can OTA / git pull.
-            git -C /home/pi/BigA remote set-url origin https://github.com/zsarvas/BigA.git || true
+            rm -f /etc/biga/deploy_key /etc/biga/deploy_key.pub || true
             chown -R pi:pi /home/pi/BigA || true
             # Pi Zero 2W has no RTC — first boot uses fake-hwclock until NTP. Seed
             # with BUILD_DATE (noon America/Los_Angeles) so date.today() is near

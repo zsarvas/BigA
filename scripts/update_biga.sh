@@ -47,10 +47,39 @@ if [ "$CONTEXT" = "boot-pre" ]; then
     FETCH_RETRIES="${BIGA_UPDATE_FETCH_RETRIES}"
 fi
 
-# Use the deploy key for SSH if present (required for private repos).
-if [ -f "$DEPLOY_KEY" ]; then
+# Optional: set BIGA_GIT_USE_DEPLOY_KEY=1 for private-repo SSH pulls.
+# Default is anonymous public HTTPS (golden images must not require auth).
+USE_DEPLOY_KEY="${BIGA_GIT_USE_DEPLOY_KEY:-0}"
+if [ "$USE_DEPLOY_KEY" = "1" ] && [ -f "$DEPLOY_KEY" ]; then
     export GIT_SSH_COMMAND="ssh -i $DEPLOY_KEY -o IdentitiesOnly=yes -o StrictHostKeyChecking=accept-new"
 fi
+
+SCRUB_SCRIPT="$REPO_DIR/scripts/scrub_git_remote.sh"
+
+scrub_git_auth() {
+    if [ -x "$SCRUB_SCRIPT" ]; then
+        bash "$SCRUB_SCRIPT" "$REPO_DIR" >> "$LOG_FILE" 2>&1 || true
+        return
+    fi
+    local url
+    url=$("${GIT[@]}" remote get-url origin 2>/dev/null || true)
+    if [ "$url" != "$HTTPS_ORIGIN" ]; then
+        log "forcing origin → $HTTPS_ORIGIN (was: ${url:-<none>})"
+        if [ -n "$url" ]; then
+            "${GIT[@]}" remote set-url origin "$HTTPS_ORIGIN" >> "$LOG_FILE" 2>&1 || true
+        else
+            "${GIT[@]}" remote add origin "$HTTPS_ORIGIN" >> "$LOG_FILE" 2>&1 || true
+        fi
+    fi
+    for key in \
+        "http.https://github.com/.extraheader" \
+        "http.https://github.com/.extraHeader" \
+        "credential.https://github.com.helper" \
+        "credential.helper"; do
+        "${GIT[@]}" config --local --unset-all "$key" >> "$LOG_FILE" 2>&1 || true
+        git config --global --unset-all "$key" >> "$LOG_FILE" 2>&1 || true
+    done
+}
 
 log() {
     echo "[$(date '+%Y-%m-%d %H:%M:%S')] [$CONTEXT] $*" | tee -a "$LOG_FILE"
@@ -82,27 +111,17 @@ wait_for_network() {
 }
 
 ensure_remote() {
-    local url
-    url=$("${GIT[@]}" remote get-url origin 2>/dev/null || true)
-    if [ -f "$DEPLOY_KEY" ]; then
+    if [ "$USE_DEPLOY_KEY" = "1" ] && [ -f "$DEPLOY_KEY" ]; then
+        local url
+        url=$("${GIT[@]}" remote get-url origin 2>/dev/null || true)
         if [ "$url" != "$SSH_ORIGIN" ]; then
-            log "setting origin → $SSH_ORIGIN (deploy key present)"
+            log "setting origin → $SSH_ORIGIN (BIGA_GIT_USE_DEPLOY_KEY=1)"
             "${GIT[@]}" remote set-url origin "$SSH_ORIGIN" >> "$LOG_FILE" 2>&1 || \
                 "${GIT[@]}" remote add origin "$SSH_ORIGIN" >> "$LOG_FILE" 2>&1 || true
         fi
         return 0
     fi
-    # Public HTTPS only. Golden images often inherit Actions checkout remotes like
-    # https://x-access-token:…@github.com/… — those tokens die after the build and
-    # cause "Authentication failed" / "Invalid username or token" on every flash.
-    if [ "$url" != "$HTTPS_ORIGIN" ]; then
-        log "forcing origin → $HTTPS_ORIGIN (was: ${url:-<none>})"
-        if [ -n "$url" ]; then
-            "${GIT[@]}" remote set-url origin "$HTTPS_ORIGIN" >> "$LOG_FILE" 2>&1 || true
-        else
-            "${GIT[@]}" remote add origin "$HTTPS_ORIGIN" >> "$LOG_FILE" 2>&1 || true
-        fi
-    fi
+    scrub_git_auth
 }
 
 git_fetch_with_retries() {
@@ -114,15 +133,12 @@ git_fetch_with_retries() {
         fi
         log "git fetch failed on try $try/$FETCH_RETRIES"
         log_tail
-        # Deploy key present but SSH auth dead → fall back to public HTTPS once.
-        if [ -f "$DEPLOY_KEY" ]; then
-            local url
-            url=$("${GIT[@]}" remote get-url origin 2>/dev/null || true)
-            if [ "$url" = "$SSH_ORIGIN" ] || [[ "$url" == git@github.com:* ]]; then
-                log "SSH fetch failed — falling back to $HTTPS_ORIGIN"
-                "${GIT[@]}" remote set-url origin "$HTTPS_ORIGIN" >> "$LOG_FILE" 2>&1 || true
-                unset GIT_SSH_COMMAND || true
-            fi
+        # SSH deploy key failed → scrub to anonymous public HTTPS.
+        if [ "$USE_DEPLOY_KEY" = "1" ]; then
+            log "SSH fetch failed — scrubbing to $HTTPS_ORIGIN"
+            USE_DEPLOY_KEY=0
+            unset GIT_SSH_COMMAND || true
+            scrub_git_auth
         fi
         if [ "$try" -lt "$FETCH_RETRIES" ]; then
             sleep "$SLEEP_SEC"
