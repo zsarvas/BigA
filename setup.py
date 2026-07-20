@@ -309,29 +309,36 @@ def _configure_ota_git(repo: str) -> None:
     if os.path.exists("/etc/biga/deploy_key"):
         return
 
+    # Always force anonymous public HTTPS. Image builds copy an Actions checkout
+    # whose origin may be https://x-access-token:…@github.com/… — that token dies
+    # after the workflow and breaks OTA / git pull on every flashed unit.
     current = subprocess.run(
         ["git", "-C", repo, "-c", f"safe.directory={repo}", "remote", "get-url", "origin"],
         capture_output=True,
         text=True,
         check=False,
     ).stdout.strip()
-    if current in ("", "https://github.com/zsarvas/BigA", https_url):
-        if current != https_url:
+    if current != https_url:
+        result = subprocess.run(
+            ["git", "-C", repo, "-c", f"safe.directory={repo}", "remote", "set-url", "origin", https_url],
+            capture_output=True,
+            text=True,
+            check=False,
+        )
+        if result.returncode != 0:
             result = subprocess.run(
-                ["git", "-C", repo, "-c", f"safe.directory={repo}", "remote", "set-url", "origin", https_url],
+                ["git", "-C", repo, "-c", f"safe.directory={repo}", "remote", "add", "origin", https_url],
                 capture_output=True,
                 text=True,
                 check=False,
             )
-            if result.returncode == 0:
-                print(f"  → origin set to {https_url}")
-            else:
-                err = (result.stderr or "").strip().splitlines()
-                print(f"  → skip setting origin ({err[-1] if err else 'failed'})")
+        if result.returncode == 0:
+            print(f"  → origin set to {https_url} (was: {current or '<none>'})")
         else:
-            print(f"  → origin already {https_url}")
-    elif current:
-        print(f"  → leaving origin as {current}")
+            err = (result.stderr or "").strip().splitlines()
+            print(f"  → skip setting origin ({err[-1] if err else 'failed'})")
+    else:
+        print(f"  → origin already {https_url}")
 
 
 def _configure_deploy_key(repo: str) -> None:

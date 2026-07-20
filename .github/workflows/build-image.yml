@@ -77,6 +77,10 @@ jobs:
             rm -f /home/pi/BigA/.biga_game_state.json /home/pi/BigA/.biga_game_state.tmp || true
             rm -f /root/.bash_history /home/pi/.bash_history || true
             rm -f /etc/biga/wifi_creds.json /etc/biga/provisioning_active /etc/biga/.firstboot_done || true
+            # Actions checkout remotes often embed a short-lived token; scrub to
+            # anonymous public HTTPS so flashed units can OTA / git pull.
+            git -C /home/pi/BigA remote set-url origin https://github.com/zsarvas/BigA.git || true
+            chown -R pi:pi /home/pi/BigA || true
             # Pi Zero 2W has no RTC — first boot uses fake-hwclock until NTP. Seed
             # with BUILD_DATE (noon America/Los_Angeles) so date.today() is near
             # real time during WiFi provisioning, not the arm-runner session clock

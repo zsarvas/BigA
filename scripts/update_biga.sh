@@ -92,22 +92,17 @@ ensure_remote() {
         fi
         return 0
     fi
-    # Public HTTPS — normalize to .git URL (avoids some credential-helper quirks).
-    case "$url" in
-        "$HTTPS_ORIGIN"|"https://github.com/zsarvas/BigA"|"https://github.com/zsarvas/BigA.git")
-            if [ "$url" != "$HTTPS_ORIGIN" ]; then
-                log "normalizing origin → $HTTPS_ORIGIN"
-                "${GIT[@]}" remote set-url origin "$HTTPS_ORIGIN" >> "$LOG_FILE" 2>&1 || true
-            fi
-            ;;
-        "")
-            log "no origin remote — adding $HTTPS_ORIGIN"
+    # Public HTTPS only. Golden images often inherit Actions checkout remotes like
+    # https://x-access-token:…@github.com/… — those tokens die after the build and
+    # cause "Authentication failed" / "Invalid username or token" on every flash.
+    if [ "$url" != "$HTTPS_ORIGIN" ]; then
+        log "forcing origin → $HTTPS_ORIGIN (was: ${url:-<none>})"
+        if [ -n "$url" ]; then
+            "${GIT[@]}" remote set-url origin "$HTTPS_ORIGIN" >> "$LOG_FILE" 2>&1 || true
+        else
             "${GIT[@]}" remote add origin "$HTTPS_ORIGIN" >> "$LOG_FILE" 2>&1 || true
-            ;;
-        *)
-            log "keeping existing origin: $url"
-            ;;
-    esac
+        fi
+    fi
 }
 
 git_fetch_with_retries() {
@@ -119,6 +114,16 @@ git_fetch_with_retries() {
         fi
         log "git fetch failed on try $try/$FETCH_RETRIES"
         log_tail
+        # Deploy key present but SSH auth dead → fall back to public HTTPS once.
+        if [ -f "$DEPLOY_KEY" ]; then
+            local url
+            url=$("${GIT[@]}" remote get-url origin 2>/dev/null || true)
+            if [ "$url" = "$SSH_ORIGIN" ] || [[ "$url" == git@github.com:* ]]; then
+                log "SSH fetch failed — falling back to $HTTPS_ORIGIN"
+                "${GIT[@]}" remote set-url origin "$HTTPS_ORIGIN" >> "$LOG_FILE" 2>&1 || true
+                unset GIT_SSH_COMMAND || true
+            fi
+        fi
         if [ "$try" -lt "$FETCH_RETRIES" ]; then
             sleep "$SLEEP_SEC"
         fi
@@ -151,6 +156,7 @@ if [ ! -d "$REPO_DIR/.git" ]; then
 fi
 
 cd "$REPO_DIR"
+fix_pi_tree
 ensure_remote
 
 if ! git_fetch_with_retries; then
