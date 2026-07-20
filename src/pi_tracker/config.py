@@ -21,7 +21,8 @@ ASSETS_DIR = Path(__file__).resolve().parent / "assets"
 # VERSION reflects the running code and is carried forward by OTA pulls, so the
 # value shown on-device always matches what's installed. The build-image workflow
 # validates its `version` input against VERSION (and fails on mismatch), so bump
-# both here in the same commit you cut a release from.
+# VERSION here before cutting a release. BUILD_DATE is overwritten by the workflow
+# to the day the image is built (America/Los_Angeles).
 VERSION = "1.0.1"
 BUILD_DATE = "2026.07.07"
 

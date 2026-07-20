@@ -426,10 +426,10 @@ Before running the workflow, configure repository secret `BIGA_PI_PASSWORD` with
 the baked-in `pi` account (for BigA devices, `angels`). The workflow fails fast if the secret is
 missing.
 
-**Cutting a release:** bump `VERSION` (and `BUILD_DATE`) in `config.py`, merge to `main`, then run
-the workflow with the same `version`. Because `VERSION` travels with the code, the value shown
-on-device (`config.version_string()`, e.g. `v1.0.0 (2026.07.02)`) always matches what's installed —
-including after an OTA auto-update.
+**Cutting a release:** bump `VERSION` in `config.py`, merge to `main`, then run the workflow with
+the same `version`. The workflow stamps `BUILD_DATE` to the day it runs (America/Los_Angeles) in
+both the `.img.xz` filename / release title and the `config.py` baked into the image, so on-device
+`version_string()` matches the artifact — including after an OTA auto-update of `VERSION`.
 
 **Developers on a live Pi:** clone the repo and run `sudo python3 setup.py` to install or
 reconfigure without reflashing. `setup.py` is the source of truth for what goes into the image;

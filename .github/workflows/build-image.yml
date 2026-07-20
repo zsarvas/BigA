@@ -40,13 +40,16 @@ jobs:
             echo "::error::version '$INPUT' is not semver (X.Y.Z)"; exit 1
           fi
           CONFIG_VERSION=$(sed -n 's/^VERSION = "\(.*\)"/\1/p' src/pi_tracker/config.py)
-          CONFIG_BUILD_DATE=$(sed -n 's/^BUILD_DATE = "\(.*\)"/\1/p' src/pi_tracker/config.py)
           if [ "$INPUT" != "$CONFIG_VERSION" ]; then
             echo "::error::input version '$INPUT' != config.py VERSION '$CONFIG_VERSION' — bump src/pi_tracker/config.py first"; exit 1
           fi
+          # Image title / release use the day the workflow actually runs (LA),
+          # not a stale BUILD_DATE left in config.py from an earlier cut.
+          BUILD_DATE="$(TZ=America/Los_Angeles date +%Y.%m.%d)"
           echo "VERSION=$CONFIG_VERSION" >> "$GITHUB_ENV"
-          echo "BUILD_DATE=$CONFIG_BUILD_DATE" >> "$GITHUB_ENV"
-          echo "IMG_NAME=biga-v${CONFIG_VERSION}-${CONFIG_BUILD_DATE}.img" >> "$GITHUB_ENV"
+          echo "BUILD_DATE=$BUILD_DATE" >> "$GITHUB_ENV"
+          echo "IMG_NAME=biga-v${CONFIG_VERSION}-${BUILD_DATE}.img" >> "$GITHUB_ENV"
+          echo "Image will be: biga-v${CONFIG_VERSION}-${BUILD_DATE}.img"
 
       - name: Validate Pi password secret
         run: |
@@ -66,6 +69,10 @@ jobs:
           import_github_env: true
           commands: |
             cd /home/pi/BigA
+            # Stamp the workflow build day into the image so on-device version
+            # matches the .img.xz filename / GitHub release title.
+            sed -i "s/^BUILD_DATE = \".*\"/BUILD_DATE = \"$BUILD_DATE\"/" src/pi_tracker/config.py
+            grep -E '^VERSION |^BUILD_DATE ' src/pi_tracker/config.py
             python3 setup.py --image-build
             # --- golden prep (image equivalent of prep_golden.sh) ---
             truncate -s 0 /etc/machine-id || true
