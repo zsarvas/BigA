@@ -586,6 +586,7 @@ run("sudo apt update -q")
 run(
     "sudo apt install -y "
     "git "  # required by scripts/update_biga.sh OTA auto-update; raspios-lite has no git
+    "ethtool "  # reads the permanent WiFi MAC (SSID/QR must ignore MAC randomization)
     "python3-pip "
     "python3-pygame "
     "fonts-dejavu-core "
