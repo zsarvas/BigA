@@ -16,14 +16,49 @@ AP_PASSWORD="${BIGA_AP_PASSWORD:-bigasetup}"
 # SSID is unique per Pi (BigA-<last4 MAC>). Override at image build time if needed.
 AP_IP="192.168.4.1"
 
-# Derive last-4 of MAC for a unique-per-device SSID
-if [ -r "/sys/class/net/${INTERFACE}/address" ]; then
-    MAC=$(cat "/sys/class/net/${INTERFACE}/address" | tr -d ':' | tr '[:lower:]' '[:upper:]')
-    SUFFIX="${MAC: -4}"
+# Resolve the real 802.11 netdev. The Pi Zero 2W combo chip also has a Bluetooth
+# controller with its own MAC (and BT tethering adds bnep0), so match on
+# phy80211/wireless instead of assuming the first interface is WiFi.
+is_wifi_iface() {
+    [ -e "/sys/class/net/$1/phy80211" ] || [ -d "/sys/class/net/$1/wireless" ]
+}
+
+if ! is_wifi_iface "$INTERFACE"; then
+    for candidate in /sys/class/net/*; do
+        name="$(basename "$candidate")"
+        case "$name" in
+            p2p-*|ap0|uap0|mon.*) continue ;;
+        esac
+        if is_wifi_iface "$name"; then
+            INTERFACE="$name"
+            break
+        fi
+    done
+fi
+
+# Prefer the burned-in MAC: NetworkManager MAC randomization would otherwise
+# change the SSID between boots and break the label/QR on the housing.
+MAC=""
+if command -v ethtool >/dev/null 2>&1; then
+    MAC="$(ethtool -P "$INTERFACE" 2>/dev/null | awk '{print $NF}')"
+fi
+case "$MAC" in
+    ""|00:00:00:00:00:00)
+        if [ -r "/sys/class/net/${INTERFACE}/address" ]; then
+            MAC="$(cat "/sys/class/net/${INTERFACE}/address")"
+        fi
+        ;;
+esac
+
+MAC_HEX="$(printf '%s' "$MAC" | tr -d ':' | tr '[:lower:]' '[:upper:]')"
+if [ "${#MAC_HEX}" -ge 4 ]; then
+    SUFFIX="${MAC_HEX: -4}"
 else
     SUFFIX="0000"
 fi
 AP_SSID="BigA-${SUFFIX}"
+
+echo "  → WiFi if : $INTERFACE (MAC ${MAC:-unknown})"
 
 echo "  → SSID    : $AP_SSID"
 echo "  → Password: $AP_PASSWORD"
