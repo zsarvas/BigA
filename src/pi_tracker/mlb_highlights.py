@@ -119,14 +119,14 @@ _SKIP_SLUG_PATTERNS = (
 
 # Chill on download/transcode when the Pi Zero is under memory pressure or we
 # already have enough playable clips for the reel.
+#
+# Do NOT gate on SwapUsed alone: after one ffmpeg pass Linux often leaves
+# tens of MB in swap indefinitely even when MemAvailable is healthy, which
+# used to permanently freeze the reel at a single clip.
 try:
     _HL_MIN_AVAILABLE_MB = max(32, int(os.environ.get("BIGA_HL_MIN_AVAILABLE_MB", "90")))
 except ValueError:
     _HL_MIN_AVAILABLE_MB = 90
-try:
-    _HL_MAX_SWAP_USED_MB = max(16, int(os.environ.get("BIGA_HL_MAX_SWAP_USED_MB", "64")))
-except ValueError:
-    _HL_MAX_SWAP_USED_MB = 64
 try:
     _HL_MAX_READY = max(4, int(os.environ.get("BIGA_HL_MAX_READY", "12")))
 except ValueError:
@@ -168,21 +168,16 @@ def highlight_work_blocked_reason(folder: Path | None = None) -> str | None:
     """
     Why the downloader should skip new download/transcode work, or ``None``.
 
-    Guardrails for the Pi Zero 2W: leave existing replays alone when RAM/swap
-    is tight or we already have plenty of ready clips.
+    Guardrails for the Pi Zero 2W: leave existing replays alone when
+    MemAvailable is tight or we already have plenty of ready clips.
+    Sticky swap alone is not treated as pressure (see module constants).
     """
     info = _meminfo_kb()
     if info:
         avail_kb = info.get("MemAvailable", info.get("MemFree", 0))
-        swap_total = info.get("SwapTotal", 0)
-        swap_free = info.get("SwapFree", 0)
-        swap_used_kb = max(0, swap_total - swap_free)
         avail_mb = avail_kb // 1024
-        swap_used_mb = swap_used_kb // 1024
         if avail_mb < _HL_MIN_AVAILABLE_MB:
             return f"low MemAvailable ({avail_mb}MB < {_HL_MIN_AVAILABLE_MB}MB)"
-        if swap_used_mb >= _HL_MAX_SWAP_USED_MB:
-            return f"swap in use ({swap_used_mb}MB >= {_HL_MAX_SWAP_USED_MB}MB)"
     if folder is not None:
         ready = count_ready_highlights(folder)
         if ready >= _HL_MAX_READY:
