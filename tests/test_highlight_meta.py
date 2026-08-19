@@ -4,7 +4,7 @@ from pathlib import Path
 
 
 def test_clip_title_humanizes_slug():
-    from pi_tracker.scenes._clip_player import clip_title_from_path
+    from pi_tracker.highlight_meta import clip_title_from_path
 
     assert clip_title_from_path(Path("mike-trout-s-hr-16.mp4")) == "Mike Trout's HR (16)"
     assert "RBI" in clip_title_from_path(Path("ward-2-rbi-double.mp4"))

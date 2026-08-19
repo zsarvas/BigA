@@ -58,7 +58,7 @@ from .mlb_highlights import (
 from .mlb_http import ANGELS_TEAM_ID as TRACKED_TEAM_ID
 from .mlb_schedule import try_restore_final_scene_for_today
 from .scenes import FinalLossScene, FinalWinScene, IdleScene, LiveScene
-from .scenes._clip_player import clip_title_from_path
+from .highlight_meta import clip_title_from_path
 from .state import SharedGameState
 from .team_config import tracked_team_abbr, tracked_team_name
 

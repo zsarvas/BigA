@@ -87,13 +87,24 @@ def test_highlight_chill_low_ram(monkeypatch, tmp_path):
 def test_highlight_chill_swap(monkeypatch, tmp_path):
     from pi_tracker import mlb_highlights as hl
 
+    # Pin thresholds: GHA runners often have 0 swap, so an unpinned default
+    # plus real /proc/meminfo would miss this path. Values are kB as in meminfo.
+    monkeypatch.setattr(hl, "_HL_MIN_AVAILABLE_MB", 90)
+    monkeypatch.setattr(hl, "_HL_MAX_SWAP_USED_MB", 64)
     monkeypatch.setattr(
         hl,
         "_meminfo_kb",
-        lambda: {"MemAvailable": 400 * 1024, "SwapTotal": 256 * 1024, "SwapFree": 100 * 1024},
+        lambda: {
+            "MemAvailable": 512 * 1024,
+            "SwapTotal": 256 * 1024,
+            "SwapFree": 0,
+        },
     )
     reason = hl.highlight_work_blocked_reason(tmp_path)
-    assert reason is not None
+    assert reason is not None, (
+        f"mem={hl._meminfo_kb()} min_avail={hl._HL_MIN_AVAILABLE_MB} "
+        f"max_swap={hl._HL_MAX_SWAP_USED_MB}"
+    )
     assert "swap" in reason
 
 

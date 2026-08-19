@@ -18,6 +18,46 @@ log = logging.getLogger(__name__)
 _META_SUFFIX = ".meta.json"
 _VTT_INNING = re.compile(r"[_-]([TB])(\d{1,2})[_\-.]", re.IGNORECASE)
 
+# Filename slug tokens → display abbreviations (from MLB highlight blurbs).
+_TITLE_ABBREV = {
+    "hr": "HR",
+    "rbi": "RBI",
+    "ab": "AB",
+    "so": "SO",
+    "bb": "BB",
+    "k": "K",
+    "vs": "vs",
+    "dp": "DP",
+}
+
+
+def clip_title_from_path(path: Path) -> str:
+    """
+    Humanize a highlight clip filename back into a short title.
+
+    Downloaded clips are named from MLB blurbs via slugification, e.g.
+    ``mike-trout-s-hr-16.mp4`` → ``Mike Trout's HR (16)``.
+    """
+    stem = path.stem.replace("_", "-")
+    words = [w for w in stem.split("-") if w]
+    if not words:
+        return path.name
+
+    out: list[str] = []
+    for w in words:
+        low = w.lower()
+        if low in _TITLE_ABBREV:
+            out.append(_TITLE_ABBREV[low])
+        elif low == "s" and out:
+            out[-1] = out[-1] + "'s"
+        elif w.isdigit():
+            out.append(f"({w})")
+        else:
+            out.append(w.capitalize())
+
+    title = re.sub(r"\s+", " ", " ".join(out)).strip()
+    return title or stem
+
 # Do not tag recaps / interviews — they fall through to generic backlog pick.
 _NO_TAG_BLURB = (
     "strikes out six",
