@@ -343,10 +343,15 @@ and a normal window opens. GPIO/NeoPixel code is a no-op without `rpi_ws281x`.
 
 ## Tests and PR checks
 
-Field units track `origin/main`. Before merging to `main`, pushes and pull requests
-on **Development** run [`.github/workflows/pr-checks.yml`](.github/workflows/pr-checks.yml)
-on GitHub Actions (pytest on Python 3.11 and 3.12, plus a syntax check). Tests are
+Field units track `origin/main`. GitHub Actions
+[`.github/workflows/pr-checks.yml`](.github/workflows/pr-checks.yml) runs pytest
+on Python 3.11 (Raspberry Pi OS Bookworm) plus a syntax check. Tests are
 hardware-free: no GPIO, SDL, `nmcli`, or live MLB network calls.
+
+A **push** to `Development` tests that branch as-is. A **pull request** tests
+GitHub’s merge of the PR into the base branch (`main`) — that is the
+merge-to-main signal. Those are different checkouts; both can run for the same
+push when a PR is open. The PR run is the one that matters for merging.
 
 ```bash
 python3 -m venv venv

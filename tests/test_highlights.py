@@ -87,24 +87,20 @@ def test_highlight_chill_low_ram(monkeypatch, tmp_path):
 def test_highlight_chill_swap(monkeypatch, tmp_path):
     from pi_tracker import mlb_highlights as hl
 
-    # Pin thresholds: GHA runners often have 0 swap, so an unpinned default
-    # plus real /proc/meminfo would miss this path. Values are kB as in meminfo.
-    monkeypatch.setattr(hl, "_HL_MIN_AVAILABLE_MB", 90)
-    monkeypatch.setattr(hl, "_HL_MAX_SWAP_USED_MB", 64)
+    # Do not patch private threshold names — pytest setattr requires they exist
+    # on the module (PR merge with main can lag Development). 8 GiB of used swap
+    # is over any sane cap; 512 MiB available stays above the RAM floor.
     monkeypatch.setattr(
         hl,
         "_meminfo_kb",
         lambda: {
             "MemAvailable": 512 * 1024,
-            "SwapTotal": 256 * 1024,
+            "SwapTotal": 8192 * 1024,
             "SwapFree": 0,
         },
     )
     reason = hl.highlight_work_blocked_reason(tmp_path)
-    assert reason is not None, (
-        f"mem={hl._meminfo_kb()} min_avail={hl._HL_MIN_AVAILABLE_MB} "
-        f"max_swap={hl._HL_MAX_SWAP_USED_MB}"
-    )
+    assert reason is not None
     assert "swap" in reason
 
 
@@ -112,7 +108,7 @@ def test_highlight_chill_enough_ready(monkeypatch, tmp_path, no_ffprobe):
     from pi_tracker import mlb_highlights as hl
 
     monkeypatch.setattr(hl, "_meminfo_kb", lambda: {})
-    monkeypatch.setattr(hl, "_HL_MAX_READY", 4)
+    monkeypatch.setattr(hl, "_HL_MAX_READY", 4, raising=False)
     for i in range(4):
         (tmp_path / f"clip{i}.mp4").write_bytes(b"\x00" * 4096)
     reason = hl.highlight_work_blocked_reason(tmp_path)
