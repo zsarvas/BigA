@@ -84,24 +84,21 @@ def test_highlight_chill_low_ram(monkeypatch, tmp_path):
     assert "MemAvailable" in reason
 
 
-def test_highlight_chill_swap(monkeypatch, tmp_path):
+def test_highlight_chill_ignores_sticky_swap(monkeypatch, tmp_path):
     from pi_tracker import mlb_highlights as hl
 
-    # Do not patch private threshold names — pytest setattr requires they exist
-    # on the module (PR merge with main can lag Development). 8 GiB of used swap
-    # is over any sane cap; 512 MiB available stays above the RAM floor.
+    # After ffmpeg, Linux often leaves swap used even with healthy MemAvailable.
+    # That must not freeze the highlight reel (main's field-learned policy).
     monkeypatch.setattr(
         hl,
         "_meminfo_kb",
         lambda: {
             "MemAvailable": 512 * 1024,
-            "SwapTotal": 8192 * 1024,
+            "SwapTotal": 256 * 1024,
             "SwapFree": 0,
         },
     )
-    reason = hl.highlight_work_blocked_reason(tmp_path)
-    assert reason is not None
-    assert "swap" in reason
+    assert hl.highlight_work_blocked_reason(tmp_path) is None
 
 
 def test_highlight_chill_enough_ready(monkeypatch, tmp_path, no_ffprobe):
