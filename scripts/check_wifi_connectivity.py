@@ -12,6 +12,10 @@ every saved network is out of range) we re-enter AP provisioning so the QR
 setup screen returns. We only fall back on association/DHCP failure — an
 associated network with a working LAN but no internet still gets an IP, so a
 mere outage never re-provisions and we don't flap.
+
+If ``/etc/biga/provisioning_active`` is already set (reset-button add-network),
+we bring up the AP and do *not* auto-join saved WiFi — otherwise a home network
+in range would steal wlan0 and the portal would never appear.
 """
 
 from __future__ import annotations
@@ -30,6 +34,7 @@ from wifi_store import (  # noqa: E402
     enter_provisioning,
     exit_provisioning,
     has_networks,
+    is_provisioning,
     load_networks,
     prepare_ap_provisioning_mode,
     seed_wifi_creds_from_nm,
@@ -47,6 +52,14 @@ log = logging.getLogger("biga-connectivity")
 def main() -> int:
     ensure_ssh_running()
     seed_wifi_creds_from_nm()
+
+    # Soft reset / "add network" sets this flag then reboots. Honor it: do not
+    # steal wlan0 back to a saved client network (home WiFi in range) or the
+    # portal never appears.
+    if is_provisioning():
+        log.info("provisioning_active set — bringing up AP, not joining saved WiFi")
+        prepare_ap_provisioning_mode()
+        return 0
 
     if has_networks():
         networks = load_networks()

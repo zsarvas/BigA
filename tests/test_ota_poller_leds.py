@@ -46,6 +46,28 @@ def test_connectivity_joins_saved_network(monkeypatch, wifi_paths):
     assert exited
 
 
+def test_connectivity_honors_provisioning_flag(monkeypatch, wifi_paths):
+    spec = importlib.util.spec_from_file_location(
+        "check_wifi_connectivity", ROOT / "scripts" / "check_wifi_connectivity.py"
+    )
+    assert spec and spec.loader
+    mod = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(mod)
+
+    monkeypatch.setattr(mod, "ensure_ssh_running", lambda: None)
+    monkeypatch.setattr(mod, "seed_wifi_creds_from_nm", lambda: True)
+    monkeypatch.setattr(mod, "is_provisioning", lambda: True)
+    monkeypatch.setattr(mod, "has_networks", lambda: True)
+    monkeypatch.setattr(
+        mod, "connect_saved_networks", lambda: (_ for _ in ()).throw(AssertionError("must not join"))
+    )
+    ap = []
+    monkeypatch.setattr(mod, "prepare_ap_provisioning_mode", lambda: ap.append(True))
+    monkeypatch.setattr(mod, "exit_provisioning", lambda: (_ for _ in ()).throw(AssertionError("keep flag")))
+    assert mod.main() == 0
+    assert ap
+
+
 def test_connectivity_reenters_ap_when_join_fails(monkeypatch, wifi_paths):
     spec = importlib.util.spec_from_file_location(
         "check_wifi_connectivity", ROOT / "scripts" / "check_wifi_connectivity.py"
