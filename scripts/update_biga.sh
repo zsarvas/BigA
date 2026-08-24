@@ -155,6 +155,46 @@ fix_pi_tree() {
     fi
 }
 
+OTA_SETUP_APPLIED=0
+
+maybe_ota_setup() {
+    # Apply apt/systemd bake-ins when scripts/ota_setup.rev is newer than the
+    # stamp on disk. Skipped in boot-pre (too slow / blocks launching biga).
+    local wanted have stamp revfile
+    revfile="$REPO_DIR/scripts/ota_setup.rev"
+    stamp="/etc/biga/ota_setup.rev"
+    if [ "$CONTEXT" = "boot-pre" ]; then
+        log "boot-pre: skipping setup.py --ota (timer/cron will run it)"
+        return 0
+    fi
+    if [ ! -f "$revfile" ]; then
+        return 0
+    fi
+    wanted=$(tr -cd '0-9' < "$revfile" | head -c 8)
+    if [ -z "$wanted" ]; then
+        return 0
+    fi
+    have="0"
+    if [ -f "$stamp" ]; then
+        have=$(tr -cd '0-9' < "$stamp" | head -c 8)
+        [ -n "$have" ] || have="0"
+    fi
+    if [ "$wanted" -le "$have" ] 2>/dev/null; then
+        log "setup.py --ota not needed (stamp $have >= $wanted)"
+        return 0
+    fi
+    mkdir -p /etc/biga
+    log "running setup.py --ota ($have → $wanted)…"
+    if python3 "$REPO_DIR/setup.py" --ota >> "$LOG_FILE" 2>&1; then
+        printf '%s\n' "$wanted" > "$stamp"
+        OTA_SETUP_APPLIED=1
+        log "setup.py --ota complete (stamp $wanted)"
+    else
+        log "ERROR: setup.py --ota failed (will retry next OTA). Code update still applies."
+    fi
+}
+
+
 log "--- update check start (context=$CONTEXT max_wait=${MAX_WAIT_SEC}s) ---"
 
 if ! wait_for_network; then
@@ -191,6 +231,17 @@ REMOTE=$("${GIT[@]}" rev-parse origin/main)
 if [ "$LOCAL" = "$REMOTE" ]; then
     log "Already up to date ($LOCAL). No action taken."
     fix_pi_tree
+    maybe_ota_setup
+    if [ "$OTA_SETUP_APPLIED" = "1" ] && [ "$CONTEXT" != "boot-pre" ]; then
+        log "setup.py --ota applied — restarting $SERVICE"
+        if systemctl restart "$SERVICE"; then
+            log "Service restarted successfully."
+        else
+            log "ERROR: systemctl restart $SERVICE failed (exit $?)."
+            exit 1
+        fi
+    fi
+    log "--- update complete ---"
     exit 0
 fi
 
@@ -203,6 +254,7 @@ if ! "${GIT[@]}" reset --hard origin/main >> "$LOG_FILE" 2>&1; then
 fi
 
 fix_pi_tree
+maybe_ota_setup
 
 log "Pull successful ($REMOTE). Restarting $SERVICE service..."
 

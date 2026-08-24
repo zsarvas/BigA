@@ -1,0 +1,43 @@
+name: PR checks
+
+on:
+  pull_request:
+  push:
+    branches:
+      - Development
+
+concurrency:
+  group: pr-checks-${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+permissions:
+  contents: read
+
+jobs:
+  test:
+    name: pytest
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          # Raspberry Pi OS Bookworm (Pi Zero 2W).
+          python-version: "3.11"
+          cache: pip
+          cache-dependency-path: requirements-dev.txt
+
+      - name: Install test deps
+        run: pip install -r requirements-dev.txt
+
+      - name: Run test suite
+        run: python -m pytest
+
+      - name: Syntax check
+        run: |
+          bash -n scripts/update_biga.sh
+          bash -n scripts/setup_ap.sh
+          bash -n scripts/scrub_git_remote.sh
+          python -m compileall -q -x '/(\.venv|venv)/' src portal setup.py
+          python -m py_compile scripts/check_wifi_connectivity.py

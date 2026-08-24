@@ -13,7 +13,14 @@ _parser.add_argument(
     action="store_true",
     help="CI/image build mode: skip hardware-specific and live-system steps",
 )
-IMAGE_BUILD = _parser.parse_args().image_build
+_parser.add_argument(
+    "--ota",
+    action="store_true",
+    help="Field OTA mode: apply apt/systemd bake-ins, do not reboot or rebuild AP",
+)
+_ARGS = _parser.parse_args()
+IMAGE_BUILD = _ARGS.image_build
+OTA = _ARGS.ota
 # Bookworm + KMS is the target. Use mzp351hv00tr-old.txt for legacy Bullseye/fbcon images.
 DEFAULT_PANEL_INCLUDE = os.environ.get("BIGA_PANEL_INCLUDE", "mzp351hv00tr-new.txt")
 
@@ -28,10 +35,17 @@ def run(cmd, desc=None):
 
 
 def sysctl(action: str, unit: str = "", *, desc: str | None = None) -> None:
-    """systemctl wrapper; skip live actions during offline image builds."""
+    """systemctl wrapper; skip live actions during offline image builds / OTA."""
+    skip = False
     if IMAGE_BUILD and action in {"start", "restart", "stop", "daemon-reload"}:
+        skip = True
+    if OTA and action in {"restart", "stop"}:
+        # Parent OTA script restarts biga; don't bounce the live scoreboard here.
+        skip = True
+    if skip:
         label = f"systemctl {action} {unit}".strip()
-        print(f"  → [image-build] skip: {label}")
+        mode = "ota" if OTA else "image-build"
+        print(f"  → [{mode}] skip: {label}")
         return
     cmd = f"sudo systemctl {action} {unit}".strip()
     run(cmd, desc)
@@ -578,6 +592,8 @@ print("=" * 50)
 print("  BigA Angels Tracker — Setup")
 if IMAGE_BUILD:
     print("  (image-build mode)")
+elif OTA:
+    print("  (OTA bake-in — no reboot, AP profile left alone)")
 print("=" * 50)
 
 # 1. apt deps
@@ -777,13 +793,15 @@ print("  → boot syncs saved WiFi to NetworkManager (QR setup via reset button 
 # If the Pi is already connected to a WiFi network (e.g. flashed with creds for
 # development), write wifi_creds.json now so the portal/setup-screen don't start
 # and take over the network after reboot.
-if not IMAGE_BUILD:
+if not IMAGE_BUILD and not OTA:
     print("\n  Checking for existing WiFi connection...")
     _seed_wifi_creds_from_nm()
 print("\n[13/13] Setting up AP mode...")
 run(f"chmod +x {os.path.join(REPO, 'scripts', 'setup_ap.sh')}", "making setup_ap.sh executable")
 if IMAGE_BUILD:
     print("  → [image-build] skip: setup_ap.sh (biga-firstboot runs on first boot)")
+elif OTA:
+    print("  → [ota] skip: setup_ap.sh (keep the live WiFi / AP profile)")
 else:
     run(f"sudo bash {os.path.join(REPO, 'scripts', 'setup_ap.sh')}", "creating biga-ap NM profile")
 firstboot_src = os.path.join(REPO, "scripts", "biga-firstboot.service")
@@ -802,6 +820,8 @@ else:
 print("\n" + "=" * 50)
 if IMAGE_BUILD:
     print("  Setup complete! (image-build — no reboot)")
+elif OTA:
+    print("  Setup complete! (OTA — no reboot; update script will restart biga)")
 else:
     print("  Setup complete! Rebooting in 5 seconds...")
     print("=" * 50)

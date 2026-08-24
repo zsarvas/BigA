@@ -1,0 +1,6 @@
+# CI + local unit tests (no pygame / cairo / Pi GPIO).
+pytest>=8.0
+flask
+qrcode[pil]
+requests
+pillow

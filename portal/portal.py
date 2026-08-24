@@ -39,6 +39,7 @@ from wifi_store import (
     enter_provisioning,
     ensure_ssh_running,
     has_networks,
+    is_enterprise_security,
     is_provisioning,
     network_needs_password,
 )
@@ -111,12 +112,21 @@ def connect_wifi(ssid: str, password: str, *, security: str = "") -> tuple[bool,
     and reboot. On boot, ``check_wifi_connectivity`` connects, or returns to the
     QR setup screen if the credentials turn out to be wrong.
     """
+    if is_enterprise_security(security):
+        return False, (
+            "This network uses enterprise login (username / certificate). "
+            "BigA only supports open or password (WPA) WiFi."
+        )
     if network_needs_password(security) and not password:
         return False, "Password is required for this network."
 
-    log.info("Saving credentials for %r (join happens on reboot)", ssid)
+    log.info(
+        "Saving credentials for %r (security=%r, join happens on reboot)",
+        ssid,
+        security or "open",
+    )
     try:
-        append_network(ssid, password, sync_nm=False)
+        append_network(ssid, password, sync_nm=False, security=security)
     except Exception as exc:
         log.warning("append_network failed: %s", exc)
         return False, str(exc) or "Failed to save network."

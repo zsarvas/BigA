@@ -20,6 +20,7 @@ import datetime
 import logging
 import os
 import platform
+import signal
 import subprocess
 import sys
 import textwrap
@@ -57,7 +58,7 @@ from .mlb_highlights import (
 from .mlb_http import ANGELS_TEAM_ID as TRACKED_TEAM_ID
 from .mlb_schedule import try_restore_final_scene_for_today
 from .scenes import FinalLossScene, FinalWinScene, IdleScene, LiveScene
-from .scenes._clip_player import clip_title_from_path
+from .highlight_meta import clip_title_from_path
 from .state import SharedGameState
 from .team_config import tracked_team_abbr, tracked_team_name
 
@@ -330,6 +331,17 @@ _NOW_SHOWING_HOLD_SEC = float(os.environ.get("BIGA_NOW_SHOWING_SEC", "10"))
 _NOW_SHOWING_POLL_SEC = 0.25
 
 
+def _safe_flip(screen: pygame.Surface | None = None) -> bool:
+    """Flip the panel; count pygame display death toward a reboot."""
+    try:
+        pygame.display.flip()
+        return True
+    except pygame.error as exc:
+        logging.warning("pygame.display.flip failed: %s", exc)
+        drm_health.note_display_failure(f"pygame.flip: {exc}")
+        return False
+
+
 def _draw_now_showing(screen: pygame.Surface, title: str) -> None:
     """Full-screen interstitial: NOW SHOWING + sanitized clip title."""
     w, h = screen.get_size()
@@ -349,7 +361,7 @@ def _draw_now_showing(screen: pygame.Surface, title: str) -> None:
         y += surf.get_height() + 4
 
     mouse_hide.apply(screen)
-    pygame.display.flip()
+    _safe_flip(screen)
     mouse_hide.apply(screen)
 
 
@@ -420,6 +432,8 @@ def _mpv_cmd(w: int, h: int, *, on_pi: bool) -> list[str]:
         "--input-cursor=no",
         f"--log-file={_MPV_LOG}",
         "--msg-level=cplayer=warn,vo=warn,vd=warn,ao=warn,ffmpeg=warn",
+        # Belt-and-suspenders: never let a single clip occupy the DRM card forever.
+        f"--end={max(30, int(config.MPV_CLIP_TIMEOUT_SEC))}",
     ]
     if on_pi:
         cmd += [
@@ -441,11 +455,93 @@ def _mpv_cmd(w: int, h: int, *, on_pi: bool) -> list[str]:
     return cmd
 
 
-def _run_mpv_subprocess(cmd: list[str], label: str) -> None:
-    playback.begin()
+def _kill_mpv_proc(proc: subprocess.Popen, *, reason: str) -> None:
+    logging.warning("mpv watchdog kill (%s) pid=%s", reason, proc.pid)
     try:
-        result = subprocess.run(cmd, timeout=3600, capture_output=True, text=True)
-        if result.returncode not in (0, 4):
+        os.killpg(proc.pid, signal.SIGTERM)
+    except (ProcessLookupError, PermissionError, OSError):
+        try:
+            proc.terminate()
+        except OSError:
+            return
+    try:
+        proc.wait(timeout=config.MPV_KILL_GRACE_SEC)
+        return
+    except subprocess.TimeoutExpired:
+        pass
+    try:
+        os.killpg(proc.pid, signal.SIGKILL)
+    except (ProcessLookupError, PermissionError, OSError):
+        try:
+            proc.kill()
+        except OSError:
+            pass
+    try:
+        proc.wait(timeout=2)
+    except (subprocess.TimeoutExpired, OSError):
+        pass
+
+
+def _mpv_output_is_draw_fail(stderr: str, stdout: str) -> bool:
+    blob = f"{stderr}\n{stdout}"
+    try:
+        blob += "\n" + _MPV_LOG.read_text(errors="replace")[-4000:]
+    except OSError:
+        pass
+    return drm_health.stderr_looks_like_draw_fail(blob)
+
+
+def _run_mpv_subprocess(cmd: list[str], label: str) -> None:
+    """
+    Run mpv with a hard timeout and cooperative abort (game went final).
+
+    Hung ``vo=drm`` used to sit for an hour (``subprocess.run(timeout=3600)``)
+    while the panel stayed black and the poller flipped to win behind it.
+    """
+    timeout_sec = float(config.MPV_CLIP_TIMEOUT_SEC)
+    playback.begin()
+    proc: subprocess.Popen | None = None
+    stderr_txt = ""
+    stdout_txt = ""
+    timed_out = False
+    aborted = False
+    try:
+        proc = subprocess.Popen(
+            cmd,
+            stdout=subprocess.DEVNULL,
+            start_new_session=True,
+        )
+        playback.register_mpv_proc(proc)
+        deadline = time.monotonic() + timeout_sec
+        while proc.poll() is None:
+            if playback.clips_stop_requested():
+                aborted = True
+                _kill_mpv_proc(proc, reason=playback.stop_reason() or "clips stop")
+                break
+            if time.monotonic() >= deadline:
+                timed_out = True
+                _kill_mpv_proc(proc, reason=f"timeout {timeout_sec:.0f}s")
+                break
+            time.sleep(0.25)
+        try:
+            proc.wait(timeout=3)
+        except subprocess.TimeoutExpired:
+            _kill_mpv_proc(proc, reason="wait hung")
+        stderr_txt = ""
+        stdout_txt = ""
+        try:
+            stderr_txt = _MPV_LOG.read_text(errors="replace")[-4000:]
+        except OSError:
+            pass
+        code = proc.returncode if proc.returncode is not None else -1
+        if playback.clips_stop_requested():
+            aborted = True
+        if aborted:
+            logging.info("mpv aborted (%s) on %s", playback.stop_reason() or "stop", label)
+        elif timed_out:
+            logging.warning("mpv timed out on %s after %.0fs", label, timeout_sec)
+            drm_health.note_display_failure(f"mpv timeout: {label}")
+        elif code not in (0, 4, -15, -9):  # 4=mpv quit; -15/-9=our SIGTERM/KILL
             log_tail = ""
             try:
                 log_tail = _MPV_LOG.read_text(errors="replace")[-2000:]
@@ -453,21 +549,23 @@ def _run_mpv_subprocess(cmd: list[str], label: str) -> None:
                 pass
             logging.warning(
                 "mpv exited %d for %s\nstdout: %s\nstderr: %s\nmpv log: %s",
-                result.returncode,
+                code,
                 label,
-                result.stdout[-500:],
-                result.stderr[-500:],
+                (stdout_txt or "")[-500:],
+                (stderr_txt or "")[-500:],
                 log_tail[-1000:] or "(empty)",
             )
-        elif result.stderr.strip():
-            logging.debug("mpv stderr: %s", result.stderr[-300:])
+            if _mpv_output_is_draw_fail(stderr_txt or "", stdout_txt or ""):
+                drm_health.note_display_failure(f"mpv drm draw-fail: {label}")
+        elif _mpv_output_is_draw_fail(stderr_txt or "", stdout_txt or ""):
+            drm_health.note_display_failure(f"mpv drm draw-fail: {label}")
     except FileNotFoundError:
         logging.warning("mpv not found — skipping %s", label)
-    except subprocess.TimeoutExpired:
-        logging.warning("mpv timed out on %s", label)
     except Exception as exc:  # noqa: BLE001
         logging.warning("mpv error: %s", exc)
+        drm_health.note_display_failure(f"mpv error: {exc}")
     finally:
+        playback.register_mpv_proc(None)
         playback.end()
 
 
@@ -492,7 +590,7 @@ def _play_mpv_sequence(
 
     size = screen.get_size()
     mouse_hide.apply(screen)
-    pygame.display.flip()
+    _safe_flip(screen)
     mouse_hide.apply(screen)
     pygame.display.quit()
 
@@ -545,7 +643,15 @@ def _play_live_break_reel(
     pending: Path | None = first_path
     status = "ok"
 
+    def _should_stop() -> bool:
+        if playback.clips_stop_requested():
+            return True
+        snap = state.snapshot()
+        return str(snap.get("scene", "live")) in ("win", "loss", "idle")
+
     def _break_over() -> bool:
+        if _should_stop():
+            return True
         return not scene.in_inning_break(state.snapshot())  # type: ignore[attr-defined]
 
     try:
@@ -553,7 +659,7 @@ def _play_live_break_reel(
             if pending is None:
                 snap = state.snapshot()
                 # Don't start another clip once live play has resumed.
-                if not scene.in_inning_break(snap):  # type: ignore[attr-defined]
+                if _should_stop() or not scene.in_inning_break(snap):  # type: ignore[attr-defined]
                     break
                 scene._maybe_queue_clip(snap)  # type: ignore[attr-defined]
                 pending = scene._pending_clip  # type: ignore[attr-defined]
@@ -573,7 +679,7 @@ def _play_live_break_reel(
             pending = None
 
             # Finish the full NOW SHOWING card even if the next half has started.
-            hold = _hold_now_showing(screen, clip)
+            hold = _hold_now_showing(screen, clip, should_abort=_should_stop)
             if hold != "ok":
                 status = hold
                 break
@@ -582,7 +688,7 @@ def _play_live_break_reel(
             if isinstance(played, set):
                 played.add(clip.name)
 
-            # Always finish the video once started.
+            # Always finish the video once started (unless game went final / watchdog).
             screen = _play_mpv_sequence([clip], screen, flags, validate=False)
 
             if _break_over():
@@ -609,7 +715,7 @@ def _flash_boot_logo(screen: pygame.Surface) -> None:
         img = pygame.transform.smoothscale(img, (target_w, target_h))
         screen.fill(config.BLACK)
         screen.blit(img, img.get_rect(center=(w // 2, h // 2)))
-        pygame.display.flip()
+        _safe_flip(screen)
         mouse_hide.apply(screen)
     except (pygame.error, OSError):
         pass
@@ -618,6 +724,7 @@ def _flash_boot_logo(screen: pygame.Surface) -> None:
 def main() -> None:
     _configure_logging()
     log = logging.getLogger(__name__)
+    drm_health.install_stderr_watch()
     log.info("argv: %s", " ".join(sys.argv))
     # SDL video/audio driver env is applied in bootstrap_sdl.configure_sdl() before pygame import.
     demo_live = "--demo" in sys.argv or "--demo-live" in sys.argv
@@ -756,6 +863,10 @@ def main() -> None:
                 prev_scene = last_scene_key
                 last_scene_key = scene_key
                 set_win_led(scene_key == "win")
+                if scene_key in ("win", "loss") and prev_scene == "live":
+                    playback.request_stop_clips(f"scene → {scene_key}")
+                elif scene_key not in ("win", "loss"):
+                    playback.clear_stop_clips()
                 if scene_key == "idle" and prev_scene in ("win", "loss"):
                     scenes["idle"]._cp_arm_immediate()
 
@@ -781,7 +892,7 @@ def main() -> None:
                 )
             if mouse_hide.kiosk_mode():
                 mouse_hide.apply(screen)
-            pygame.display.flip()
+            _safe_flip(screen)
             if mouse_hide.kiosk_mode():
                 mouse_hide.apply(screen)
             if frame_i == 0:
@@ -822,8 +933,16 @@ def main() -> None:
                         if reel_status == "quit":
                             running = False
                     else:
+                        if scene_key in ("win", "loss"):
+                            playback.clear_stop_clips()
                         scene._pending_clip = None  # type: ignore[attr-defined]
-                        hold = _hold_now_showing(screen, pending)
+                        hold = _hold_now_showing(
+                            screen,
+                            pending,
+                            should_abort=playback.clips_stop_requested
+                            if scene_key == "live"
+                            else None,
+                        )
                         if hold == "ok":
                             screen = _play_mpv(pending, screen, display_flags)
                         elif hold == "quit":

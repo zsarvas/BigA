@@ -28,8 +28,8 @@ from wifi_store import (  # noqa: E402
     connect_saved_networks,
     ensure_ssh_running,
     enter_provisioning,
+    exit_provisioning,
     has_networks,
-    is_provisioning,
     load_networks,
     prepare_ap_provisioning_mode,
     seed_wifi_creds_from_nm,
@@ -46,32 +46,23 @@ log = logging.getLogger("biga-connectivity")
 
 def main() -> int:
     ensure_ssh_running()
-
-    if is_provisioning():
-        log.info("provisioning active — preparing AP mode")
-        prepare_ap_provisioning_mode()
-        return 0
-
     seed_wifi_creds_from_nm()
 
-    if not has_networks():
+    if has_networks():
+        networks = load_networks()
+        sync_nm_profiles(networks)
+        log.info("synced %d saved network(s) to NetworkManager", len(networks))
+        if connect_saved_networks():
+            exit_provisioning()
+            log.info("joined a saved WiFi network")
+            return 0
+        log.warning(
+            "could not join any saved network (wrong password, open/MAC not allowed, "
+            "or out of range) — entering AP provisioning so the QR setup screen returns"
+        )
+    else:
         log.warning("no saved WiFi networks — entering AP provisioning for QR setup")
-        enter_provisioning()
-        prepare_ap_provisioning_mode()
-        return 0
 
-    networks = load_networks()
-    sync_nm_profiles(networks)
-    log.info("synced %d saved network(s) to NetworkManager", len(networks))
-
-    if connect_saved_networks():
-        log.info("joined a saved WiFi network")
-        return 0
-
-    log.warning(
-        "could not join any saved network (wrong password or out of range) — "
-        "re-entering AP provisioning so the QR setup screen returns"
-    )
     enter_provisioning()
     prepare_ap_provisioning_mode()
     return 0

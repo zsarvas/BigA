@@ -12,9 +12,20 @@ moment mpv exits.
 
 from __future__ import annotations
 
+import logging
+import os
+import signal
+import subprocess
 import threading
+import time
+
+log = logging.getLogger(__name__)
 
 _active = threading.Event()
+_stop_clips = threading.Event()
+_mpv_lock = threading.Lock()
+_mpv_proc: subprocess.Popen | None = None
+_mpv_reason = ""
 
 
 def begin() -> None:
@@ -147,3 +158,67 @@ def wait_for_transcode_slot(stop: threading.Event | None = None, poll: float = 0
         if not blocked:
             return
         wait.wait(poll)
+
+
+def request_stop_clips(reason: str = "") -> None:
+    """Ask the main thread to stop NOW SHOWING / mpv (e.g. game went final)."""
+    global _mpv_reason
+    if reason:
+        _mpv_reason = reason
+        log.info("requesting clip stop: %s", reason)
+    else:
+        log.info("requesting clip stop")
+    _stop_clips.set()
+    kill_current_mpv(reason=reason or "stop requested")
+
+
+def clips_stop_requested() -> bool:
+    return _stop_clips.is_set()
+
+
+def stop_reason() -> str:
+    return _mpv_reason
+
+
+def clear_stop_clips() -> None:
+    """Allow a new clip (win/loss highlights after live mpv was aborted)."""
+    global _mpv_reason
+    _stop_clips.clear()
+    _mpv_reason = ""
+
+
+def register_mpv_proc(proc: subprocess.Popen | None) -> None:
+    global _mpv_proc
+    with _mpv_lock:
+        _mpv_proc = proc
+
+
+def kill_current_mpv(reason: str = "") -> None:
+    """SIGTERM then SIGKILL the running mpv process group (safe from other threads)."""
+    with _mpv_lock:
+        proc = _mpv_proc
+    if proc is None or proc.poll() is not None:
+        return
+    if reason:
+        log.warning("killing mpv (%s) pid=%s", reason, proc.pid)
+    else:
+        log.warning("killing mpv pid=%s", proc.pid)
+    try:
+        os.killpg(proc.pid, signal.SIGTERM)
+    except (ProcessLookupError, PermissionError, OSError):
+        try:
+            proc.terminate()
+        except OSError:
+            return
+    deadline = time.monotonic() + 2.0
+    while time.monotonic() < deadline:
+        if proc.poll() is not None:
+            return
+        time.sleep(0.1)
+    try:
+        os.killpg(proc.pid, signal.SIGKILL)
+    except (ProcessLookupError, PermissionError, OSError):
+        try:
+            proc.kill()
+        except OSError:
+            pass
