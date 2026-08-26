@@ -9,8 +9,17 @@ from datetime import date
 
 from .clock import clock_is_synchronized
 from .mlb_http import fetch_live_feed_v11
-from . import playback
 from .mlb_live_feed import angels_won, game_is_final, live_feed_to_state_patch
+from .mlb_schedule import (
+    fetch_angels_schedule_for_date,
+    find_todays_final_angels_game,
+    find_todays_scoreboard_angels_game,
+    live_transition_from_schedule_game,
+    patch_from_final_schedule_game,
+)
+from .schedule_poller import refresh_idle_schedule
+from .state import SharedGameState
+from . import playback
 
 log = logging.getLogger(__name__)
 
@@ -96,16 +105,12 @@ def _handle_final_scene(state: SharedGameState, snap: dict) -> float:
 
 def game_day_loop(state: SharedGameState, stop: threading.Event) -> None:
     while not stop.is_set():
+        # Hold off all polling while a clip is playing (frees CPU for decode).
+        playback.wait_while_active(stop)
+        if stop.is_set():
+            break
         snap = state.snapshot()
         scene = str(snap.get("scene", "idle"))
-        # Keep polling the live feed during mpv so we can kill clips when the
-        # game goes final. Idle/win recap clips can pause the poller.
-        if scene != "live":
-            playback.wait_while_active(stop)
-            if stop.is_set():
-                break
-            snap = state.snapshot()
-            scene = str(snap.get("scene", "idle"))
         wait = 5.0
 
         # Pi Zero has no RTC: until NTP syncs, date.today() may be days/weeks
@@ -145,7 +150,6 @@ def game_day_loop(state: SharedGameState, stop: threading.Event) -> None:
                         patch.get("scene"),
                         patch.get("final_display_date"),
                     )
-                    playback.request_stop_clips("schedule already final")
                     continue
             elif scene == "live":
                 wait = LIVE_POLL_SEC
@@ -174,7 +178,6 @@ def game_day_loop(state: SharedGameState, stop: threading.Event) -> None:
                             patch.get("scene"),
                             patch.get("final_display_date"),
                         )
-                        playback.request_stop_clips("game final")
                     else:
                         patch["scene"] = "live"
                         state.update(patch)

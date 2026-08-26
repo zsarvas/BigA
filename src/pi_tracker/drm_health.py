@@ -1,15 +1,10 @@
 """
-Detect bad KMS/DRM / SDL states and recover.
+Detect bad KMS/DRM handoff states and restart biga when they persist.
 
-Vertical jitter and black panels are often stale Plymouth/mpv DRM clients, or
-SDL ``Draw call returned Invalid argument`` after mpv↔pygame handoff.  We
-cannot see a physical bounce, but we can detect hung mpv, draw-call spam, and
-pygame flip failures.
-
-Recovery ladder:
-  1. ``systemctl restart biga`` for DRM-ownership issues (orphan mpv, etc.).
-  2. Full ``shutdown -r now`` after several consecutive hard display failures
-     in a row (persisted across service restarts in ``/tmp``).
+Vertical display jitter on the Pi panel has been cleared by ``systemctl restart
+biga`` — usually stale Plymouth/mpv DRM clients after a handoff.  We cannot
+see physical jitter in software, but we can detect the DRM states that precede
+it and restart before the user notices.
 """
 
 from __future__ import annotations
@@ -23,15 +18,11 @@ import time
 from dataclasses import dataclass
 from pathlib import Path
 
-from . import config
-
 log = logging.getLogger(__name__)
 
 _DRM_CARD = Path("/dev/dri/card0")
 _PLYMOUTH_PID = Path("/run/plymouth/pid")
 _RESTART_STAMP = Path("/tmp/biga-drm-restart.ts")
-_REBOOT_STAMP = Path("/tmp/biga-drm-reboot.ts")
-_FAIL_COUNT_PATH = Path("/tmp/biga-display-fail.count")
 _COOLDOWN_SEC = int(os.environ.get("BIGA_DRM_RESTART_COOLDOWN_SEC", "1800"))
 _CHECK_INTERVAL_SEC = float(os.environ.get("BIGA_DRM_CHECK_INTERVAL_SEC", "30"))
 _POST_MPV_GRACE_SEC = float(os.environ.get("BIGA_DRM_POST_MPV_GRACE_SEC", "5"))
@@ -39,11 +30,6 @@ _PLYMOUTH_GRACE_AFTER_BOOT_SEC = float(
     os.environ.get("BIGA_DRM_PLYMOUTH_GRACE_SEC", "90")
 )
 _CONSECUTIVE_NEEDED = int(os.environ.get("BIGA_DRM_CONSECUTIVE_ISSUES", "2"))
-
-_DRAW_FAIL_MARKERS = (
-    "Draw call returned Invalid argument",
-    "Expect corruption",
-)
 
 
 def enabled() -> bool:
@@ -138,118 +124,6 @@ def collect_issues(
     return issues
 
 
-def _read_fail_count() -> int:
-    try:
-        return max(0, int(_FAIL_COUNT_PATH.read_text().strip()))
-    except (OSError, ValueError):
-        return 0
-
-
-def _write_fail_count(n: int) -> None:
-    try:
-        _FAIL_COUNT_PATH.write_text(str(max(0, n)))
-    except OSError:
-        pass
-
-
-_FAIL_DEBOUNCE_SEC = 15.0
-_last_fail_mono = 0.0
-
-
-def note_display_ok() -> None:
-    """A successful pygame flip / mpv handoff — reset the failure streak."""
-    global _last_fail_mono
-    if _read_fail_count():
-        log.info("display recovered — clearing failure streak")
-    _write_fail_count(0)
-    _last_fail_mono = 0.0
-
-
-def note_display_failure(detail: str) -> int:
-    """
-    Record a hard display failure (hung mpv, SDL draw-call, pygame flip error).
-
-    SDL can print the same draw-call line many times per clip; we debounce so
-    one wedged handoff counts once. Returns the new consecutive count.
-    """
-    global _last_fail_mono
-    if not enabled():
-        return 0
-    now = time.monotonic()
-    if _last_fail_mono and now - _last_fail_mono < _FAIL_DEBOUNCE_SEC:
-        return _read_fail_count()
-    _last_fail_mono = now
-    n = _read_fail_count() + 1
-    _write_fail_count(n)
-    log.warning("display failure %d/%d: %s", n, config.DISPLAY_FAIL_REBOOT_COUNT, detail)
-    if n >= config.DISPLAY_FAIL_REBOOT_COUNT:
-        request_reboot(f"consecutive display failures ({n}): {detail}")
-    elif n >= _CONSECUTIVE_NEEDED:
-        _maybe_restart_service([DrmIssue("display_fail", detail)], reason="display-fail")
-    return n
-
-
-def stderr_looks_like_draw_fail(text: str) -> bool:
-    return any(m in text for m in _DRAW_FAIL_MARKERS)
-
-
-class _StderrWatch:
-    """Tee stderr so SDL's unprefixed 'Draw call returned Invalid argument' is seen."""
-
-    def __init__(self, inner: object) -> None:
-        self._inner = inner
-
-    def write(self, s: str) -> int:
-        if s and stderr_looks_like_draw_fail(s):
-            note_display_failure(s.strip()[:180])
-        w = getattr(self._inner, "write", None)
-        if callable(w):
-            return int(w(s) or 0)
-        return 0
-
-    def flush(self) -> None:
-        f = getattr(self._inner, "flush", None)
-        if callable(f):
-            f()
-
-    def __getattr__(self, name: str) -> object:
-        return getattr(self._inner, name)
-
-
-def install_stderr_watch() -> None:
-    if not enabled():
-        return
-    if isinstance(sys.stderr, _StderrWatch):
-        return
-    sys.stderr = _StderrWatch(sys.stderr)  # type: ignore[misc, assignment]
-
-
-def request_reboot(reason: str) -> None:
-    """Full Pi reboot — last resort when KMS is wedged (biga runs as root)."""
-    if not enabled():
-        log.warning("reboot skipped (DRM health disabled): %s", reason)
-        return
-    if _in_cooldown(_REBOOT_STAMP, config.DISPLAY_REBOOT_COOLDOWN_SEC):
-        log.warning(
-            "reboot suppressed (cooldown %ds): %s",
-            config.DISPLAY_REBOOT_COOLDOWN_SEC,
-            reason,
-        )
-        return
-    _touch_stamp(_REBOOT_STAMP)
-    log.error("requesting full reboot: %s", reason)
-    try:
-        subprocess.Popen(
-            ["/sbin/shutdown", "-r", "now"],
-            stdout=subprocess.DEVNULL,
-            stderr=subprocess.DEVNULL,
-        )
-    except OSError as exc:
-        log.error("shutdown -r failed: %s", exc)
-        return
-    sys.exit(0)
-
-
 class DrmHealthMonitor:
     """Periodic checker; restarts biga after consecutive issue samples."""
 
@@ -275,7 +149,7 @@ class DrmHealthMonitor:
                 "; ".join(f"{i.code}({i.detail})" for i in issues),
             )
             self._consecutive = max(self._consecutive, _CONSECUTIVE_NEEDED)
-            _maybe_restart_service(issues, reason="post-mpv")
+            self._maybe_restart(issues, reason="post-mpv")
 
     def tick(self, *, mpv_playback_active: bool) -> None:
         if not enabled():
@@ -300,45 +174,45 @@ class DrmHealthMonitor:
                 "; ".join(f"{i.code}({i.detail})" for i in issues),
             )
             if self._consecutive >= _CONSECUTIVE_NEEDED:
-                _maybe_restart_service(issues, reason="periodic")
+                self._maybe_restart(issues, reason="periodic")
         else:
             self._consecutive = 0
 
+    def _maybe_restart(self, issues: list[DrmIssue], *, reason: str) -> None:
+        if _in_cooldown():
+            log.warning(
+                "DRM restart suppressed (cooldown %ds): %s",
+                _COOLDOWN_SEC,
+                reason,
+            )
+            self._consecutive = 0
+            return
 
-def _maybe_restart_service(issues: list[DrmIssue], *, reason: str) -> None:
-    if _in_cooldown(_RESTART_STAMP, _COOLDOWN_SEC):
-        log.warning(
-            "DRM restart suppressed (cooldown %ds): %s",
-            _COOLDOWN_SEC,
-            reason,
-        )
-        return
+        summary = "; ".join(f"{i.code}: {i.detail}" for i in issues)
+        log.error("requesting biga restart (%s): %s", reason, summary)
+        _touch_restart_stamp()
+        try:
+            subprocess.Popen(
+                ["/bin/systemctl", "restart", "biga"],
+                stdout=subprocess.DEVNULL,
+                stderr=subprocess.DEVNULL,
+            )
+        except OSError as exc:
+            log.error("systemctl restart failed: %s", exc)
+            return
+        sys.exit(0)
 
-    summary = "; ".join(f"{i.code}: {i.detail}" for i in issues)
-    log.error("requesting biga restart (%s): %s", reason, summary)
-    _touch_stamp(_RESTART_STAMP)
+
+def _in_cooldown() -> bool:
     try:
-        subprocess.Popen(
-            ["/bin/systemctl", "restart", "biga"],
-            stdout=subprocess.DEVNULL,
-            stderr=subprocess.DEVNULL,
-        )
-    except OSError as exc:
-        log.error("systemctl restart failed: %s", exc)
-        return
-    sys.exit(0)
-
-
-def _in_cooldown(stamp: Path, seconds: int) -> bool:
-    try:
-        last = float(stamp.read_text().strip())
+        last = float(_RESTART_STAMP.read_text().strip())
     except (OSError, ValueError):
         return False
-    return time.time() - last < seconds
+    return time.time() - last < _COOLDOWN_SEC
 
 
-def _touch_stamp(stamp: Path) -> None:
+def _touch_restart_stamp() -> None:
     try:
-        stamp.write_text(str(time.time()))
+        _RESTART_STAMP.write_text(str(time.time()))
     except OSError:
         pass

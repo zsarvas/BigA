@@ -25,7 +25,6 @@ by the public **MLB Stats API**.
 - [Choosing a team](#choosing-a-team)
 - [Environment variables](#environment-variables)
 - [Local development (macOS / Linux desktop)](#local-development-macos--linux-desktop)
-- [Tests and PR checks](#tests-and-pr-checks)
 - [Troubleshooting](#troubleshooting)
 - [Project layout](#project-layout)
 
@@ -341,29 +340,6 @@ and a normal window opens. GPIO/NeoPixel code is a no-op without `rpi_ws281x`.
 
 ---
 
-## Tests and PR checks
-
-Field units track `origin/main`. GitHub Actions
-[`.github/workflows/pr-checks.yml`](.github/workflows/pr-checks.yml) runs pytest
-on Python 3.11 (Raspberry Pi OS Bookworm) plus a syntax check. Tests are
-hardware-free: no GPIO, SDL, `nmcli`, or live MLB network calls.
-
-A **push** to `Development` tests that branch as-is. A **pull request** tests
-GitHub’s merge of the PR into the base branch (`main`) — that is the
-merge-to-main signal. Those are different checkouts; both can run for the same
-push when a PR is open. The PR run is the one that matters for merging.
-
-```bash
-python3 -m venv venv
-source venv/bin/activate
-pip install -r requirements-dev.txt
-python -m pytest
-```
-
-Do not import `setup.py` in tests — it performs install work on import.
-
----
-
 ## Troubleshooting
 
 **Check the app log first:** `sudo tail -100 /tmp/biga.log`. Each launch prints a
@@ -404,10 +380,7 @@ BigA/
 │   └── mzp351hv00tr-old.txt  # Bullseye / firmware-DPI panel (legacy)
 ├── logos/                    # <mlb_team_id>.png / .svg
 ├── requirements.txt          # desktop/dev deps
-├── requirements-dev.txt      # pytest + portal libs for CI
 ├── requirements-pi.txt       # Pi runtime deps (rpi_ws281x, cairosvg, …)
-├── tests/                    # hardware-free pytest suite (GitHub Actions PR checks)
-├── .github/workflows/        # pr-checks.yml + build-image.yml
 └── src/pi_tracker/
     ├── app.py                # main loop, scene switch, display open, LED hook
     ├── bootstrap_sdl.py      # SDL env (KMSDRM/fbcon) before pygame import
@@ -500,11 +473,6 @@ What gets stripped from the image before publishing:
 
 `scripts/update_biga.sh` checks origin/main every morning at 4 AM and pulls if the
 commit hash has changed, then restarts the service automatically.
-
-When `scripts/ota_setup.rev` is newer than `/etc/biga/ota_setup.rev` on the Pi, OTA
-also runs `python3 setup.py --ota` once (apt packages, systemd unit copies, no reboot,
-AP/WiFi left alone). Bump that integer whenever a bake-in change must land on field
-units without a new image. After it succeeds, later OTAs are git-only again.
 
 **One-time setup on the Pi:**
 

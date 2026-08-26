@@ -226,45 +226,12 @@ def exit_provisioning() -> None:
 
 
 def network_needs_password(security: str) -> bool:
-    """True for WPA/WEP PSK networks; open networks use ``--`` in nmcli scans."""
-    if is_open_security(security) or is_enterprise_security(security):
-        return False
+    """True for WPA/WEP networks; open networks use ``--`` in nmcli scans."""
     s = (security or "").strip()
-    return bool(s)
+    return bool(s and s != "--")
 
 
-def is_open_security(security: str) -> bool:
-    """True for open / MAC-allow-list networks (no WPA passphrase)."""
-    s = (security or "").strip().lower()
-    return s in ("", "--", "none", "open")
-
-
-def is_enterprise_security(security: str) -> bool:
-    """True for 802.1X / WPA-Enterprise (username/cert — not supported)."""
-    s = (security or "").lower().replace(" ", "")
-    return any(tok in s for tok in ("802.1x", "8021x", "enterprise", "wpa-eap", "wpaeap", "eap"))
-
-
-def _existing_client_profile_for_ssid(ssid: str) -> str | None:
-    """NM client profile name for *ssid*, if any (excludes ``biga-ap``)."""
-    target = ssid.strip()
-    if not target:
-        return None
-    for name in list_nm_wifi_profiles():
-        if name == AP_CON_NAME:
-            continue
-        if _nm_field(name, "802-11-wireless.ssid") == target:
-            return name
-    return None
-
-
-def append_network(
-    ssid: str,
-    password: str,
-    *,
-    sync_nm: bool = True,
-    security: str = "",
-) -> None:
+def append_network(ssid: str, password: str, *, sync_nm: bool = True) -> None:
     """
     Add or refresh *ssid* (moves to front). Trim to ``MAX_NETWORKS`` oldest.
 
@@ -275,14 +242,10 @@ def append_network(
     """
     ssid = ssid.strip()
     networks = [n for n in load_networks() if n.get("ssid") != ssid]
-    entry: dict[str, Any] = {
-        "ssid": ssid,
-        "password": password,
-        "added": time.time(),
-    }
-    if security:
-        entry["security"] = security
-    networks.insert(0, entry)
+    networks.insert(
+        0,
+        {"ssid": ssid, "password": password, "added": time.time()},
+    )
     if len(networks) > MAX_NETWORKS:
         dropped = networks[MAX_NETWORKS:]
         networks = networks[:MAX_NETWORKS]
@@ -323,65 +286,38 @@ def sync_nm_profiles(networks: list[dict[str, Any]]) -> None:
     for i, net in enumerate(networks):
         ssid = str(net.get("ssid", "")).strip()
         password = str(net.get("password", ""))
-        security = str(net.get("security", "") or "")
         if not ssid:
             continue
-        con_name = _con_name_for_ssid(ssid)
-        if is_enterprise_security(security):
-            log.warning("skip %r — 802.1X/enterprise is not supported", ssid)
-            continue
         if not password:
-            existing = _existing_client_profile_for_ssid(ssid)
-            if existing and not existing.startswith("biga-wifi-"):
-                # Pi Imager / foreign profile — don't clobber a working PSK.
-                log.warning(
-                    "skip %r — no password in wifi_creds.json; keeping existing NM profile %r",
-                    ssid,
-                    existing,
-                )
-                continue
-            log.info("creating open WiFi profile for %r (no PSK / MAC allow-list)", ssid)
-            _add_nm_wifi_profile(con_name, ssid, password="", priority=max(0, 100 - i * 10))
+            # setup.py / portal always store PSK; empty would clobber a working Imager profile.
+            log.warning("skip %r — no password in wifi_creds.json; keeping existing NM profile", ssid)
             continue
-        _add_nm_wifi_profile(
-            con_name, ssid, password=password, priority=max(0, 100 - i * 10)
+        con_name = _con_name_for_ssid(ssid)
+        priority = max(0, 100 - i * 10)
+        _delete_nm_profile(con_name)
+        add = subprocess.run(
+            [
+                "nmcli", "connection", "add",
+                "type", "wifi",
+                "con-name", con_name,
+                "ifname", WLAN_INTERFACE,
+                "ssid", ssid,
+                "wifi-sec.key-mgmt", "wpa-psk",
+                "wifi-sec.psk", password,
+                "ipv4.method", "auto",
+                "connection.autoconnect", "yes",
+                "connection.autoconnect-priority", str(priority),
+            ],
+            capture_output=True,
+            text=True,
+            check=False,
         )
-
-
-def _add_nm_wifi_profile(con_name: str, ssid: str, *, password: str, priority: int) -> None:
-    _delete_nm_profile(con_name)
-    cmd = [
-        "nmcli",
-        "connection",
-        "add",
-        "type",
-        "wifi",
-        "con-name",
-        con_name,
-        "ifname",
-        WLAN_INTERFACE,
-        "ssid",
-        ssid,
-        "ipv4.method",
-        "auto",
-        "connection.autoconnect",
-        "yes",
-        "connection.autoconnect-priority",
-        str(priority),
-    ]
-    if password:
-        cmd.extend(["wifi-sec.key-mgmt", "wpa-psk", "wifi-sec.psk", password])
-    else:
-        cmd.extend(["wifi-sec.key-mgmt", "none"])
-    add = subprocess.run(cmd, capture_output=True, text=True, check=False)
-    if add.returncode != 0:
-        log.warning(
-            "nmcli add %s failed: %s",
-            con_name,
-            (add.stderr or add.stdout or "").strip(),
-        )
-    else:
-        log.info("nmcli profile %s ready for %r", con_name, ssid)
+        if add.returncode != 0:
+            log.warning(
+                "nmcli add %s failed: %s",
+                con_name,
+                (add.stderr or add.stdout or "").strip(),
+            )
 
 
 def _delete_nm_profile(name: str) -> None:
