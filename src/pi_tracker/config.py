@@ -131,13 +131,6 @@ LIVE_ANIM_MIN_FRAME_MS = _env_clamp_int("BIGA_LIVE_ANIM_MIN_FRAME_MS", 100, lo=4
 # Frame rate while a GIF animation is playing (pygame-rendered, not mpv).
 HIGHLIGHT_FPS = _env_clamp_int("BIGA_HIGHLIGHT_FPS", 24, lo=FPS, hi=60)
 
-# mpv watchdog: highlights are ~15–45s. A hung vo=drm used to sit for 3600s.
-MPV_CLIP_TIMEOUT_SEC = _env_clamp_int("BIGA_MPV_TIMEOUT_SEC", 180, lo=30, hi=900)
-MPV_KILL_GRACE_SEC = _env_float("BIGA_MPV_KILL_GRACE_SEC", 2.0, lo=0.5, hi=15.0)
-# Consecutive black-screen / hung-mpv / SDL draw failures before a full reboot.
-DISPLAY_FAIL_REBOOT_COUNT = _env_clamp_int("BIGA_DISPLAY_FAIL_REBOOT", 3, lo=2, hi=10)
-DISPLAY_REBOOT_COOLDOWN_SEC = _env_clamp_int("BIGA_DISPLAY_REBOOT_COOLDOWN_SEC", 1200, lo=120, hi=7200)
-
 
 def layout_scale() -> float:
     """Uniform scale vs. the 480×320 reference panel."""
