@@ -37,6 +37,7 @@ from wifi_store import (  # noqa: E402
     is_provisioning,
     load_networks,
     prepare_ap_provisioning_mode,
+    record_wifi_event,
     seed_wifi_creds_from_nm,
     sync_nm_profiles,
 )
@@ -58,23 +59,41 @@ def main() -> int:
     # portal never appears.
     if is_provisioning():
         log.info("provisioning_active set — bringing up AP, not joining saved WiFi")
+        record_wifi_event(
+            "boot: provisioning_active set — AP mode (reset/add-network), skip client join"
+        )
         prepare_ap_provisioning_mode()
         return 0
 
     if has_networks():
         networks = load_networks()
+        ssids = [str(n.get("ssid") or "") for n in networks]
         sync_nm_profiles(networks)
         log.info("synced %d saved network(s) to NetworkManager", len(networks))
+        record_wifi_event(
+            f"boot: {len(networks)} saved network(s): {', '.join(ssids)}",
+            "security=" + ", ".join(
+                f"{n.get('ssid')!s}:{n.get('security') or ('wpa' if n.get('password') else 'open')}"
+                for n in networks
+            ),
+        )
         if connect_saved_networks():
             exit_provisioning()
             log.info("joined a saved WiFi network")
+            record_wifi_event("boot: joined a saved network — scoreboard can start")
             return 0
         log.warning(
             "could not join any saved network (wrong password, open/MAC not allowed, "
             "or out of range) — entering AP provisioning so the QR setup screen returns"
         )
+        record_wifi_event(
+            "boot: join failed — falling back to setup AP",
+            "hint: SSH from phone/laptop on BigA-XXXX to pi@192.168.4.1",
+            "then: sudo cat /var/log/biga-wifi-last.log",
+        )
     else:
         log.warning("no saved WiFi networks — entering AP provisioning for QR setup")
+        record_wifi_event("boot: no saved networks — setup AP")
 
     enter_provisioning()
     prepare_ap_provisioning_mode()

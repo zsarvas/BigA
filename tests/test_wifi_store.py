@@ -147,3 +147,12 @@ def test_save_networks_chmod_600(wifi_paths):
     creds, _ = wifi_paths
     mode = creds.stat().st_mode
     assert stat.S_IMODE(mode) == 0o600
+
+
+def test_record_wifi_event_writes_durable_log(wifi_paths):
+    import wifi_store
+
+    wifi_store.record_wifi_event("FAIL nmcli up Office", "802.1X not allowed")
+    text = wifi_store.LAST_WIFI_LOG.read_text()
+    assert "FAIL nmcli up Office" in text
+    assert "802.1X not allowed" in text

@@ -18,11 +18,31 @@ from typing import Any
 
 CREDS_FILE = Path("/etc/biga/wifi_creds.json")
 PROVISIONING_FLAG = Path("/etc/biga/provisioning_active")
+# Last join attempts — on disk so a reboot into the setup AP still has the trail.
+# ``/tmp/biga.log`` is tmpfs and is gone after they unplug.
+LAST_WIFI_LOG = Path(os.environ.get("BIGA_WIFI_LAST_LOG", "/var/log/biga-wifi-last.log"))
 WLAN_INTERFACE = "wlan0"
 AP_CON_NAME = "biga-ap"
 MAX_NETWORKS = int(os.environ.get("BIGA_WIFI_MAX_NETWORKS", "7"))
 
 log = logging.getLogger(__name__)
+
+_WIFI_LOG_MAX = 64_000
+
+
+def record_wifi_event(*lines: str) -> None:
+    """Append a durable WiFi-attempt note (survives reboot; SSH from the setup AP)."""
+    stamp = time.strftime("%Y-%m-%d %H:%M:%S")
+    body = f"=== {stamp} ===\n" + "\n".join(str(x) for x in lines if x) + "\n"
+    for line in lines:
+        if line:
+            log.info("%s", line)
+    try:
+        LAST_WIFI_LOG.parent.mkdir(parents=True, exist_ok=True)
+        prev = LAST_WIFI_LOG.read_text(encoding="utf-8") if LAST_WIFI_LOG.exists() else ""
+        LAST_WIFI_LOG.write_text((prev + body)[-_WIFI_LOG_MAX:], encoding="utf-8")
+    except OSError as exc:
+        log.warning("could not write %s: %s", LAST_WIFI_LOG, exc)
 
 
 def _con_name_for_ssid(ssid: str) -> str:
@@ -417,12 +437,12 @@ def bring_up_connection(con_name: str) -> bool:
         check=False,
     )
     if result.returncode != 0:
-        log.debug(
-            "connection up %s failed: %s",
-            con_name,
-            (result.stderr or result.stdout or "").strip(),
-        )
+        err = (result.stderr or result.stdout or "").strip()
+        log.warning("connection up %s failed: %s", con_name, err)
+        record_wifi_event(f"FAIL nmcli connection up {con_name}", err or "(no nmcli output)")
         return False
+    log.info("connection up %s ok", con_name)
+    record_wifi_event(f"OK nmcli connection up {con_name}")
     return True
 
 
@@ -450,23 +470,38 @@ def connect_saved_networks(timeout: float = 45) -> bool:
     """
     names = [con for _, con in saved_connection_names()]
     if not names:
+        record_wifi_event("no saved NetworkManager profile names — cannot join")
         return False
+
+    record_wifi_event(
+        f"trying saved networks (newest first): {', '.join(names)}",
+        f"wait {timeout:.0f}s for NetworkManager autoconnect",
+    )
 
     deadline = time.monotonic() + timeout
     while time.monotonic() < deadline:
         if wlan_has_client_ip():
+            record_wifi_event("joined via NetworkManager autoconnect (client IP on wlan0)")
             return True
         time.sleep(2)
 
+    record_wifi_event("autoconnect did not get a client IP — explicit nmcli up per profile")
     for con_name in names:
+        record_wifi_event(f"bring_up {con_name}")
         if not bring_up_connection(con_name):
             continue
         end = time.monotonic() + 12
         while time.monotonic() < end:
             if wlan_has_client_ip():
+                record_wifi_event(f"got client IP after bringing up {con_name}")
                 return True
             time.sleep(1)
-    return wlan_has_client_ip()
+        record_wifi_event(f"{con_name} associated or up but no client IP within 12s")
+    ok = wlan_has_client_ip()
+    record_wifi_event(
+        "join succeeded" if ok else "join failed — no client IP on any saved network"
+    )
+    return ok
 
 
 def wipe_all_networks() -> None:

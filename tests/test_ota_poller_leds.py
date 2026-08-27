@@ -87,6 +87,59 @@ def test_connectivity_reenters_ap_when_join_fails(monkeypatch, wifi_paths):
     monkeypatch.setattr(mod, "prepare_ap_provisioning_mode", lambda: entered.append("ap"))
     assert mod.main() == 0
     assert entered == ["prov", "ap"]
+    import wifi_store
+
+    trail = wifi_store.LAST_WIFI_LOG.read_text()
+    assert "boot: join failed" in trail
+    assert "sudo cat /var/log/biga-wifi-last.log" in trail
+
+
+def test_game_day_poller_idle_helpers_are_imported():
+    """#121 dropped these names and idle never flipped to live (NameError each poll)."""
+    from pi_tracker import game_day_poller
+
+    for name in (
+        "fetch_angels_schedule_for_date",
+        "find_todays_scoreboard_angels_game",
+        "live_transition_from_schedule_game",
+        "find_todays_final_angels_game",
+        "patch_from_final_schedule_game",
+        "refresh_idle_schedule",
+        "SharedGameState",
+    ):
+        assert hasattr(game_day_poller, name), name
+
+
+def test_idle_transitions_to_live_when_schedule_in_progress(monkeypatch):
+    from helpers_mlb import schedule_game, schedule_payload
+    from pi_tracker import game_day_poller
+    from pi_tracker.state import SharedGameState
+
+    live_g = schedule_game(pk=823989, abstract="Live", detailed="In Progress")
+    monkeypatch.setattr(game_day_poller, "clock_is_synchronized", lambda: True)
+    monkeypatch.setattr(
+        game_day_poller,
+        "fetch_angels_schedule_for_date",
+        lambda *a, **k: schedule_payload(live_g),
+    )
+    monkeypatch.setattr(game_day_poller, "IDLE_WATCH_SEC", 0.05)
+
+    state = SharedGameState(persist=False)
+    assert state.snapshot()["scene"] == "idle"
+    stop = threading.Event()
+    t = threading.Thread(target=game_day_poller.game_day_loop, args=(state, stop), daemon=True)
+    t.start()
+    deadline = time.time() + 3
+    scene = ""
+    while time.time() < deadline:
+        scene = str(state.snapshot().get("scene"))
+        if scene == "live":
+            break
+        time.sleep(0.02)
+    stop.set()
+    t.join(1)
+    assert scene == "live"
+    assert state.snapshot().get("live_game_pk") == 823989
 
 
 def test_game_day_live_final_stops_clips(monkeypatch):

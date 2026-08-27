@@ -50,8 +50,10 @@ def wifi_paths(tmp_path, monkeypatch):
 
     creds = tmp_path / "wifi_creds.json"
     flag = tmp_path / "provisioning_active"
+    last = tmp_path / "biga-wifi-last.log"
     monkeypatch.setattr(wifi_store, "CREDS_FILE", creds)
     monkeypatch.setattr(wifi_store, "PROVISIONING_FLAG", flag)
+    monkeypatch.setattr(wifi_store, "LAST_WIFI_LOG", last)
     return creds, flag
 
 

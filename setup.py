@@ -671,7 +671,8 @@ export PYTHONUNBUFFERED=1
 # Bookworm + KMS: panel is vc4-kms-dpi-generic, so SDL uses KMSDRM (no SDL_FBDEV).
 export BIGA_SDL_VIDEO=kmsdrm
 export SDL_VIDEODRIVER=kmsdrm
-exec >>/tmp/biga.log 2>&1
+exec >>/var/log/biga.log 2>&1
+ln -sfn /var/log/biga.log /tmp/biga.log
 echo "biga-start $(date -Is)"
 i=0
 while [ ! -e /dev/dri/card0 ] && [ ! -e /dev/dri/card1 ] && [ "$i" -lt 20 ]; do
@@ -685,7 +686,7 @@ if [ -e /run/plymouth/pid ]; then
   /usr/bin/plymouth quit --retain-splash 2>/dev/null || true
 fi
 # -s switches the active VT to tty2 as part of starting the process (no separate chvt needed).
-exec /usr/bin/openvt -c 2 -s -f -w -- /bin/sh -c "/usr/bin/python3 {REPO}/run_pi_ui.py >>/tmp/biga.log 2>&1; echo PYEXIT=$? >>/tmp/biga.log"
+exec /usr/bin/openvt -c 2 -s -f -w -- /bin/sh -c "/usr/bin/python3 {REPO}/run_pi_ui.py >>/var/log/biga.log 2>&1; echo PYEXIT=$? >>/var/log/biga.log"
 """
 
 with open("/tmp/biga-start.sh", "w", encoding="utf-8") as f:

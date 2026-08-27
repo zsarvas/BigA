@@ -214,7 +214,7 @@ WantedBy=multi-user.target
 - Exports `BIGA_SDL_VIDEO=kmsdrm` (Bookworm).
 - Waits for `/dev/dri/card*` to appear at boot.
 - `chvt 2`, then `openvt -c 2 -f -w` to run the app on a dedicated VT.
-- Logs everything (incl. Python exit code) to **`/tmp/biga.log`**.
+- Logs everything (incl. Python exit code) to **`/var/log/biga.log`** (symlink at `/tmp/biga.log`). `/tmp` is wiped on reboot.
 
 ### Common commands
 
@@ -223,7 +223,8 @@ sudo systemctl status biga          # is it running?
 sudo systemctl restart biga         # after a code change / git pull
 sudo systemctl stop biga            # stop it
 sudo journalctl -u biga -b          # service log this boot
-sudo tail -f /tmp/biga.log          # app stdout/stderr + PYEXIT
+sudo tail -f /var/log/biga.log          # app stdout/stderr + PYEXIT (survives reboot)
+sudo cat /var/log/biga-wifi-last.log    # last WiFi join attempts (setup AP / corp fail)
 ```
 
 > **Code change?** `git pull` then `sudo systemctl restart biga`.
@@ -366,13 +367,13 @@ Do not import `setup.py` in tests — it performs install work on import.
 
 ## Troubleshooting
 
-**Check the app log first:** `sudo tail -100 /tmp/biga.log`. Each launch prints a
-`biga-start <timestamp>` line and ends with `PYEXIT=<code>`.
+**Check the app log first:** `sudo tail -100 /var/log/biga.log` (same stream as `/tmp/biga.log`). Each launch prints a
+`biga-start <timestamp>` line and ends with `PYEXIT=<code>`. After a failed corp/home join, the setup AP stays up — join `BigA-XXXX` and `ssh pi@192.168.4.1`, then `sudo cat /var/log/biga-wifi-last.log`.
 
 | Symptom | Likely cause / fix |
 |---------|--------------------|
 | `pygame.error: No available video device` | Wrong backend for the OS. Bookworm needs KMS: confirm `ls -l /dev/dri/card*`, `BIGA_SDL_VIDEO=kmsdrm`, and that `config.txt` has the KMS panel include. Reboot after `config.txt` edits. |
-| Service shows `active` but nothing on screen | The app runs on **VT2**. Switch with `sudo chvt 2` (or it auto-switches). Check `/tmp/biga.log`. |
+| Service shows `active` but nothing on screen | The app runs on **VT2**. Switch with `sudo chvt 2` (or it auto-switches). Check `/var/log/biga.log`. |
 | Service flaps / exits 127 | `ExecStart`/start-script path or quoting problem. Inspect `/usr/local/bin/biga-start.sh`; re-run `sudo python3 setup.py`. |
 | Colors look wrong on the panel | RGB bus format in `boot/mzp351hv00tr-new.txt`. Try `rgb666-padhi` / `rgb888` / `rgb565`, or use the manufacturer's Bookworm panel file. Reboot. |
 | A team logo is missing/garbled | Place a `logos/<id>.png` (or `.svg`, rasterized via cairosvg). Non-square art is letterboxed. |

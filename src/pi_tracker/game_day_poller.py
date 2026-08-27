@@ -9,8 +9,17 @@ from datetime import date
 
 from .clock import clock_is_synchronized
 from .mlb_http import fetch_live_feed_v11
-from . import playback
 from .mlb_live_feed import angels_won, game_is_final, live_feed_to_state_patch
+from .mlb_schedule import (
+    fetch_angels_schedule_for_date,
+    find_todays_final_angels_game,
+    find_todays_scoreboard_angels_game,
+    live_transition_from_schedule_game,
+    patch_from_final_schedule_game,
+)
+from .schedule_poller import refresh_idle_schedule
+from .state import SharedGameState
+from . import playback
 
 log = logging.getLogger(__name__)
 
@@ -182,8 +191,8 @@ def game_day_loop(state: SharedGameState, stop: threading.Event) -> None:
                 wait = _handle_final_scene(state, snap)
             else:
                 wait = FINAL_DAYCHECK_SEC
-        except Exception as e:  # noqa: BLE001
-            log.warning("game day poll failed: %s", e)
+        except Exception:
+            log.exception("game day poll failed")
 
         if stop.wait(wait):
             break
